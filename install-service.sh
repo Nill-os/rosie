@@ -20,5 +20,6 @@ WantedBy=multi-user.target
 UNIT
 systemctl daemon-reload
 systemctl enable --now assistant
+"$D/ops/allow-power.sh"
 command -v tailscale >/dev/null || curl -fsSL https://tailscale.com/install.sh | sh
 echo "Done. Next: sudo tailscale up   then   sudo tailscale serve --bg 8765"
