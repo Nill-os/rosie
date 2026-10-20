@@ -521,7 +521,15 @@ def _in_window(t: dt.time, a: str, b: str) -> bool:
     return a <= t < b if a < b else (t >= a or t < b)
 
 
+STAGE_FLAG = Path(os.environ.get("ROSIE_OPS_DIR") or Path.home() / "rosie-ops") / "staging"   # slots.py stage: a new version is being tested
+
+
 def _load_probe(now, s) -> str | None:
+    try:
+        if time.time() - STAGE_FLAG.stat().st_mtime < 3600:          # its model test needs the GPU to itself (a stale flag is ignored)
+            return "Paused while a new version of Rosie is tested."
+    except OSError:
+        pass
     try:
         load = os.getloadavg()[0] / max(1, os.cpu_count() or 1)
     except OSError:

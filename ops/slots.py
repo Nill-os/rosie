@@ -246,6 +246,16 @@ def stage(with_eval=True):
     """Tests + a sandboxed start + (optionally) the model benchmark. The switch is only allowed after this passes for the exact commit."""
     idle = other(active())
     commit("Self-update (staged)")
+    flag = OPS / "staging"                                   # her corner and memory pause their model use while this runs
+    flag.parent.mkdir(parents=True, exist_ok=True)
+    flag.write_text(str(time.time()))
+    try:
+        return _stage(idle, with_eval)
+    finally:
+        flag.unlink(missing_ok=True)
+
+
+def _stage(idle, with_eval):
     py = str(SLOT["A"] / ".venv" / "bin" / "python")
     res = {"slot": idle, "head": head(idle), "started": time.time()}
     t = run([py, "-m", "pytest", "-q", "-x", "--no-header", "-p", "no:cacheprovider"], cwd=SLOT[idle], timeout=900)

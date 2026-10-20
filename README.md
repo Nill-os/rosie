@@ -7,9 +7,9 @@ Rosie is a private AI assistant that runs on your own Linux PC. The AI model, sp
 - **Chat, voice, and a phone app.** Type in her window, hold a key to talk, or use the Android app over Tailscale.
 - **Your day.** Tasks, reminders, Google Calendar, a daily brief, and a weekly review.
 - **Mail.** Reads your Gmail, flags what matters, and drafts replies. She never deletes anything.
-- **Notes and memory.** A searchable notes vault, things she remembers about you, and meeting transcripts.
+- **Notes and memory.** A searchable notes vault, meeting transcripts, and her own long-term memory: while you aren't using her, she reads your chats into facts and beliefs that grow as she hears more, and brings the ones that matter into each conversation. Ask her what she remembers, or tell her to forget something.
 - **The Morning Paper.** A printed and on-screen newspaper made each morning from real news feeds, Hacker News, Reddit, your calendar, your deliveries, the weather, a cartoon, words to learn, a cipher, and a Sudoku. Nothing in it is invented.
-- **Rosie's corner.** When you aren't using her, she browses public pages about your interests and keeps what she finds.
+- **Rosie's corner.** When you aren't using her, she browses public pages about your interests and keeps what she finds. What she read comes into a chat when it matches what you ask.
 - **Your PC and phone.** Runs commands, opens files and apps, sends texts, and sets alarms. Anything risky waits for your Yes on a confirm card.
 
 ## What you need
@@ -55,6 +55,8 @@ To use a different model, run `ROSIE_MODEL=<name> ./setup.sh`, or pick one later
 - **The phone app and access away from home:** install Tailscale, then run `sudo tailscale up` and `sudo tailscale serve --bg 8765`. Build the app with `android/build.sh`.
 - **Reddit in the newspaper:** create a free Reddit "script" app, then save its keys in `secrets/reddit.json` as `{"client_id": "...", "client_secret": "...", "user": "your_reddit_name"}`.
 - **Your town in the newspaper:** add your local news site's RSS feed in **Settings** > **Newspaper**. Event calendars differ in every town, so Rosie doesn't ship an events reader, and the paper leaves out its "week ahead" when there are no events.
+- **Rosie's memory in Claude Code:** run `claude mcp add --scope user rosie-mind -- ~/assistant/.venv/bin/python ~/assistant/app/mind_mcp.py`. Claude can then search what Rosie remembers and tell her things worth remembering.
+- **Skills:** ask her to find a skill for a task. She searches the free skills.sh index, and adds one as a playbook only after you tap Yes (text only: she never installs programs or anything that needs a paid service).
 - **Encrypted backups to GitHub:** put the name of a private repo, for example `you/rosie-data`, in `secrets/backup_repo`, and run `./backup-data.sh` from a daily timer. Without it, backups stay in `~/backups/rosie`.
 
 ## How it fits together

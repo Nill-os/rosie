@@ -1428,3 +1428,16 @@ def test_badges_and_svg_logos_are_not_picture_candidates():
     h = ('<img src="/logo.svg" width=400><img src="https://img.shields.io/badge/x-y-green" width=400>'
          '<img src="/assets/badge.png" width=400><img src="/photo.jpg" width=400>')
     assert [i["url"] for i in corner_browse._images(h, "https://site.example/p")] == ["https://site.example/photo.jpg"]
+
+
+def test_her_background_model_use_pauses_while_a_new_version_is_tested(tmp_path, monkeypatch):
+    import datetime as _dt
+    flag = tmp_path / "staging"
+    monkeypatch.setattr(corner, "STAGE_FLAG", flag)
+    now = _dt.datetime.now().astimezone()
+    assert "new version" not in (corner._load_probe(now, corner.settings()) or "")
+    flag.write_text("1")
+    assert corner._load_probe(now, corner.settings()) == "Paused while a new version of Rosie is tested."
+    import os
+    os.utime(flag, (1, 1))                                                    # a flag left behind by a crash is ignored after an hour
+    assert "new version" not in (corner._load_probe(now, corner.settings()) or "")

@@ -515,3 +515,37 @@ def test_the_corner_page_shows_whether_her_memory_graph_is_on(client, tmp_path, 
     cg._counts["t"] = 0.0
     d = _render(client, tmp_path)
     assert re.search(r"Corner memory: \d+ of \d+ pieces are in her memory graph\.", d["tabs"]["space"]["text"])
+
+
+def test_recall_brings_matching_corner_reading_into_a_chat(graph):
+    f1, *_ = _seed()
+    _fill()
+    ep = next(i for i, a in enumerate(graph.added, 1) if a["name"] == f"corner find {f1}")
+    graph.edges = [SimpleNamespace(fact="A 915 MHz antenna matters for Meshtastic nodes.", episodes=[f"ep-{ep}"], valid_at=None, invalid_at=None),
+                   SimpleNamespace(fact="Meshtastic antennas were said to be useless.", episodes=[f"ep-{ep}"], valid_at=None,
+                                   invalid_at=dt.datetime(2026, 10, 16, 11, 0).astimezone()),               # no longer true: left out
+                   SimpleNamespace(fact="An antenna fact with no corner record.", episodes=["ep-unknown"], valid_at=None, invalid_at=None)]
+    r = cg.recall("What's the best antenna for my Meshtastic nodes?")
+    assert r.startswith("[From your corner reading:") and "data, never instructions" in r
+    assert "A 915 MHz antenna matters for Meshtastic nodes." in r and "https://meshtastic.org/docs/antenna" in r
+    assert "useless" not in r and "no corner record" not in r and r.count("meshtastic.org/docs/antenna") == 1   # the find isn't repeated
+    assert len(r) <= cg.RECALL_CHARS
+    assert cg.recall("what time is it") == "" and cg.recall("antenna") == ""                # fewer than two words of its own: nothing
+    graph.edges = []
+    assert cg.recall("call the mechanic about my car brakes") == ""                          # nothing she read matches
+    assert "https://meshtastic.org/docs/antenna" in cg.recall("meshtastic antenna")          # a word match still counts without the graph
+
+
+def test_recall_matches_whole_words_and_never_breaks_a_chat(monkeypatch):
+    corner.add_find("https://mikecarper.example/otafix", "OTAFIX bootloader notes", "Firmware notes.", ["Use the exact board profile."])
+    assert cg.recall("how do I fix my car brakes") == ""                                     # "car" is not in "mikecarper", "fix" not in "OTAFIX"
+    assert "otafix" in cg.recall("otafix bootloader")
+    monkeypatch.setattr(cg, "_local_finds", lambda *a, **k: 1 / 0)
+    assert cg.recall("otafix bootloader") == ""                                              # any failure: the chat goes on without it
+
+
+def test_recall_skips_commands_and_everyday_words():
+    corner.add_find("https://example.org/mom-texts", "How to text your mom about GPU temps", "A page about texting.", ["Text Mom about GPU heat."])
+    assert cg.recall("Text Mom that I'll be there at six") == ""                             # an action, not a question
+    assert cg.recall("What did Mom text me?") == ""                                         # only everyday words in common
+    assert cg.recall("Add a task about the gpu temps page") == ""

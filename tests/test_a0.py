@@ -265,3 +265,34 @@ def test_settings_switch_the_brain(tmp_path, monkeypatch):
     assert c.post("/api/settings", json={"brain": "agent_zero"}).json()["brain"] == "agent_zero" and a0.enabled()
     assert c.post("/api/settings", json={"brain": "skynet"}).status_code >= 400
     assert c.post("/api/settings", json={"brain": "rosie"}).json()["brain"] == "rosie" and not a0.enabled()
+
+
+def test_corner_reading_comes_along_and_the_turn_counts_as_outside_text(a0z, monkeypatch):
+    import corner_graph
+    calls, _ = a0z
+    seen = []
+    monkeypatch.setattr(corner_graph, "recall", lambda text: seen.append(text) or "[From your corner reading: ...]\n- a page\n")
+    agent.chat([], "what antenna should I use for meshtastic", chat_id=3)
+    msg = calls[0][1]["message"]
+    assert "[From your corner reading: ...]" in msg and a0.UNTRUSTED_NOTE in msg and msg.endswith("what antenna should I use for meshtastic")
+    agent.chat([], "thanks", chat_id=4)
+    assert seen == ["what antenna should I use for meshtastic"]                          # small talk isn't looked up
+    monkeypatch.setattr(corner_graph, "recall", lambda text: "")
+    agent.chat([], "what is on my calendar", chat_id=5)
+    assert a0.UNTRUSTED_NOTE not in calls[-1][1]["message"]                                # nothing read: an ordinary turn
+
+
+def test_rosies_own_model_gets_the_corner_reading_too(monkeypatch):
+    import corner_graph
+    sent = []
+
+    class Resp:
+        def json(self):
+            return {"message": {"role": "assistant", "content": "The 915 MHz one."}}
+    monkeypatch.setattr(agent, "pick_skill", lambda *a, **k: "")
+    monkeypatch.setattr(agent.httpx, "post", lambda url, **k: sent.append(k["json"]) or Resp())
+    monkeypatch.setattr(corner_graph, "recall", lambda text: "[From your corner reading: ...]\n- a page\n")
+    reply, _, new = agent.chat([], "what antenna should I use for meshtastic", chat_id=1)
+    assert sent[0]["messages"][0]["content"].endswith("[From your corner reading: ...]\n- a page\n")
+    assert "corner_memory" in {t["function"]["name"] for t in sent[0]["tools"]}
+    assert not any("corner reading" in str(m.get("content")) for m in new)                    # never saved into the chat

@@ -22,6 +22,11 @@ def remember(content: str, kind: str = "note", title: str = ""):
         cur = c.execute("INSERT INTO notes(kind,title,content,created) VALUES(?,?,?,?)",
                         (kind, title.strip(), content.strip(), dt.datetime.now().isoformat(timespec="minutes")))
         nid = cur.lastrowid
+    try:                                                     # her mind gets it too, as it is (no model call)
+        import mind
+        mind.remember_now(f"{title.strip()}: {content.strip()}" if title.strip() else content.strip(), source="remember")
+    except Exception:
+        pass
     return {"status": "saved", "id": nid, "kind": kind}
 
 

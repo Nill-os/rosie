@@ -41,7 +41,7 @@ testguard.block_network()                                    # from collection o
 
 # (module, attribute, stand-in name under tmp_path). Modules marked lazy are only patched when something already imported them.
 PATCHES = [("config", "PATH", "config.json"), ("tasks", "DB", "tasks.db"), ("inbox", "DB", "inbox.db"), ("chats", "DB", "chats.db"),
-           ("memory", "DB", "memory.db"), ("lessons", "DB", "lessons.db"),
+           ("memory", "DB", "memory.db"), ("lessons", "DB", "lessons.db"), ("mind", "DB", "mind.db"),
            ("proposals", "DB", "proposals.db"), ("skills", "DIR", "skills"), ("pc_tools", "LOG", "audit.log"),
            ("server", "VOICE_CHAT", "voice_chat.json"), ("server", "SECRETS", "secrets"), ("server", "VOICE_DIR", "voices"),
            ("briefs", "DB", "briefs.db"), ("briefs", "LOG", "hub.log"), ("projects", "DB", "projects.db"), ("mailwatch", "DB", "mail.db"),

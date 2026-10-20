@@ -42,6 +42,12 @@ def _task(t):
 
 
 # ---------------- home ----------------
+@router.get("/api/mind")
+def mind_status():
+    import mind
+    return mind.status()
+
+
 @router.get("/api/home")
 def home():
     n = workflows.now()

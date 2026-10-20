@@ -28,6 +28,10 @@ TMP = Path(tempfile.mkdtemp(prefix="rosie-eval-"))
 config.PATH = TMP / "config.json"
 tasks.DB, inbox.DB, chats.DB, memory.DB, lessons.DB = TMP / "t.db", TMP / "i.db", TMP / "c.db", TMP / "m.db", TMP / "l.db"
 fastpath.try_fast = lambda *a, **k: None          # judge the MODEL, not the exact-code shortcuts
+import corner_graph  # noqa: E402
+corner_graph.recall = lambda *a, **k: ""          # and not what the live corner happens to hold today
+import mind  # noqa: E402
+mind.DB = TMP / "mind.db"                          # her memory: an empty throwaway one
 JOBS = []
 
 

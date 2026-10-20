@@ -291,4 +291,6 @@ def start():
             time.sleep(30)
     threading.Thread(target=loop, daemon=True, name="automations").start()
     import corner_graph
-    corner_graph.start()                                     # her corner memory graph: adds episodes in the background when the GPU is free
+    corner_graph.start()
+    import mind
+    mind.start()                                             # her mind: reads chats into facts and beliefs when the GPU is free                                     # her corner memory graph: adds episodes in the background when the GPU is free

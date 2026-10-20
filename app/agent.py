@@ -28,6 +28,9 @@ import terminals
 import lessons
 import memory
 import corner_graph
+import mind
+import skill_finder
+import squeeze
 import pc_tools
 import skills
 import web
@@ -306,6 +309,17 @@ TOOLS = {
                   {"content": ("string", "what to remember, one clear sentence or short note"), "kind": ("string", "profile|food|idea|project|note optional"), "title": ("string", "short title optional")}),
     "recall": (memory.recall, "Search long-term memory (ideas, projects, notes, facts). Empty query lists recent items.",
                 {"query": ("string", "words to find optional"), "kind": ("string", "profile|food|idea|project|note optional")}),
+    "memory_search": (mind.search_tool, "Search your memory of past chats and notes (about the owner, and what you did).",
+                      {"query": ("string", "what to look for"), "when": ("string", "optional: 'last week', 'in June'")}),
+    "memory_reflect": (lambda question: mind.reflect(question), "Think over everything you remember to answer a question about the owner's life, habits, "
+                       "people, projects or past conversations; it cites the memories it used, or says it doesn't know.", {"question": ("string", "the question")}),
+    "memory_forget": (lambda memory_id: mind.forget(int(memory_id)), "Forget one memory by its id (from memory_search), when the owner says it is wrong.",
+                      {"memory_id": ("integer", "the memory's id")}),
+    "more_result": (squeeze.more_result, "The rest of a shortened tool result.", {"ref": ("string", "like r7"), "part": ("integer", "default 1 optional")}),
+    "find_skills": (skill_finder.find_skills, "Search the open agent-skills index (skills.sh) for a skill (a playbook) that helps with a task. "
+                    "Read-only: nothing is installed. Show the owner the best one or two (name, installs).", {"query": ("string", "what the skill should help with")}),
+    "install_skill": (skill_finder.install_skill, "Add a skill from find_skills as one of your playbooks (owner/repo@skill exactly as found). The owner "
+                      "confirms first; skills that ship programs or need paid services are refused.", {"package": ("string", "owner/repo@skill")}),
     "corner_memory": (corner_graph.search, "Search Rosie's corner memory (read-only): the web pages she found while browsing on her own, her notes about them, the pictures she saved, her topic groups and what she searched for, by date. Use it when the user asks about your corner, your finds, what you read or found about something, a page or picture you saw, or what you're into lately. It returns facts and finds with their source links: answer only from them, give the link for each thing you mention, and say so if nothing matches.",
                       {"query": ("string", "what to look for, e.g. 'Meshtastic antennas'"), "days": ("integer", "optional: only the last N days, e.g. 7 for 'this week'")}),
     "lessons": (lessons.tool, "Rules learned from past mistakes. action 'list' shows them; 'add' (trigger = key words of the kind of request, lesson = the rule) saves one when the user corrects you or says to always/never do something; 'delete' (lesson_id) removes one.",
@@ -329,6 +343,8 @@ GROUPS.update({n: "pc" for n in ("run_command", "read_file", "write_file", "list
 GROUPS.update({n: "web" for n in ("web_search", "fetch_url", "get_weather", "find_recipe")})
 GROUPS.update({"search_notes": "notes"})
 GROUPS["corner_memory"] = "corner"
+GROUPS.update({"memory_search": "core", "more_result": "core", "memory_reflect": "memory", "memory_forget": "memory"})
+GROUPS.update({n: "skills" for n in ("find_skills", "install_skill")})
 GROUPS.update({n: "mail" for n in ("search_email", "summarize_email", "draft_email_reply", "check_email", "mail_cleanup_preview", "mail_cleanup", "mail_undo")})
 GROUPS.update({n: "phone" for n in ("phone_status", "phone_keep_note", "phone_lookup_contact", "phone_send_sms", "phone_call", "phone_read_messages", "phone_set_alarm", "phone_set_timer", "phone_open_app", "phone_music", "phone_torch", "phone_volume", "phone_navigate", "phone_search", "phone_notifications", "phone_reply_notification", "phone_screen_do")})
 GROUPS["phone_screen_tap"] = "internal"                      # only runs after the user confirms a risky tap; never offered to the model
@@ -344,6 +360,8 @@ GROUP_RE = {
     "phone": r"\b(notifications?|whatsapp|instagram|tiktok|slack|discord|telegram|signal|messenger|reply|on my screen|tap|swipe|scroll|setting|settings|dark mode|wifi|bluetooth|phone|text|texts|texting|sms|message|messages|messaging|call|ring|dial|keep|note to self|alarm|wake me|wake up|timer|flashlight|torch|volume|music|play|pause|skip|next song|navigate|directions|open (the )?[a-z]+ app|contact|contacts|whatsapp|maps|spotify)\b",
     "selfdev": r"\b(your own code|improve yourself|update yourself|upgrade yourself|self[- ]?update|new version of (?:you|yourself|rosie)|go back to the (?:old|previous) version|roll ?back|switch (?:to )?(?:the )?(?:new )?(?:version|slot)|fix yourself|change your (?:own )?code|modify yourself|add (?:a )?feature to yourself|your code)\b",
     "build": r"\b(build|make|write|create) (me )?(a |an )?(new )?(tool|program|script|plugin)\b",
+    "skills": r"\b(skills?|playbooks?)\b",
+    "memory": r"\b(remember\w*|recall|forget|memor(?:y|ies)|what do you know about|did i (?:tell|say|mention)|last time|you learned)\b",
     "notes": r"\b(notes?|meetings?|transcripts?|vault|discussed|decided|said|call|recording)\b",
     "term": r"\b(terminals?|claude|codex|gemini|opencode|agents?|sessions?|tmux|launch|spawn|shell|attach)\b",
     "projects": r"\b(projects?|milestones?|roadmap|plan\w*|finish line|next action|goal|areas?|weekly review)\b",
@@ -425,6 +443,7 @@ def system_prompt(mode="auto", voice=False):
         + style + "\n"
         + f"NOW: {n:%A %Y-%m-%d %H:%M} ({gcal.TZ}). Next days: {week}.\n"
         + (f"WHAT YOU KNOW ABOUT THE USER:\n{mem}\n" if mem else "You know nothing about the user yet; learn as you go.\n")
+        + mind.about_owner()
         + (f"WORKING MEMORY (current focus, waiting on, decisions):\n{work}\n" if work else ""))
 
 
@@ -460,8 +479,7 @@ def _cap(result, limit=3500):
             keep.append(item)
         return {"results_shown": len(keep), "total_results": len(result), "results": keep,
                 "note": "Too many results. Tell the user how many there were and ask them to narrow it down."}
-    text = json.dumps(result, default=str)
-    return text if len(text) <= limit * 2 else text[:limit * 2] + '..."[cut]'
+    return squeeze.squeeze(result, limit * 2)                 # errors and both ends kept; the rest stays retrievable (more_result)
 
 
 SKILL_HINTS = {
@@ -504,8 +522,8 @@ def pick_skill(user_text: str, history: list[dict]) -> str:
 # --- untrusted-content guard -------------------------------------------------
 # Anything from the web, email, files outside the vault or other agents' output can contain hidden instructions.
 # After the assistant has read such content, risky tools no longer run silently: the user must confirm each one.
-UNTRUSTED = {"corner_memory", "selfdev_read", "selfdev_search", "find_recipe", "phone_notifications", "phone_screen_do", "phone_read_messages", "search_notes", "web_search", "fetch_url", "search_email", "summarize_email", "draft_email_reply", "list_emails", "terminal_read"}
-GUARDED = {"lessons", "remember", "forget", "cancel_reminder", "selfdev_edit", "selfdev_write", "selfdev_agent", "selfdev_switch", "selfdev_rollback", "phone_screen_do", "phone_reply_notification", "phone_send_sms", "phone_call", "phone_keep_note", "build_tool", "run_user_tool", "run_command", "write_file", "open_on_desktop", "launch_agent", "terminal_start", "terminal_send", "terminal_stop"}
+UNTRUSTED = {"corner_memory", "find_skills", "selfdev_read", "selfdev_search", "find_recipe", "phone_notifications", "phone_screen_do", "phone_read_messages", "search_notes", "web_search", "fetch_url", "search_email", "summarize_email", "draft_email_reply", "list_emails", "terminal_read"}
+GUARDED = {"lessons", "remember", "forget", "memory_forget", "install_skill", "cancel_reminder", "selfdev_edit", "selfdev_write", "selfdev_agent", "selfdev_switch", "selfdev_rollback", "phone_screen_do", "phone_reply_notification", "phone_send_sms", "phone_call", "phone_keep_note", "build_tool", "run_user_tool", "run_command", "write_file", "open_on_desktop", "launch_agent", "terminal_start", "terminal_send", "terminal_stop"}
 
 
 def is_untrusted(name, args):
@@ -727,7 +745,11 @@ WEATHER_READING = re.compile(r"\d+\s?°\s?[FC]")             # the reply itself 
 READ_TOOLS = {"get_schedule", "search_events", "find_free_time", "list_tasks", "what_now", "overdue_tasks", "find_task", "start_my_day"}
 
 
-def chat(history: list[dict], user_text: str, mode: str = "auto", voice: bool = False, max_steps=10, space: str | None = None, untrusted: bool = False, chat_id=None, _local=False):
+TURN_OUTSIDE: dict = {}       # chat_id -> did the last turn read outside text (mind.queue_turn keeps only the owner's words then)
+
+
+def chat(history: list[dict], user_text: str, mode: str = "auto", voice: bool = False, max_steps=10, space: str | None = None, untrusted: bool = False, chat_id=None, _local=False,
+         _reading=None):
     """Returns (reply_text, pending_confirmations, new_history)."""
     phone.user_text = user_text
     fp = fastpath.try_fast(user_text)                      # simple, frequent commands are done by exact code, not left to the small model
@@ -736,11 +758,16 @@ def chat(history: list[dict], user_text: str, mode: str = "auto", voice: bool = 
     if ctxsize.running():                                  # Settings > Context window is measuring the model alone on the GPU
         reply = "I'm tuning my context window right now (2 to 5 minutes). Ask me again in a moment."
         return reply, [], history + [{"role": "user", "content": user_text}, {"role": "assistant", "content": reply}]
+    reading = _reading if _reading is not None else ("" if CHITCHAT.match(user_text.strip()) else corner_graph.recall(user_text))
+    untrusted = untrusted or bool(reading)                 # what she read in her corner comes along; its page text is outside text
+    remembered = "" if CHITCHAT.match(user_text.strip()) else mind.auto_context(user_text)   # her own memory of earlier chats (not outside text)
+    if chat_id is not None:
+        TURN_OUTSIDE[chat_id] = untrusted
     if not _local and a0.enabled():                        # Settings > Brain: Agent Zero thinks, with Rosie's tools (a0.py, a0_mcp.py)
         try:
-            return a0.chat(history, user_text, voice, chat_id=chat_id, space=space, untrusted=untrusted)
+            return a0.chat(history, user_text, voice, chat_id=chat_id, space=space, untrusted=untrusted, reading=remembered + reading)
         except a0.Unavailable as e:
-            reply, pending, new = chat(history, user_text, mode, voice, max_steps, space, untrusted, chat_id, _local=True)
+            reply, pending, new = chat(history, user_text, mode, voice, max_steps, space, untrusted, chat_id, _local=True, _reading=reading)
             note = "" if voice else f"(Agent Zero isn't answering, so my own model answered: {str(e)[:80]}) "
             return note + reply, pending, new
     skill = pick_skill(user_text, history) or SPACE_SKILL.get(space or "", "")
@@ -750,8 +777,8 @@ def chat(history: list[dict], user_text: str, mode: str = "auto", voice: bool = 
     if skill:
         sp += (f"\nACTIVE SKILL for this message: '{skill}'. Follow these steps (adapted to a "
                f"{'spoken' if voice else 'text'} reply):\n{skills.use_skill(skill)['instructions']}")
-    msgs = [{"role": "system", "content": sp}] + history + [{"role": "user", "content": user_text}]
-    active = select_groups(user_text, history, skill, space)
+    msgs = [{"role": "system", "content": sp + ("\n\n" + remembered if remembered else "") + ("\n\n" + reading if reading else "")}] + history + [{"role": "user", "content": user_text}]
+    active = select_groups(user_text, history, skill, space) | ({"corner"} if reading else set())   # she can look further with corner_memory
     pending, used, retried, refused = [], set(), False, False
     tried, failed, err_nudged, stalled = set(), {}, False, 0
     forced_question = ""
@@ -882,6 +909,8 @@ def chat(history: list[dict], user_text: str, mode: str = "auto", voice: bool = 
                 failed[name] = str(result.get("error") or result.get("message"))[:200]
             if not held and is_untrusted(name, args):
                 tainted = True
+                if chat_id is not None:
+                    TURN_OUTSIDE[chat_id] = True                  # the saved memory of this turn keeps only the owner's words
                 if name == "read_file" and isinstance(result, dict) and "content" in result:
                     result = {**result, "content": "[untrusted] " + str(result["content"])}   # marks it for the next turns' guard
             c = _cap(result)
