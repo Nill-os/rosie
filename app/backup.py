@@ -49,7 +49,10 @@ def _gpg(*args, passfile: Path):
     home.mkdir(parents=True, exist_ok=True)
     home.chmod(0o700)
     cmd = ["gpg", "--homedir", str(home), "--batch", "--yes", "--quiet", "--pinentry-mode", "loopback", "--passphrase-file", str(passfile), *args]
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    finally:                                                 # gpg starts an agent for this home; it is not needed afterwards
+        subprocess.run(["gpgconf", "--homedir", str(home), "--kill", "gpg-agent"], capture_output=True, timeout=30)
     if r.returncode != 0:
         raise RuntimeError("gpg failed: " + (r.stderr or r.stdout).strip()[-200:])
 

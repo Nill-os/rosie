@@ -903,7 +903,18 @@ VIEWS.settings = async (arg) => {
       h('div', { class: 'card' }, h('h3', {}, 'About you'), h('div', { class: 'muted', style: 'margin-bottom:10px' }, 'What Rosie calls you, and how you like help. Both go into her prompts and Agent Zero\'s. They stay on this PC.'),
         h('form', { class: 'form col', onsubmit: async (e) => { e.preventDefault(); try { await post('/api/settings', { owner_name: on.value, owner_notes: nn.value }); toast('Saved'); } catch (er) { toast(er.message, 1); } } }, on, nn, btn('Save', 'pur', null, 'submit'))),
       h('div', { class: 'card' }, h('h3', {}, 'Memory'), h('div', { class: 'muted', style: 'margin-bottom:10px' }, 'What Rosie learns from your chats: facts, and beliefs that grow as she hears more. She reads chats while you aren\'t using her, and it all stays on this PC. Ask her "what do you remember about…", or tell her to forget something.'),
-        (() => { const d = h('div', {}, 'Loading…'); J('/api/mind').then((m) => { d.textContent = m.line; }).catch((er) => { d.textContent = er.message; }); return d; })()),
+        (() => {
+          const d = h('div', {}, 'Loading…');
+          const fill = (m) => {
+            d.replaceChildren(h('div', {}, m.line),
+              h('details', { style: 'margin-top:8px' }, h('summary', { class: 'muted' }, 'What she remembers (' + m.recent.length + ' newest; beliefs first)'),
+                h('div', { class: 'list' }, m.recent.map((x) => h('div', { class: 'item' },
+                  h('span', { class: 'tx' }, (x.kind === 'observation' ? 'Belief (' + x.proof + ' facts): ' : '') + x.text + ' · ' + x.when),
+                  h('button', { class: 'x', 'aria-label': 'Forget: ' + x.text.slice(0, 60), title: 'Forget this', onclick: async () => { try { await del('/api/mind/' + x.id); toast('Forgotten'); fill(await J('/api/mind')); } catch (er) { toast(er.message, 1); } } }, '×'))))));
+          };
+          J('/api/mind').then(fill).catch((er) => { d.textContent = er.message; });
+          return d;
+        })()),
       h('div', { class: 'card' }, h('h3', {}, 'Daily brief'), h('div', { class: 'muted', style: 'margin-bottom:10px' }, 'Made automatically at this time (when the PC is awake).'),
         h('form', { class: 'form', onsubmit: async (e) => { e.preventDefault(); try { await post('/api/settings', { brief_time: bt.value }); toast('Saved'); } catch (er) { toast(er.message, 1); } } }, bt, btn('Save', 'pur', null, 'submit'))),
       h('div', { class: 'card' }, h('h3', {}, 'Spaces'), h('div', { class: 'muted', style: 'margin-bottom:10px' }, 'Folders for chats. A space also tells the assistant the topic (Food, Build, Ideas and Life load matching skills).'),

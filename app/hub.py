@@ -45,7 +45,16 @@ def _task(t):
 @router.get("/api/mind")
 def mind_status():
     import mind
-    return mind.status()
+    return {**mind.status(), "recent": mind.recent(40)}
+
+
+@router.delete("/api/mind/{unit_id}")
+def mind_forget(unit_id: int):
+    import mind
+    r = mind.forget(unit_id, "the owner forgot it in Settings")
+    if r.get("error"):
+        return err(r["error"], 404)
+    return r
 
 
 @router.get("/api/home")

@@ -198,7 +198,7 @@ def _run_turn(chat_id, text, mode="auto", voice=False, shown=None, space=None, u
         reply, pending, new = f"Something broke: {type(e).__name__}: {e}", [], hist + [{"role": "user", "content": text}, {"role": "assistant", "content": f"Something broke: {type(e).__name__}: {e}"}]
     chats.add_msgs(cid, new[len(hist):], first_user_shown=shown)
     import mind
-    outside = untrusted or agent.TURN_OUTSIDE.pop(cid, False) or any(m.get("role") == "tool" and m.get("tool_name") in agent.UNTRUSTED for m in new[len(hist):])
+    outside = untrusted or agent.TURN_OUTSIDE.pop(cid, False) or any(m.get("role") == "tool" and m.get("tool_name") in mind.outside_tools() for m in new[len(hist):])
     mind.queue_turn(cid, shown if shown is not None else text, reply, untrusted=outside, voice=voice)     # read into her memory later, when she is idle
     if pending:                                      # one clear line instead of the model's chatter around the confirmation card
         reply = "Ready: " + "; ".join(p["summary"] for p in pending) + ". Tap Yes to do it."
@@ -462,6 +462,11 @@ def get_chat(chat_id: int):
 @app.delete("/api/chats/{chat_id}")
 def delete_chat(chat_id: int):
     chats.delete(chat_id)
+    try:                                                     # what she learned from it goes too
+        import mind
+        mind.forget_chat(chat_id)
+    except Exception:
+        pass
     return {"ok": True}
 
 

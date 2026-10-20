@@ -193,7 +193,7 @@ def test_auto_context_brings_only_clearly_matching_memories(fake):
     assert mind.auto_context("what bike do I have") == ""                                   # an empty mind adds nothing
     mind.add_units([{"text": "Sam's bike is a blue Trek road bike.", "kind": "world", "entities": ["Sam", "Trek"]},
                     {"text": "Sam's cat is called Miso.", "kind": "world", "entities": ["Sam", "Miso"]}], "chat", "2026-10-10T09:00:00-07:00")
-    ctx = mind.auto_context("what color is my Trek road bike")
+    ctx = mind.auto_context("is my bike the blue Trek road bike")
     assert ctx.startswith("[What you remember") and "blue Trek road bike" in ctx and "Miso" not in ctx
     assert mind.auto_context("thanks") == "" and mind.auto_context("what's the weather in Paris tomorrow") == ""
 
@@ -213,7 +213,7 @@ def test_backfill_reads_old_chats_once_and_never_her_web_based_replies(fake):
     assert texts == ["Sam: my favorite food is ramen\nRosie: Noted: ramen.", "Sam: read this page for me"]
 
 
-def test_forgetting_a_fact_retires_beliefs_that_rested_only_on_it(fake):
+def test_forgetting_a_fact_retires_the_beliefs_built_on_it_and_rethinks_the_rest(fake):
     a, b = mind.add_units([{"text": "Sam owns a red kayak.", "kind": "world", "entities": ["Sam"]},
                            {"text": "Sam paddles on Saturdays.", "kind": "world", "entities": ["Sam"]}], "chat", "2026-10-10T09:00:00-07:00")
     fake.answers = [{"creates": [{"text": "Sam owns a red kayak.", "source_fact_ids": [a]},
@@ -222,7 +222,9 @@ def test_forgetting_a_fact_retires_beliefs_that_rested_only_on_it(fake):
     assert mind.forget(a)["status"] == "forgotten"
     with mind._db() as c:
         live = {r["text"]: r["proof_count"] for r in c.execute("SELECT text, proof_count FROM units WHERE invalidated_at IS NULL")}
-    assert live == {"Sam paddles on Saturdays.": 1, "Sam goes kayaking on Saturdays in a red kayak.": 1}
+    assert live == {"Sam paddles on Saturdays.": 1}                                     # no belief keeps a detail of the forgotten fact
+    with mind._db() as c:
+        assert c.execute("SELECT consolidated_at FROM units WHERE id=?", (b,)).fetchone()["consolidated_at"] is None   # thought over again
     assert all("kayak" not in m["text"] or "Saturdays" in m["text"] for m in mind.recall("red kayak", today=TODAY))
 
 
@@ -298,3 +300,66 @@ def test_skill_search_results_are_parsed_and_unsafe_skills_refused(monkeypatch, 
     monkeypatch.setattr(skill_finder, "fetch_skill", lambda p: {"package": p, "name": "plan-my-day", "url": "u", "text": good.replace("pdf-forms", "plan-my-day"), "files": []})
     assert "own playbook" in skill_finder.install_skill("o/r@plan-my-day")["error"]           # never replaces one of hers
     assert "owner/repo@skill" in real_fetch("not a package")["error"]
+
+
+def test_deleting_a_chat_forgets_what_she_learned_from_it(fake, monkeypatch):
+    import server
+    cid = chats.new_chat()
+    mind.queue_turn(cid, "my locker code is 4417 at the gym", "Noted.")
+    fake.answers = [{"facts": [_fact("Sam's gym locker code is 4417.", ents=["Sam"])]}]
+    mind.retain_next(background=False)
+    mind.queue_turn(cid, "and my bike lock is the blue one", "Okay.")                # not read yet
+    assert mind.status()["facts"] == 1 and mind.status()["queued"] == 1
+    assert server.delete_chat(cid) == {"ok": True}
+    st = mind.status()
+    assert st["facts"] == 0 and st["queued"] == 0 and mind.recall("gym locker code", today=TODAY) == []
+
+
+def test_owner_facts_are_the_owners_even_when_the_model_files_them_as_hers(fake):
+    mind.queue_turn(3, "I decided to text Mom at six tonight", "Okay, I'll remind you.")
+    fake.answers = [{"facts": [_fact("Sam decided to text Mom at 18:00 on October 20, 2026.", typ="assistant", ents=["Sam", "Mom"]),
+                               _fact("Rosie set a reminder for Sam at 18:00.", typ="assistant", ents=["Sam"])]}]
+    mind.retain_next(background=False)
+    assert "Never guess anyone's gender" in fake.chats[0]["messages"][0]["content"]
+    assert {m["text"][:12]: m["kind"] for m in mind.recent()} == {"Rosie set a ": "experience", "Sam decided ": "world"}
+
+
+def test_mail_days_are_redone_with_only_the_owners_words(fake):
+    cid = chats.new_chat()
+    chats.add_msgs(cid, [{"role": "user", "content": "check my mail please"},
+                         {"role": "assistant", "content": "", "tool_calls": [{"function": {"name": "check_email", "arguments": {}}}]},
+                         {"role": "tool", "tool_name": "check_email", "content": "Your bank: new device signed in"},
+                         {"role": "assistant", "content": "Your bank says a new device signed in."}])
+    with mind._db() as c:                                                                # as the first back-fill kept it
+        c.execute("INSERT INTO meta(k, v) VALUES('backfilled', 'x')")
+    day = mind._iso()[:10]
+    doc = mind.queue("Sam: check my mail please\nRosie: Your bank says a new device signed in.", "chat", f"backfill:chat:{cid}:{day}",
+                     "an earlier chat with Rosie")
+    with mind._db() as c:
+        c.execute("UPDATE docs SET mentioned_at=? WHERE id=?", (mind._iso(), doc))
+    fake.answers = [{"facts": [_fact("A new device signed in to Sam's bank account.", ents=["Sam"])]}]
+    mind.retain_next(background=False)
+    assert mind.status()["facts"] == 1
+    assert mind.repair_outside() == 1 and mind.repair_outside() == 0
+    with mind._db() as c:
+        texts = [r["text"] for r in c.execute("SELECT text FROM docs")]
+    assert texts == ["Sam: check my mail please"] and mind.status()["facts"] == 0
+    assert "check_email" in mind.outside_tools() and "web_search" in mind.outside_tools()
+
+
+def test_the_daily_briefs_mail_section_is_never_memorized(fake):
+    brief = ("Rosie: **Daily Brief**\n**Tasks today**\n- Install insulation downstairs\n\n**Email** — 29 in the last day, 2 need you\n"
+             "- Google: new app password for your account\n- Bank: payment due\n\n**Overdue**\n- Laundry (due 2026-10-05)")
+    kept = mind.drop_mail(brief)
+    assert "Google" not in kept and "Bank" not in kept and "Install insulation" in kept and "Laundry" in kept
+    with mind._db() as c:                                                                # as the first back-fill kept it
+        c.execute("INSERT INTO docs(source, ref, text, context, mentioned_at, created_at, done_at) VALUES('chat','backfill:chat:1:2026-10-06',?,'',?,?,?)",
+                  (brief, mind._iso(), mind._iso(), mind._iso()))
+        doc = c.execute("SELECT id FROM docs").fetchone()["id"]
+    (u,) = mind.add_units([{"text": "Google sent an alert about a new app password.", "kind": "world", "entities": ["Google"]}], "chat", mind._iso(), doc)
+    assert mind.repair_briefs() == 1 and mind.repair_briefs() == 0
+    with mind._db() as c:
+        texts = [r["text"] for r in c.execute("SELECT text FROM docs")]
+        gone = c.execute("SELECT invalidated_at FROM units WHERE id=?", (u,)).fetchone()["invalidated_at"]
+    assert gone and len(texts) == 1 and "Google" not in texts[0] and "Install insulation" in texts[0]
+    assert "Bank" not in (mind.queue(brief, "chat", "x") and mind._db().execute("SELECT text FROM docs WHERE ref='x'").fetchone()["text"])

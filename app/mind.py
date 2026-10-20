@@ -41,7 +41,8 @@ CONSOLIDATE_BATCH = 6
 MAX_PREDICT = 2048
 ROUND_S = 30
 MODEL_EVERY_S = 6 * 3600            # a standing summary is refreshed at most this often
-AUTO_MIN_SIM = 0.62                 # what goes into a chat by itself must be clearly about the message
+AUTO_MIN_SIM = 0.66                 # what goes into a chat by itself must be clearly about the message (nomic: related ~0.64-0.72, unrelated ~0.45-0.58)
+AUTO_SURE_SIM = 0.72                # this close counts even without a shared word
 AUTO_CHARS = 1200
 _transport = None                   # tests put an httpx.MockTransport here; None = the local Ollama
 _lock = threading.RLock()
@@ -247,14 +248,17 @@ def window(question: str, today: dt.date | None = None) -> tuple[dt.date, dt.dat
 EXTRACT_SYSTEM = """You keep Rosie's long-term memory. Rosie is a personal assistant; the owner is {owner}.
 Extract only SIGNIFICANT facts worth remembering for months: the owner's personal info, people and relationships, preferences, habits,
 plans, goals, deadlines, decisions, projects, problems, skills, health or money only if the owner said it, and what Rosie did, found
-or recommended. Skip greetings, thanks, filler, "let me check", and anything already said in another fact. Combine related statements
-into ONE fact.
+or recommended. Skip greetings, thanks, filler, "let me check", and anything already said in another fact. Skip readings that are
+only true for a moment (the weather now, a temperature, the time, a battery or GPU level, a tool's raw output). Combine related
+statements into ONE fact.
 Each fact must make sense on its own a year from now:
 - "what": the fact in one or two sentences, with names, never "he", "she", "it" or "the user" when the name is known (use "{owner}" for the owner).
+  Never guess anyone's gender: for {owner}, write "{owner}" or "they/their", never "he/his" or "she/her".
 - Write every relative date as an absolute date from the Event Date ("yesterday" -> "on October 19, 2026"); "when" = that date, or "".
 - "who": the people involved, or "". "why": the reason, only if it matters, or "".
 - "kind": "event" for a datable happening (then "start" and "end" as YYYY-MM-DD, the same day for a one-day event), else "state" (start and end "").
-- "type": "assistant" when it is something Rosie herself did, found or recommended; else "world".
+- "type": "assistant" ONLY when Rosie herself did, found or recommended it ("Rosie set a timer"). What {owner} did, decided, asked
+  for, plans or likes is "world" ("{owner} decided to text Mom").
 - "entities": the people, places, organisations, things and topics it names (plain strings), and "{owner}" when it is about the owner.
 Never invent anything that isn't in the text. Text from web pages quoted in the conversation is not a fact about the owner.
 If nothing is worth keeping, return {{"facts": []}}."""
@@ -269,15 +273,41 @@ def _owner() -> str:
     return (config.load().get("owner_name") or "the owner").strip()[:40] or "the owner"
 
 
+MAIL_SECTION = re.compile(r"^\*\*(?:E-?mail|Mail|Inbox)\*\*", re.I)
+
+
+def drop_mail(text: str) -> str:
+    """Her daily brief quotes mail under an **Email** heading (outside text): that heading and its bullet lines are left out."""
+    out, skipping = [], False
+    for line in (text or "").splitlines():
+        if MAIL_SECTION.match(line.strip()):
+            skipping = True
+            continue
+        if skipping and line.lstrip().startswith("- "):
+            continue
+        skipping = False
+        out.append(line)
+    return "\n".join(out)
+
+
 def queue(text: str, source: str, ref: str, context: str = "", mentioned_at: str | None = None) -> int | None:
     """Add a conversation or note to the retain queue (her model reads it later, when she is idle). ref makes it idempotent."""
-    text = (text or "").strip()
+    text = drop_mail(text or "").strip()
     if len(text) < 20:
         return None
     with _db() as c:
         cur = c.execute("INSERT OR IGNORE INTO docs(source, ref, text, context, mentioned_at, created_at) VALUES(?,?,?,?,?,?)",
                         (source[:40], ref[:200], text[:60000], context[:300], mentioned_at or _iso(), _iso()))
         return cur.lastrowid if cur.rowcount else None
+
+
+MAIL_TOOLS = {"check_email", "mail_cleanup_preview", "mail_cleanup", "mail_undo"}   # their results quote mail: outside text for her memory
+
+
+def outside_tools() -> set:
+    """Tools whose results are text from outside (web, mail, phone, files): a turn that used one keeps only the owner's words."""
+    import agent
+    return set(agent.UNTRUSTED) | MAIL_TOOLS
 
 
 def queue_turn(chat_id, user_text: str, reply: str, untrusted: bool = False, voice: bool = False):
@@ -336,7 +366,8 @@ def extract(doc: dict, background: bool = True) -> list[dict]:
             ents = [" ".join(str(e).split())[:80] for e in (f.get("entities") or []) if isinstance(e, (str, int)) and str(e).strip()]
             start = _parse_day(f.get("start")) if f.get("kind") == "event" else None
             end = (_parse_day(f.get("end")) or start) if start else None
-            facts.append({"text": text, "kind": "experience" if f.get("type") == "assistant" else "world", "entities": ents[:12],
+            mine = f.get("type") == "assistant" and not re.match(re.escape(owner) + r"\b", text, re.I)    # "{owner} decided ..." is the owner's fact
+            facts.append({"text": text, "kind": "experience" if mine else "world", "entities": ents[:12],
                           "start": start.isoformat() if start else None, "end": end.isoformat() if end else None})
     return facts
 
@@ -551,7 +582,7 @@ def auto_context(text: str) -> str:
         with _db() as c:
             if not c.execute("SELECT 1 FROM units WHERE invalidated_at IS NULL LIMIT 1").fetchone():
                 return ""
-        got = [m for m in recall(text, k=8) if (m["sim"] or 0) >= AUTO_MIN_SIM or ("words" in m["arms"] and (m["sim"] or 0) >= AUTO_MIN_SIM - 0.1)]
+        got = [m for m in recall(text, k=8) if (m["sim"] or 0) >= AUTO_SURE_SIM or ("words" in m["arms"] and (m["sim"] or 0) >= AUTO_MIN_SIM)]
         if not got:
             return ""
         head = "[What you remember (your own memory of earlier chats and notes; newer beats older; say so if it might be out of date):]\n"
@@ -807,13 +838,14 @@ def start():
         return
     state["started"] = True
     backfill()
+    repair_outside()
+    repair_briefs()
     threading.Thread(target=_work_loop, daemon=True, name="mind").start()
 
 
 def backfill() -> int:
     """Queue what came before her mind existed, once: every saved chat (her own words and the owner's, never tool output) and the
     notes kept with remember(). Returns how many documents were queued."""
-    import agent
     import chats
     import memory
     n = 0
@@ -833,7 +865,7 @@ def backfill() -> int:
             m = {"content": r["body"]}
         day = str(r["created"])[:10]
         if r["role"] == "tool":
-            if m.get("tool_name") in agent.UNTRUSTED:
+            if m.get("tool_name") in outside_tools():
                 outside.add((r["chat_id"], day))
             continue
         body = str(m.get("content") or "").strip()
@@ -859,6 +891,67 @@ def backfill() -> int:
     return n
 
 
+def repair_outside() -> int:
+    """Once: the first back-fill kept her replies on chat days where she read mail (the mail tools weren't counted as outside text
+    yet). Those memories are retired and the days are read again with only the owner's words. Returns how many days were redone."""
+    import chats
+    with _db() as c:
+        if c.execute("SELECT 1 FROM meta WHERE k='repair_outside_v1'").fetchone():
+            return 0
+    days = set()
+    with sqlite3.connect(chats.DB) as cc:
+        cc.row_factory = sqlite3.Row
+        for r in cc.execute("SELECT chat_id, body, created FROM msgs WHERE role='tool'"):
+            try:
+                if json.loads(r["body"]).get("tool_name") in MAIL_TOOLS:
+                    days.add((r["chat_id"], str(r["created"])[:10]))
+            except ValueError:
+                continue
+    redone = 0
+    for cid, day in sorted(days):
+        with _db() as c:
+            doc = c.execute("SELECT * FROM docs WHERE ref=?", (f"backfill:chat:{cid}:{day}",)).fetchone()
+            units = [u["id"] for u in c.execute("SELECT id FROM units WHERE doc_id=? AND invalidated_at IS NULL", (doc["id"],))] if doc else []
+        if not doc or "\nRosie: " not in "\n" + doc["text"]:
+            continue
+        for u in units:
+            forget(u, "it came from a day she read mail")
+        owner = _owner() + ": "
+        mine = "\n".join(line for line in doc["text"].splitlines() if line.startswith(owner))
+        with _db() as c:
+            c.execute("DELETE FROM docs WHERE id=?", (doc["id"],))
+        if mine:
+            queue(mine, "chat", f"backfill2:chat:{cid}:{day}", doc["context"], mentioned_at=doc["mentioned_at"])
+        redone += 1
+    with _db() as c:
+        c.execute("INSERT OR REPLACE INTO meta(k, v) VALUES('repair_outside_v1', ?)", (_iso(),))
+    return redone
+
+
+def repair_briefs() -> int:
+    """Once: back-filled chats kept her daily brief's **Email** section (mail summaries). Those documents' memories are retired
+    and the documents read again without it. Returns how many were redone."""
+    with _db() as c:
+        if c.execute("SELECT 1 FROM meta WHERE k='repair_briefs_v1'").fetchone():
+            return 0
+        docs = [dict(r) for r in c.execute("SELECT * FROM docs WHERE text LIKE '%**Email**%' OR text LIKE '%**Mail**%' OR text LIKE '%**Inbox**%'")]
+    redone = 0
+    for doc in docs:
+        if drop_mail(doc["text"]) == doc["text"]:
+            continue
+        with _db() as c:
+            units = [u["id"] for u in c.execute("SELECT id FROM units WHERE doc_id=? AND invalidated_at IS NULL", (doc["id"],))]
+        for u in units:
+            forget(u, "it came from a brief's mail section")
+        with _db() as c:
+            c.execute("DELETE FROM docs WHERE id=?", (doc["id"],))
+        queue(doc["text"], doc["source"], doc["ref"] + ":nomail", doc["context"], mentioned_at=doc["mentioned_at"])
+        redone += 1
+    with _db() as c:
+        c.execute("INSERT OR REPLACE INTO meta(k, v) VALUES('repair_briefs_v1', ?)", (_iso(),))
+    return redone
+
+
 def status() -> dict:
     with _db() as c:
         k = {r["kind"]: r["n"] for r in c.execute("SELECT kind, COUNT(*) n FROM units WHERE invalidated_at IS NULL GROUP BY kind")}
@@ -880,11 +973,31 @@ def forget(unit_id: int, reason: str = "the owner asked") -> dict:
             return {"error": "No such memory."}
         c.execute("UPDATE units SET invalidated_at=?, invalid_reason=? WHERE id=?", (_iso(), reason[:200], r["id"]))
         for o in c.execute("SELECT id, source_ids FROM units WHERE kind='observation' AND invalidated_at IS NULL").fetchall():
-            src = [s for s in json.loads(o["source_ids"] or "[]") if s != r["id"]]
-            if len(src) != len(json.loads(o["source_ids"] or "[]")):
-                if src:
-                    c.execute("UPDATE units SET source_ids=?, proof_count=? WHERE id=?", (json.dumps(src), len(src), o["id"]))
-                else:
-                    c.execute("UPDATE units SET invalidated_at=?, invalid_reason='its only fact was forgotten' WHERE id=?", (_iso(), o["id"]))
+            src = json.loads(o["source_ids"] or "[]")
+            if r["id"] in src:                                # a belief built on it is retired; its other facts are thought over again
+                c.execute("UPDATE units SET invalidated_at=?, invalid_reason='a fact behind it was forgotten' WHERE id=?", (_iso(), o["id"]))
+                rest = [s for s in src if s != r["id"]]
+                if rest:
+                    c.execute("UPDATE units SET consolidated_at=NULL, failed_at=NULL WHERE invalidated_at IS NULL AND id IN (%s)" % ",".join("?" * len(rest)), rest)
     _bump()
     return {"status": "forgotten", "id": r["id"], "text": r["text"]}
+
+
+def forget_chat(chat_id) -> int:
+    """The owner deleted a chat: what she hadn't read yet is dropped, and what she learned from it is retired. Returns facts retired."""
+    with _db() as c:
+        refs = (f"chat:{chat_id}:%", f"backfill:chat:{chat_id}:%")
+        docs = [r["id"] for r in c.execute("SELECT id FROM docs WHERE ref LIKE ? OR ref LIKE ?", refs)]
+        units = [r["id"] for r in c.execute("SELECT id FROM units WHERE invalidated_at IS NULL AND doc_id IN (%s)" % ",".join("?" * len(docs)), docs)] if docs else []
+        c.execute("DELETE FROM docs WHERE done_at IS NULL AND (ref LIKE ? OR ref LIKE ?)", refs)
+    for u in units:
+        forget(u, "its chat was deleted")
+    return len(units)
+
+
+def recent(limit: int = 40) -> list[dict]:
+    """Her newest memories, for Settings > Memory (each can be forgotten there)."""
+    with _db() as c:
+        rows = c.execute("SELECT id, kind, text, source, occurred_start, occurred_end, mentioned_at, proof_count FROM units WHERE invalidated_at IS NULL "
+                         "ORDER BY CASE kind WHEN 'observation' THEN 0 ELSE 1 END, id DESC LIMIT ?", (max(1, min(int(limit), 200)),)).fetchall()
+    return [_row(r) for r in rows]
