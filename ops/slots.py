@@ -40,6 +40,14 @@ def git(slot, *args, **kw):
     return run(["git", "-C", str(SLOT[slot]), *args], **kw)
 
 
+def chat_model() -> str:
+    """The model Rosie chats with (Settings > AI model). The update check judges the new code on it, so it never loads another model."""
+    try:
+        return json.loads((SLOT["A"] / "data" / "config.json").read_text()).get("chat_model") or "qwen3.5:9b"
+    except (OSError, ValueError):
+        return "qwen3.5:9b"
+
+
 def load_state() -> dict:
     try:
         return json.loads(STATE.read_text())
@@ -250,7 +258,7 @@ def stage(with_eval=True):
         base = int(load_state().get("eval_baseline", 12))
         passed, total, runs = 0, 0, []
         for _ in range(2):                                   # a small local model is a little random: a real break fails both runs, a one-off slip gets a second try
-            e = run([py, "tests/model_eval.py", "qwen3.5:9b"], cwd=SLOT[idle], timeout=1200)
+            e = run([py, "tests/model_eval.py", chat_model()], cwd=SLOT[idle], timeout=1200)
             m = re.search(r"-> (\d+)/(\d+) correct", e.stdout)
             p1, t1 = (int(m.group(1)), int(m.group(2))) if m else (0, 0)
             runs.append(p1)

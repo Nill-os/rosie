@@ -826,6 +826,22 @@ def test_agenda_tags_are_right_aligned_and_feed_text_is_escaped(fakes, monkeypat
     assert '<span class="g">CLASS</span>' in html and re.search(r"\.ag \.g\{[^}]*text-align:right", html)
 
 
+
+def test_a_sensitive_calendar_event_is_left_out_of_the_paper_whole(fakes, monkeypatch):
+    """Owner 2026-10-14: no health, money or legal lines, and no hint that one was hidden. A calendar title is no exception."""
+    tomorrow = NOW + dt.timedelta(days=1)
+    monkeypatch.setattr(gcal, "list_events", lambda *a, **k: paper_fake.events(NOW.date(), gcal.TZ) + [
+        {"id": "p1", "title": "Disability review appointment", "start": NOW.replace(hour=12).isoformat(), "end": NOW.replace(hour=13).isoformat(),
+         "all_day": False, "location": ""},
+        {"id": "p2", "title": "Lunch", "start": NOW.replace(hour=12, minute=30).isoformat(), "end": NOW.replace(hour=13).isoformat(),
+         "all_day": False, "location": "Pharmacy on 5th"},
+        {"id": "p3", "title": "Therapy", "start": tomorrow.isoformat(), "end": tomorrow.isoformat(), "all_day": False, "location": ""}])
+    d = _build(fakes)["data"]
+    for mode in ("web", "print"):
+        page = paper_render.render(d, mode).lower()
+        assert "disability" not in page and "therapy" not in page and "pharmacy" not in page and "private" not in page
+    assert d["front"]["agenda"] and d["front"]["headline"]                          # the rest of the day is still there
+
 def test_two_page_setting_makes_a1_plus_one_packed_page(fakes):
     paper.save_settings({"pages": 2})
     d = _build(fakes)["data"]

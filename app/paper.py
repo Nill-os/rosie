@@ -960,15 +960,16 @@ def front(s, today: dt.date, deliv: dict, weather_fn=None) -> dict:
         evs, out["calendar_note"] = [], str(e)
     except Exception as e:
         evs, out["calendar_note"] = [], f"The calendar couldn't be read ({type(e).__name__})."
+    evs = [e for e in evs if not paper_privacy.private(e["title"], e.get("location", ""))]   # a health, money or legal event is left out whole
     t = today.isoformat()
     todays = [e for e in evs if e["start"][:10] == t]
     for e in todays:
         if e["all_day"]:
-            out["agenda"].append({"time": "All day", "what": e["title"], "note": "" if paper_privacy.private(e["title"], e.get("location", "")) else e.get("location", ""),
+            out["agenda"].append({"time": "All day", "what": e["title"], "note": e.get("location", ""),
                                   "tag": tag_event(e) or "ALL DAY", "sort": "00"})
         else:
             out["agenda"].append({"time": _clock(e["start"]), "what": clean_title(e["title"], e["start"]),
-                                  "note": "" if paper_privacy.private(e["title"], e.get("location", "")) else e.get("location", "")[:80],   # the title only
+                                  "note": e.get("location", "")[:80],
                                   "tag": tag_event(e), "sort": e["start"][11:16]}
                                  | ({"_fake": True} if e.get("_fake") else {}))
     for d in deliv.get("today", []):

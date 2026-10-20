@@ -168,3 +168,9 @@ def test_launcher_falls_back_when_the_active_slot_is_unusable(tmp_path):
     launcher.chmod(0o755)
     out = subprocess.run([str(launcher)], capture_output=True, text=True, env={"PATH": "/usr/bin:/bin", "ROSIE_SLOT_A": str(tmp_path / "A"), "ROSIE_SLOT_B": str(tmp_path / "missing"), "HOME": str(tmp_path)})
     assert f"STARTED-FROM {a} SLOT=A" in out.stdout and "unusable" in (ops / "events.log").read_text()
+
+
+def test_the_update_check_uses_the_model_rosie_chats_with(world):
+    assert slots.chat_model() == "qwen3.5:9b"                                # no settings yet: the default model
+    (world["a"] / "data" / "config.json").write_text(json.dumps({"chat_model": "huihui_ai/qwen3.5-abliterated:9b"}))
+    assert slots.chat_model() == "huihui_ai/qwen3.5-abliterated:9b"           # Settings > AI model, so no second model is loaded
