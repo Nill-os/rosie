@@ -1,0 +1,8 @@
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut android:shortcutId="talk" android:enabled="true" android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/shortcut_talk" android:shortcutLongLabel="@string/shortcut_talk_long">
+        <intent android:action="android.intent.action.VIEW" android:targetPackage="app.rosie.assistant" android:targetClass="app.rosie.assistant.MainActivity">
+            <extra android:name="talk" android:value="true" />
+        </intent>
+    </shortcut>
+</shortcuts>

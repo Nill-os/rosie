@@ -1,0 +1,16 @@
+# What the automatic checks install: enough to import the app and run tests/ (no speech models, no GPU)
+pytest
+httpx
+fastapi
+uvicorn
+python-multipart
+pydantic
+requests
+tzlocal
+numpy
+google-api-python-client
+google-auth-oauthlib
+google-auth-httplib2
+mcp
+pyyaml
+pillow

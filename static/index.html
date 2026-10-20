@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#000000"><link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/icon.svg"><title>Rosie</title>
+<link rel="stylesheet" href="/app.css">
+</head><body>
+<div id="app">
+ <aside id="side" aria-label="Navigation">
+  <div class="brand"><b>ROSIE</b><i id="dot" title="Online"></i></div>
+  <button class="btn newbtn block" id="newchat">＋ New chat</button>
+  <nav id="nav"></nav>
+  <div class="scroll" id="chats"></div>
+  <div class="foot" id="foot">LOCAL · PRIVATE</div>
+ </aside>
+ <div id="scrim"></div>
+ <main id="main">
+  <header id="top"><button class="btn sm" id="menu" aria-label="Menu">☰</button><div id="ttl">Home</div><div id="actions"></div></header>
+  <section id="view"></section>
+  <section id="chatview">
+   <div id="log"></div>
+   <button id="talk" type="button">🗣 Talk</button>
+   <div id="btns"></div>
+   <div id="slash"></div>
+   <form id="bar" autocomplete="off">
+    <textarea id="t" rows="1" placeholder="Type or talk… (/ for commands)" title="Enter sends · Shift+Enter adds a new line" autocomplete="off" enterkeyhint="send" aria-label="Message"></textarea>
+    <button type="button" id="mic" aria-label="Voice">🎤</button><button type="submit" aria-label="Send">➤</button>
+   </form>
+  </section>
+ </main>
+</div>
+<div id="toast"></div>
+<script src="/app.js"></script>
+<script src="/paper.js"></script>
+<script src="/corner.js"></script>
+</body></html>

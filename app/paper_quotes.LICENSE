@@ -1,0 +1,9 @@
+paper_quotes.tsv: quotations and their citations from English Wikiquote (https://en.wikiquote.org).
+
+Each line names the Wikiquote page it came from (the last column). The text is by the contributors of those pages and is licensed
+under the Creative Commons Attribution-ShareAlike licence, CC BY-SA 4.0 (https://creativecommons.org/licenses/by-sa/4.0/);
+revisions before June 2023 were published under CC BY-SA 3.0 (https://creativecommons.org/licenses/by-sa/3.0/).
+
+Changes made: wiki markup, links and footnote tags removed; only quotes from each page's sourced sections, with their own citation
+line, were kept (tools/build_paper_quotes.py). The short role after each name ("physicist", "mathematician") was written for the
+paper and is not from Wikiquote. paper_quotes.tsv is shared under the same licence (CC BY-SA 4.0).
