@@ -85,4 +85,4 @@ The page tests need jsdom. Run `npm install --no-save jsdom` in `~/assistant` fi
 
 ## License
 
-No license has been chosen yet. Third-party word lists and fonts keep their own licenses, which sit next to the files.
+Rosie is under the MIT License (see `LICENSE`). Third-party word lists and fonts keep their own licenses, which sit next to the files.
