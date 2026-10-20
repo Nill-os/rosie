@@ -15,6 +15,7 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 import pytest
@@ -28,6 +29,8 @@ for _k, _v in {"ROSIE_OPS_DIR": "rosie-ops", "ROSIE_CHATS_DB": "chats.db", "ROSI
                "ASSISTANT_SEARCH_DB": "search.db", "ASSISTANT_VAULT": "vault"}.items():
     os.environ[_k] = str(_SANDBOX / _v)                      # always a stand-in, even if the shell had a real one set
 os.environ["ROSIE_PORT"] = "1"                               # never the live port (8765) or the staging port
+os.environ["TZ"] = "America/Los_Angeles"                    # the test data's clock times are Pacific: same results in any zone
+time.tzset()
 os.environ["ROSIE_STAGE_PORT"] = "2"
 
 sys.path.insert(0, str(ROOT / "app"))

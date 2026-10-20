@@ -12,6 +12,7 @@ import hmac
 import html
 import json
 import re
+import shutil
 from pathlib import Path
 
 import httpx
@@ -903,8 +904,8 @@ def test_every_column_is_filled_on_a_busy_and_a_quiet_day_in_real_chrome(monkeyp
     """The real thing: headless Chrome (its own temp profile, local files only) lays out the page and prints it. Every column of every page
     must end at least 97% of the way down (stories run on with jumps, then briefs; the last few lines get a little more leading), the
     text itself must reach at least 90%, or leave no more than 4 lines (no big gap papered over: spacing is added only to a gap of 10%, or 4 lines in a short column), and the PDF is exactly 4 (or 2) Letter pages."""
-    if not paper.chrome_path():
-        pytest.skip("Chrome isn't installed")
+    if not paper.chrome_path() or not shutil.which("pdftoppm"):
+        pytest.skip("Chrome or pdftoppm (poppler-utils) isn't installed")
     kw = (paper_fake.install_busy if kind == "busy" else paper_fake.install_quiet)(monkeypatch.setattr, NOW)
     paper.save_settings({"pages": pages})
     p = paper.build(NOW.date(), now=NOW, model=paper_fake.FakeModel(), make_pdf=True, **kw)
@@ -942,8 +943,8 @@ def test_every_column_is_filled_on_a_busy_and_a_quiet_day_in_real_chrome(monkeyp
 def test_a_long_answer_block_wraps_inside_the_printable_area_in_real_chrome(monkeypatch):
     """The 10-14 print: the upside-down answers ran off the right edge. A 90-letter headline's cipher answer and the Sudoku's rows must
     wrap inside the text width, at 7 pt or more, at least 0.55 in above the paper's edge, with nothing touching the footer rule."""
-    if not paper.chrome_path():
-        pytest.skip("Chrome isn't installed")
+    if not paper.chrome_path() or not shutil.which("pdftoppm"):
+        pytest.skip("Chrome or pdftoppm (poppler-utils) isn't installed")
     import paper_cipher
     kw = paper_fake.install(monkeypatch.setattr, NOW)
     p = paper.build(NOW.date(), now=NOW, model=paper_fake.FakeModel(), make_pdf=False, **kw)
