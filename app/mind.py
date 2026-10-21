@@ -37,6 +37,8 @@ RRF_K = 60
 SEMANTIC_MIN = 0.3
 LINK_MIN = 0.7                      # two facts this similar are linked (feeds the graph search)
 DEDUP_MIN = 0.97                    # a new observation this close to an old one is the same belief
+OBS_MAX_CHARS = 400                 # a belief longer than this has swallowed other facets (the 9B model grows one catch-all)
+FACT_SAME_MIN = 0.98                # a new fact this close to a live one, with the same numbers, is the same fact said again
 CONSOLIDATE_BATCH = 6
 MAX_PREDICT = 2048
 ROUND_S = 30
@@ -273,6 +275,23 @@ def _owner() -> str:
     return (config.load().get("owner_name") or "the owner").strip()[:40] or "the owner"
 
 
+MASCULINE = re.compile(r"\b(he|his|him|himself)\b", re.I)
+
+
+def neutral(text: str, owner: str | None = None, about_owner: bool = False) -> str:
+    """The model guesses the owner's gender despite the rule: in a memory about the owner (it starts with their name), "he/his/him"
+    become their name and "their/them". about_owner = the whole text is about the owner (the standing summary)."""
+    owner = owner or _owner()
+    if not text or not (about_owner or re.match(re.escape(owner) + r"\b", text.strip(), re.I)):
+        return text
+
+    def sub(m):
+        w = m.group(0)
+        rep = {"he": owner, "his": "their", "him": "them", "himself": "themself"}[w.lower()]
+        return rep[0].upper() + rep[1:] if w[0].isupper() else rep
+    return MASCULINE.sub(sub, text)
+
+
 MAIL_SECTION = re.compile(r"^\*\*(?:E-?mail|Mail|Inbox)\*\*", re.I)
 
 
@@ -360,7 +379,7 @@ def extract(doc: dict, background: bool = True) -> list[dict]:
         for f in got.get("facts") or []:
             if not isinstance(f, dict):
                 continue
-            text = _fact_text(f)
+            text = neutral(_fact_text(f), owner)
             if len(re.sub(r"\W", "", text)) < 8:
                 continue
             ents = [" ".join(str(e).split())[:80] for e in (f.get("entities") or []) if isinstance(e, (str, int)) and str(e).strip()]
@@ -406,7 +425,14 @@ def add_units(facts: list[dict], source: str, mentioned_at: str, doc_id: int | N
     ids = []
     with _lock, _db() as c:
         old_ids, old_mat = _matrix(c, kinds=("world", "experience"))
+        seen_ids, seen_mat = old_ids, old_mat
         for f, v in zip(facts, vecs):
+            same = _same_fact(c, seen_ids, seen_mat, f["kind"], f["text"], v)
+            if same:                                          # said again: one fact, mentioned most recently now
+                c.execute("UPDATE units SET mentioned_at=MAX(mentioned_at, ?) WHERE id=?", (mentioned_at, same))
+                if same not in ids:
+                    ids.append(same)
+                continue
             uid = c.execute("INSERT INTO units(kind, text, context, source, doc_id, occurred_start, occurred_end, mentioned_at, created_at, emb) "
                             "VALUES(?,?,?,?,?,?,?,?,?,?)", (f["kind"], f["text"], context[:300], source, doc_id, f.get("start"), f.get("end"),
                                                              mentioned_at, _iso(), v.astype(np.float32).tobytes())).lastrowid
@@ -420,6 +446,8 @@ def add_units(facts: list[dict], source: str, mentioned_at: str, doc_id: int | N
                         c.execute("INSERT OR IGNORE INTO links(src, dst, type, weight) VALUES(?,?,?,?)", (uid, int(old_ids[j]), "semantic", float(sims[j])))
                         c.execute("INSERT OR IGNORE INTO links(src, dst, type, weight) VALUES(?,?,?,?)", (int(old_ids[j]), uid, "semantic", float(sims[j])))
             ids.append(uid)
+            seen_ids = np.append(seen_ids, uid)
+            seen_mat = v[None, :].astype(np.float32) if seen_mat is None else np.vstack([seen_mat, v])
         day = mentioned_at[:10]
         for a in ids:                                         # same-conversation facts are linked in time
             for b in ids:
@@ -431,6 +459,24 @@ def add_units(facts: list[dict], source: str, mentioned_at: str, doc_id: int | N
                 c.execute("INSERT OR IGNORE INTO links(src, dst, type, weight) VALUES(?,?,?,?)", (a, r["id"], "temporal", 0.5))
     _bump()
     return ids
+
+
+def _digits(text: str) -> list[str]:
+    return sorted(re.findall(r"\d+", text or ""))
+
+
+def _same_fact(c, ids_, mat, kind: str, text: str, v) -> int | None:
+    """The live fact this one only repeats (same kind, same numbers, nearly the same words), or None."""
+    if mat is None or not len(ids_):
+        return None
+    sims = mat @ v
+    for j in np.argsort(-sims)[:3]:
+        if sims[j] < FACT_SAME_MIN:
+            break
+        r = c.execute("SELECT kind, text FROM units WHERE id=? AND invalidated_at IS NULL", (int(ids_[j]),)).fetchone()
+        if r and r["kind"] == kind and _digits(r["text"]) == _digits(text):
+            return int(ids_[j])
+    return None
 
 
 def remember_now(text: str, source: str = "remember", kind: str = "world") -> int:
@@ -603,11 +649,13 @@ CONSOLIDATE_SYSTEM = """You keep Rosie's beliefs ("observations") up to date. Ea
 a project, a decision, a count, a relationship) from the facts behind it.
 Rules:
 1. Prefer UPDATE over CREATE: when an existing observation covers the same facet as a new fact, update it. Create only for a new facet.
-2. One observation per facet. Never merge different facets.
+2. One observation per facet. Never merge different facets. Keep each observation to one or two sentences (under 60 words);
+   when a fact is about a different facet, create a new observation instead of adding it to one that is already about something else.
 3. Match by the named thing or facet, not the general topic.
 4. A change of state updates the observation to the current state with dates: "Sam used Linux Mint until October 2026, now uses Ubuntu".
 5. Recency is mentioned_at: an older statement is older news (keep the newer value, add the older one as the earlier state).
 6. Never compute or derive numbers; only restate what the facts say.
+   Never guess anyone's gender: write the person's name or "they/their", never "he/his" or "she/her" unless the facts say it.
 7. Delete only an observation that restates another one exactly (give merged_into) or that says nothing.
 8. An update replaces the whole text: copy current_text and change only what the fact changes.
 9. Skip chatter that isn't worth a belief.
@@ -676,8 +724,8 @@ def _apply(got: dict, fact_ids: set, obs: dict):
         for u in got.get("updates") or []:
             oid = u.get("observation_id")
             s = srcs(u.get("source_fact_ids"))
-            text = " ".join(str(u.get("text") or "").split())[:1000]
-            if oid not in obs or oid in done_updates or not s or len(text) < 8:
+            text = neutral(" ".join(str(u.get("text") or "").split())[:1000])
+            if oid not in obs or oid in done_updates or not s or not 8 <= len(text) <= OBS_MAX_CHARS:
                 continue
             done_updates.add(oid)
             old = obs[oid]
@@ -701,8 +749,8 @@ def _apply(got: dict, fact_ids: set, obs: dict):
         ids, mat = _matrix(c, kinds=("observation",))
         for cr in got.get("creates") or []:
             s = srcs(cr.get("source_fact_ids"))
-            text = " ".join(str(cr.get("text") or "").split())[:1000]
-            if not s or len(text) < 8:
+            text = neutral(" ".join(str(cr.get("text") or "").split())[:1000])
+            if not s or not 8 <= len(text) <= OBS_MAX_CHARS:
                 continue
             v = embed([text])[0]
             if mat is not None and len(ids):
@@ -727,7 +775,7 @@ REFLECT_SYSTEM = """You answer a question from Rosie's own memories ONLY: observ
 Never use outside knowledge and never make up names, events or numbers. Reason from what is there: combine facts, notice patterns,
 and say how sure you are. When facts conflict on the same thing, the one with the later mentioned_at wins, unless the earlier one is
 a decision with a reason and the later one gives none. If the memories don't answer it, set found to false and say you don't remember.
-Cite the ids you used in "used". Write the answer in plain words, without ids."""
+Cite the ids you used in "used". Write the answer in plain words, without ids. Never guess anyone's gender: use names or "they/their"."""
 REFLECT_SCHEMA = {"type": "object", "properties": {"answer": {"type": "string"}, "used": {"type": "array", "items": {"type": "integer"}},
                                                    "found": {"type": "boolean"}}, "required": ["answer", "used", "found"]}
 
@@ -779,7 +827,8 @@ def refresh_models(background: bool = True, force: bool = False) -> bool:
             state["doing"] = ""
         if got.get("found"):
             with _db() as c:
-                c.execute("UPDATE models SET content=?, refreshed_at=?, seen_upto=? WHERE name=?", (got["answer"][:1500], _iso(), top, m["name"]))
+                content = neutral(got["answer"], about_owner=m["name"] == "owner")[:1500]
+                c.execute("UPDATE models SET content=?, refreshed_at=?, seen_upto=? WHERE name=?", (content, _iso(), top, m["name"]))
         else:
             with _db() as c:
                 c.execute("UPDATE models SET refreshed_at=?, seen_upto=? WHERE name=?", (_iso(), top, m["name"]))
@@ -794,7 +843,8 @@ def about_owner(limit: int = 900) -> str:
             r = c.execute("SELECT content, refreshed_at FROM models WHERE name='owner'").fetchone()
         if not r or not r["content"].strip():
             return ""
-        return f"WHAT YOU HAVE LEARNED ABOUT THEM (your memory, {r['refreshed_at'][:10]}; may be out of date):\n{r['content'].strip()[:limit]}\n"
+        content = neutral(r["content"].strip(), about_owner=True)[:limit]
+        return f"WHAT YOU HAVE LEARNED ABOUT THEM (your memory, {r['refreshed_at'][:10]}; may be out of date):\n{content}\n"
     except Exception:
         return ""
 
@@ -840,6 +890,9 @@ def start():
     backfill()
     repair_outside()
     repair_briefs()
+    repair_pronouns()
+    repair_duplicates()
+    repair_sprawl()
     threading.Thread(target=_work_loop, daemon=True, name="mind").start()
 
 
@@ -952,6 +1005,87 @@ def repair_briefs() -> int:
     return redone
 
 
+def repair_pronouns() -> int:
+    """Once: memories written before neutral() existed call the owner "he/his". Returns how many were rewritten."""
+    owner = _owner()
+    n = 0
+    with _lock, _db() as c:
+        if c.execute("SELECT 1 FROM meta WHERE k='repair_pronouns_v1'").fetchone():
+            return 0
+        for r in c.execute("SELECT id, text FROM units WHERE invalidated_at IS NULL").fetchall():
+            t = neutral(r["text"], owner)
+            if t != r["text"]:
+                c.execute("UPDATE units SET text=? WHERE id=?", (t, r["id"]))
+                c.execute("UPDATE units_fts SET text=? WHERE rowid=?", (t, r["id"]))
+                n += 1
+        for m in c.execute("SELECT name, content FROM models").fetchall():
+            t = neutral(m["content"] or "", owner, about_owner=m["name"] == "owner")
+            if t != (m["content"] or ""):
+                c.execute("UPDATE models SET content=? WHERE name=?", (t, m["name"]))
+        c.execute("INSERT OR REPLACE INTO meta(k, v) VALUES('repair_pronouns_v1', ?)", (_iso(),))
+    _bump()
+    return n
+
+
+def _merge_fact(c, dup: int, keep: int):
+    """dup only repeats keep: dup is retired, keep takes its latest mention, its names, and its place behind beliefs."""
+    d = c.execute("SELECT mentioned_at FROM units WHERE id=?", (dup,)).fetchone()
+    c.execute("UPDATE units SET invalidated_at=?, invalid_reason=? WHERE id=?", (_iso(), f"the same as fact {keep}", dup))
+    c.execute("UPDATE units SET mentioned_at=MAX(mentioned_at, ?) WHERE id=?", (d["mentioned_at"], keep))
+    c.execute("INSERT OR IGNORE INTO unit_entities(unit_id, entity_id) SELECT ?, entity_id FROM unit_entities WHERE unit_id=?", (keep, dup))
+    for o in c.execute("SELECT id, source_ids FROM units WHERE kind='observation' AND invalidated_at IS NULL").fetchall():
+        src = json.loads(o["source_ids"] or "[]")
+        if dup in src:
+            src = sorted({keep if s == dup else s for s in src})
+            c.execute("UPDATE units SET source_ids=?, proof_count=? WHERE id=?", (json.dumps(src), len(src), o["id"]))
+
+
+def repair_duplicates() -> int:
+    """Once: the first back-fill read the same brief lines on many days, so one fact was stored many times (inflating the proof
+    behind beliefs). Repeats are merged into the oldest copy. Returns how many were merged."""
+    merged = 0
+    with _lock, _db() as c:
+        if c.execute("SELECT 1 FROM meta WHERE k='repair_duplicates_v1'").fetchone():
+            return 0
+        ids_, mat = _matrix(c, kinds=("world", "experience"))
+        if mat is not None and len(ids_):
+            rows = {r["id"]: r for r in c.execute("SELECT id, kind, text FROM units WHERE kind != 'observation' AND invalidated_at IS NULL")}
+            gone = set()
+            for a in np.argsort(ids_):
+                ia = int(ids_[a])
+                if ia in gone or ia not in rows:
+                    continue
+                for b in np.nonzero(mat @ mat[a] >= FACT_SAME_MIN)[0]:
+                    ib = int(ids_[b])
+                    if ib > ia and ib not in gone and ib in rows and rows[ib]["kind"] == rows[ia]["kind"] \
+                            and _digits(rows[ib]["text"]) == _digits(rows[ia]["text"]):
+                        _merge_fact(c, ib, ia)
+                        gone.add(ib)
+            merged = len(gone)
+        c.execute("INSERT OR REPLACE INTO meta(k, v) VALUES('repair_duplicates_v1', ?)", (_iso(),))
+    _bump()
+    return merged
+
+
+def repair_sprawl() -> int:
+    """Once: before OBS_MAX_CHARS, the model grew a few beliefs into run-on summaries of everything. They are retired and their
+    facts thought over again under the one-facet rule. Returns how many were retired."""
+    with _lock, _db() as c:
+        if c.execute("SELECT 1 FROM meta WHERE k='repair_sprawl_v1'").fetchone():
+            return 0
+        rows = c.execute("SELECT id, source_ids FROM units WHERE kind='observation' AND invalidated_at IS NULL AND length(text) > ?",
+                         (OBS_MAX_CHARS,)).fetchall()
+        for o in rows:
+            c.execute("UPDATE units SET invalidated_at=?, invalid_reason='it ran over many facets' WHERE id=?", (_iso(), o["id"]))
+            src = json.loads(o["source_ids"] or "[]")
+            if src:
+                c.execute("UPDATE units SET consolidated_at=NULL, failed_at=NULL WHERE invalidated_at IS NULL AND id IN (%s)"
+                          % ",".join("?" * len(src)), src)
+        c.execute("INSERT OR REPLACE INTO meta(k, v) VALUES('repair_sprawl_v1', ?)", (_iso(),))
+    _bump()
+    return len(rows)
+
+
 def status() -> dict:
     with _db() as c:
         k = {r["kind"]: r["n"] for r in c.execute("SELECT kind, COUNT(*) n FROM units WHERE invalidated_at IS NULL GROUP BY kind")}
@@ -986,10 +1120,10 @@ def forget(unit_id: int, reason: str = "the owner asked") -> dict:
 def forget_chat(chat_id) -> int:
     """The owner deleted a chat: what she hadn't read yet is dropped, and what she learned from it is retired. Returns facts retired."""
     with _db() as c:
-        refs = (f"chat:{chat_id}:%", f"backfill:chat:{chat_id}:%")
-        docs = [r["id"] for r in c.execute("SELECT id FROM docs WHERE ref LIKE ? OR ref LIKE ?", refs)]
+        refs = (f"chat:{chat_id}:%", f"backfill:chat:{chat_id}:%", f"backfill2:chat:{chat_id}:%")
+        docs = [r["id"] for r in c.execute("SELECT id FROM docs WHERE ref LIKE ? OR ref LIKE ? OR ref LIKE ?", refs)]
         units = [r["id"] for r in c.execute("SELECT id FROM units WHERE invalidated_at IS NULL AND doc_id IN (%s)" % ",".join("?" * len(docs)), docs)] if docs else []
-        c.execute("DELETE FROM docs WHERE done_at IS NULL AND (ref LIKE ? OR ref LIKE ?)", refs)
+        c.execute("DELETE FROM docs WHERE done_at IS NULL AND (ref LIKE ? OR ref LIKE ? OR ref LIKE ?)", refs)
     for u in units:
         forget(u, "its chat was deleted")
     return len(units)

@@ -363,3 +363,73 @@ def test_the_daily_briefs_mail_section_is_never_memorized(fake):
         gone = c.execute("SELECT invalidated_at FROM units WHERE id=?", (u,)).fetchone()["invalidated_at"]
     assert gone and len(texts) == 1 and "Google" not in texts[0] and "Install insulation" in texts[0]
     assert "Bank" not in (mind.queue(brief, "chat", "x") and mind._db().execute("SELECT text FROM docs WHERE ref='x'").fetchone()["text"])
+
+
+def test_the_owner_is_never_he_even_when_the_model_writes_it(fake):
+    assert mind.neutral("Sam packs his gym bag, and he takes it with him.") == "Sam packs their gym bag, and Sam takes it with them."
+    assert mind.neutral("Kai fixed his bike.") == "Kai fixed his bike."                   # not about the owner: left alone
+    assert mind.neutral("Owner: Sam\nHow he likes help: His way.", about_owner=True) == "Owner: Sam\nHow Sam likes help: Their way."
+    mind.queue_turn(9, "pack my gym bag on Sundays at 8:30 in the evening", "Okay.")
+    fake.answers = [{"facts": [_fact("Sam packs his gym bag every Sunday at 8:30 PM.", ents=["Sam"])]}]
+    mind.retain_next(background=False)
+    assert mind.recall("gym bag", today=TODAY)[0]["text"] == "Sam packs their gym bag every Sunday at 8:30 PM."
+    with mind._db() as c:                                                                # as an old memory was written
+        c.execute("UPDATE units SET text='Sam said he likes his tea black.'")
+        c.execute("UPDATE models SET content='How he likes to be helped: quickly.' WHERE name='owner'")
+    assert mind.repair_pronouns() == 1 and mind.repair_pronouns() == 0
+    with mind._db() as c:
+        assert c.execute("SELECT text FROM units").fetchone()["text"] == "Sam said Sam likes their tea black."
+        assert c.execute("SELECT text FROM units_fts").fetchone()["text"] == "Sam said Sam likes their tea black."
+        assert c.execute("SELECT content FROM models WHERE name='owner'").fetchone()["content"] == "How Sam likes to be helped: quickly."
+
+
+def test_a_fact_said_again_is_kept_once_but_a_changed_number_is_new(fake):
+    for day, n in ((5, 22), (6, 22), (7, 31)):
+        doc = mind.queue(f"Rosie: here is your brief for day {day}, Sam.", "chat", f"chat:1:{day}", "a brief", mentioned_at=f"2026-10-0{day}T08:00:00-07:00")
+        fake.answers = [{"facts": [_fact(f"Sam has {n} overdue tasks on the list.", ents=["Sam"])]}]
+        mind.retain_next(background=False)
+        assert doc
+    with mind._db() as c:
+        rows = [dict(r) for r in c.execute("SELECT text, mentioned_at FROM units WHERE invalidated_at IS NULL ORDER BY id")]
+    assert [r["text"] for r in rows] == ["Sam has 22 overdue tasks on the list.", "Sam has 31 overdue tasks on the list."]
+    assert rows[0]["mentioned_at"].startswith("2026-10-06")                               # said again: the newer mention counts
+
+
+def test_old_repeats_are_merged_into_one_fact_behind_beliefs(fake, monkeypatch):
+    monkeypatch.setattr(mind, "FACT_SAME_MIN", 1.01)                                      # stored the old way, before repeats were caught
+    ids = mind.add_units([{"text": "Sam walks the dogs at noon.", "kind": "world", "entities": ["Sam"], "start": None, "end": None}] * 3
+                         + [{"text": "Sam walks the dogs at 5 PM.", "kind": "world", "entities": ["Sam"], "start": None, "end": None}],
+                         "chat", "2026-10-06T08:00:00-07:00")
+    with mind._db() as c:
+        c.execute("INSERT INTO units(kind, text, source, mentioned_at, created_at, proof_count, source_ids) VALUES('observation', "
+                  "'Sam walks the dogs daily.', 'consolidation', ?, ?, 3, ?)", (mind._iso(), mind._iso(), json.dumps(ids[:3])))
+    monkeypatch.setattr(mind, "FACT_SAME_MIN", 0.98)
+    assert mind.repair_duplicates() == 2 and mind.repair_duplicates() == 0
+    with mind._db() as c:
+        live = [r["id"] for r in c.execute("SELECT id FROM units WHERE kind!='observation' AND invalidated_at IS NULL ORDER BY id")]
+        ob = c.execute("SELECT proof_count, source_ids FROM units WHERE kind='observation'").fetchone()
+    assert live == [ids[0], ids[3]] and ob["proof_count"] == 1 and json.loads(ob["source_ids"]) == [ids[0]]
+
+
+def test_deleting_a_chat_also_forgets_its_reread_mail_days(fake):
+    cid = chats.new_chat()
+    mind.queue("Sam: my storage unit is number 12", "chat", f"backfill2:chat:{cid}:2026-10-04", "an earlier chat with Rosie")
+    fake.answers = [{"facts": [_fact("Sam's storage unit is number 12.", ents=["Sam"])]}]
+    mind.retain_next(background=False)
+    assert mind.forget_chat(cid) == 1 and mind.status()["facts"] == 0
+
+
+def test_a_belief_stays_one_short_facet(fake):
+    ids = mind.add_units([{"text": "Sam walks the dogs at noon.", "kind": "world", "entities": ["Sam"], "start": None, "end": None}],
+                         "chat", "2026-10-06T08:00:00-07:00")
+    long = "Sam walks the dogs at noon. " + "Sam also has many other unrelated tasks and plans this week. " * 10
+    fake.answers = [{"creates": [{"text": long, "source_fact_ids": ids}], "updates": [], "deletes": []}]
+    mind.consolidate_next(background=False)
+    assert mind.status()["observations"] == 0                                            # a run-on belief is refused
+    with mind._db() as c:                                                                # as an old run-on belief was stored
+        c.execute("INSERT INTO units(kind, text, source, mentioned_at, created_at, proof_count, source_ids) VALUES('observation', ?, "
+                  "'consolidation', ?, ?, 1, ?)", (long, mind._iso(), mind._iso(), json.dumps(ids)))
+    assert mind.repair_sprawl() == 1 and mind.repair_sprawl() == 0
+    with mind._db() as c:
+        assert c.execute("SELECT consolidated_at FROM units WHERE id=?", (ids[0],)).fetchone()["consolidated_at"] is None
+    assert mind.status()["observations"] == 0
