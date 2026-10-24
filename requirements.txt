@@ -27,3 +27,4 @@ pillow>=10.2
 grpcio>=1.84.0
 protobuf>=7.35.1
 fsrs>=6.3.2
+psutil>=5.9; sys_platform == "win32"

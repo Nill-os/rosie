@@ -99,14 +99,21 @@ function setHeader(title, actions) { $('#ttl').textContent = title; $('#actions'
 function show(...nodes) { $('#view').replaceChildren(h('div', { class: 'page' }, ...nodes)); $('#view').scrollTop = 0; }
 // In the order of a day (owner 2026-10-20: "reorder rosies side tab to make more sense for daily use"): what needs you and today's plan
 // first, then the work you come back to, then Rosie's own pages. ['-', label] starts a group.
-const NAV = [['-', 'Today'], ['home', '⌂', 'Home'], ['inbox', '🔔', 'Inbox'], ['brief', '☀', 'Daily Brief'], ['calendar', '▦', 'Calendar'], ['tasks', '✓', 'Tasks'], ['lifequest', '★', 'Life Quest'], ['study', '📚', 'Study'],
-  ['mail', '📧', 'Mail'], ['paper', '📰', 'Morning Paper'],
-  ['-', 'Work'], ['projects', '🧭', 'Projects'], ['meetings', '🎙', 'Meetings'], ['notes', '✎', 'Notes'], ['servers', '🖧', 'Servers'], ['terminal', '⌨', 'Terminal'],
-  ['-', 'Rosie'], ['memory', '◈', 'Memory'], ['skills', '✦', 'Skills'], ['corner', '❀', "Rosie's corner"], ['graph', '⌬', 'Memory graph'], ['agentzero', '🧠', 'Agent Zero'], ['deck', '◫', 'Agent Deck'], ['vector', '🤖', 'Vector'], ['settings', '⚙', 'Settings']];
+// The menu (owner 2026-10-24: "reorganize the tabs and rosie so everything is much more user friendly"): groups by what she is doing,
+// Settings on its own at the end. A group folds away when its name is tapped (each device remembers; Advanced starts folded).
+const NAV = [['-', 'My day'], ['home', '⌂', 'Home'], ['inbox', '🔔', 'Inbox'], ['calendar', '▦', 'Calendar'], ['tasks', '✓', 'Tasks'], ['mail', '📧', 'Mail'],
+  ['-', 'Learn and grow'], ['study', '📚', 'Study'], ['lifequest', '★', 'Life Quest'], ['brief', '☀', 'Daily Brief'], ['paper', '📰', 'Morning Paper'],
+  ['-', 'Work'], ['projects', '🧭', 'Projects'], ['meetings', '🎙', 'Meetings'], ['notes', '✎', 'Notes'],
+  ['-', 'Rosie and helpers'], ['agentzero', '🧠', 'Agent Zero'], ['deck', '◫', 'Agent Deck'], ['corner', '❀', "Rosie's corner"], ['memory', '◈', 'Memory'],
+  ['skills', '✦', 'Skills'], ['vector', '🤖', 'Vector'],
+  ['-', 'Advanced'], ['graph', '⌬', 'Memory graph'], ['servers', '🖧', 'Servers'], ['terminal', '⌨', 'Terminal'],
+  ['-', ''], ['settings', '⚙', 'Settings']];
 // Display (owner 2026-10-21: "add a setting for ui scale"; 2026-10-23: the Agent Deck's display settings "to the main settings and make it
 // control the whole ui"): zoom, text size, spacing and background light for every page, the Agent Deck frame included (it reads the same
 // rosie.look). This device only, so the phone and the PC each keep their own.
 const GLOW = { off: 0, low: 0.45, medium: 1, high: 1.6 };
+const THEMES = [['cyberdeck', 'Cyberdeck'], ['jetsons', 'Jetsons (easy to read)']];
+let installTheme = store.get('rosie.theme.default', 'cyberdeck');   // this Rosie's default (Settings > Display > Use on every device)
 function look() {
   const v = store.get('rosie.look', null);
   if (v && typeof v === 'object') return { zoom: 1, text: 100, density: 'normal', glow: 'medium', ...v };
@@ -119,10 +126,14 @@ function applyLook(v, save) {
   v.text = Math.min(150, Math.max(70, Math.round(v.text)));
   const r = document.documentElement;
   r.style.zoom = v.zoom === 1 ? '' : String(v.zoom);
-  r.style.setProperty('--ts', String(v.text / 100));
+
   r.style.setProperty('--glow', String(GLOW[v.glow] ?? 1));
   document.body.classList.toggle('look-compact', v.density === 'compact');
   document.body.classList.toggle('look-roomy', v.density === 'big');
+  const theme = THEMES.some(([k]) => k === v.theme) ? v.theme : installTheme;      // no choice on this device: the install's default
+  r.dataset.theme = theme;
+  r.style.setProperty('--ts', String(v.text / 100 * (theme === 'jetsons' ? 1.12 : 1)));   // Jetsons reads bigger, small notes included
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'jetsons' ? '#10203E' : '#000000');
   if (save) store.set('rosie.look', v);
   return v;
 }
@@ -156,17 +167,34 @@ function lookBox(again) {
     h('dt', {}, 'Zoom'), h('dd', {}, step(Math.round(v.zoom * 100) + '%', () => set({ zoom: v.zoom - 0.05 }), () => set({ zoom: v.zoom + 0.05 }), () => set({ zoom: 1 }))),
     h('dt', {}, 'Text size'), h('dd', {}, step(v.text + '%', () => set({ text: v.text - 5 }), () => set({ text: v.text + 5 }), () => set({ text: 100 }))),
     h('dt', {}, 'Spacing'), h('dd', {}, seg('density', [['compact', 'Compact'], ['normal', 'Normal'], ['big', 'Roomy']])),
-    h('dt', {}, 'Background light'), h('dd', {}, seg('glow', [['off', 'Off'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High']]))),
+    h('dt', {}, 'Background light'), h('dd', {}, seg('glow', [['off', 'Off'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High']])),
+    h('dt', {}, 'Theme'), h('dd', {}, h('div', { class: 'seg' }, THEMES.map(([k, label]) => h('button', { class: (v.theme || installTheme) === k ? 'on' : '', onclick: () => set({ theme: k }) }, label))),
+      h('div', { class: 'form', style: 'margin-top:6px;align-items:center' }, btn('Use on every device', 'sm dim', async () => {
+        try { await post('/api/look/theme', { theme: v.theme || installTheme }); installTheme = v.theme || installTheme; store.set('rosie.theme.default', installTheme); toast('Every device that has not picked its own theme now uses this one.'); }
+        catch (e) { toast(e.message, 1); } }), h('span', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1))' }, 'Jetsons: larger, plainer text with stronger colors.')))),
     h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1));margin-top:4px' }, 'For every page, the Agent Deck too. Each device keeps its own (your phone and this PC can differ). Shortcuts: Ctrl and + or − zoom, Ctrl and 0 resets.'));
 }
 // pages this PC can't run and pages the owner left out (Settings > Menu) stay out of the menu; a section head with nothing under it goes too
-function navShown() {
+let navFolded = store.get('nav.folded', ['Advanced']);
+const navRail = () => matchMedia('(min-width:600px) and (max-width:899px)').matches && !document.body.classList.contains('side-open');   // icons only: nothing folds
+function navShown(active) {
   const out = new Set([...pagesOff, ...pagesHidden]);
   const items = NAV.filter(([k]) => k === '-' || !out.has(k));
-  return items.filter(([k], i) => k !== '-' || (items[i + 1] && items[i + 1][0] !== '-'));
+  const kept = items.filter(([k], i) => k !== '-' || (items[i + 1] && items[i + 1][0] !== '-'));
+  if (navRail()) return kept;
+  let head = '';
+  return kept.filter(([k, label]) => { if (k === '-') { head = label; return true; } return !navFolded.includes(head) || k === active; });
+}
+function navFold(label) {
+  navFolded = navFolded.includes(label) ? navFolded.filter((x) => x !== label) : [...navFolded, label];
+  store.set('nav.folded', navFolded);
+  renderNav((location.hash.replace(/^#\/?/, '') || 'home').split('/')[0].replace('chat', ''));
 }
 function renderNav(active) {
-  $('#nav').replaceChildren(...navShown().map(([k, ic, label]) => k === '-' ? h('div', { class: 'navhead', role: 'presentation' }, ic) : h('button', { class: 'nav' + (k === active ? ' on' : ''), title: label, 'aria-label': label, onclick: () => go('#/' + k) },
+  $('#nav').replaceChildren(...navShown(active).map(([k, ic, label]) => k === '-' ? (ic && !navRail()
+    ? h('button', { class: 'navhead', 'aria-expanded': String(!navFolded.includes(ic)), title: navFolded.includes(ic) ? 'Show this group' : 'Fold this group away', onclick: () => navFold(ic) },
+        ic, h('span', { class: 'fold', 'aria-hidden': 'true' }, navFolded.includes(ic) ? '▸' : '▾'))
+    : h('div', { class: 'navhead', role: 'presentation' }, ic)) : h('button', { class: 'nav' + (k === active ? ' on' : ''), title: label, 'aria-label': label, onclick: () => go('#/' + k) },
     h('span', { class: 'ic' }, ic), label, k === 'tasks' && overdueCount ? h('span', { class: 'cnt', title: 'Overdue tasks' }, overdueCount) : null,
     k === 'inbox' && unreadCount ? h('span', { class: 'cnt', style: 'background:var(--pur);color:#fff', title: 'Unread' }, unreadCount) : null,
     k === 'study' && studyDue ? h('span', { class: 'cnt', style: 'background:var(--acc);color:#000', title: 'Flash cards due' }, studyDue) : null)));
@@ -200,7 +228,7 @@ async function route() {
 async function refreshSide() {
   try { sideData = await J('/api/chats'); } catch (e) { $('#dot').className = 'off'; return; }
   $('#dot').className = '';
-  try { const b = await J('/api/badges'); overdueCount = b.overdue; unreadCount = b.inbox; studyDue = b.study_due || 0; pagesOff = b.pages_off || []; loginHint = b.google_login || loginHint; gmailHint = b.gmail_login || gmailHint; pagesHidden = b.pages_hidden || []; } catch (e) { /* badges only */ }
+  try { const b = await J('/api/badges'); overdueCount = b.overdue; unreadCount = b.inbox; studyDue = b.study_due || 0; if (b.ui_theme && b.ui_theme !== installTheme) { installTheme = b.ui_theme; store.set('rosie.theme.default', installTheme); applyLook(look()); } pagesOff = b.pages_off || []; loginHint = b.google_login || loginHint; gmailHint = b.gmail_login || gmailHint; pagesHidden = b.pages_hidden || []; } catch (e) { /* badges only */ }
   renderNav((location.hash.replace(/^#\/?/, '') || 'home').split('/')[0].replace('chat', ''));
   drawChats();
 }
@@ -740,6 +768,8 @@ VIEWS.study = async (arg) => {
   if (/^review/.test(arg || '')) return studyReview(arg);
   if (/^walk/.test(arg || '')) return studyWalk(arg);
   if (/^deck\/\d+/.test(arg || '')) return studyDeck(+arg.split('/')[1]);
+  if (/^test\/\d+/.test(arg || '')) return studyTest(+arg.split('/')[1]);
+  if (/^tutor\/\d+/.test(arg || '')) return studyTutor(+arg.split('/')[1]);
   setHeader('Study', [btn('▶ Review', 'sm pur', () => go('#/study/review')), btn('🚶 Walk', 'sm', () => go('#/study/walk'))]);
   show(h('div', { class: 'muted' }, 'Loading…'));
   const d = await J('/api/study');
@@ -761,9 +791,17 @@ VIEWS.study = async (arg) => {
       btn('Review', 'sm ' + (k.due ? 'pur' : 'dim'), () => go('#/study/review/d/' + k.id)), btn('Walk', 'sm dim', () => go('#/study/walk/d/' + k.id)), printBtn('deck=' + k.id)))),
     c.decks.length ? null : h('div', { class: 'empty' }, 'No decks yet: add one below or import cards.'),
     h('div', { style: 'display:flex;gap:8px;flex-wrap:wrap;margin-top:10px' },
-      btn('Review all', 'sm ' + (c.due ? 'pur' : 'dim'), () => go('#/study/review/c/' + c.id)), btn('Walk all', 'sm dim', () => go('#/study/walk/c/' + c.id)), printBtn('course=' + c.id),
+      btn('Review all', 'sm ' + (c.due ? 'pur' : 'dim'), () => go('#/study/review/c/' + c.id)), btn('Practice test', 'sm', () => go('#/study/test/' + c.id)),
+      btn('Tutor', 'sm', () => go('#/study/tutor/' + c.id)), btn('Walk all', 'sm dim', () => go('#/study/walk/c/' + c.id)), printBtn('course=' + c.id),
       btn('Save a copy', 'sm dim', async () => { const x = await J('/api/study/export/' + c.id); const a = h('a', { href: URL.createObjectURL(new Blob([JSON.stringify(x, null, 1)], { type: 'application/json' })), download: c.name.replace(/[^\w-]+/g, '_') + '-cards.json' }); a.click(); }),
       btn('Delete course', 'sm dim', () => { if (confirm(`Delete ${c.name} and all its cards and review history?`)) act(() => del('/api/study/courses/' + c.id), 'Deleted'); })),
+    c.tests.length ? h('div', { class: 'muted', style: 'margin-top:8px' }, 'Recent tests: ' + c.tests.map((t) => `${t.score}/${t.total}`).join(', ')) : null,
+    c.ideas.length ? h('div', { style: 'margin-top:10px' }, h('div', {}, `Ideas from your phone · ${c.ideas.length}`),
+      h('div', { class: 'list', style: 'margin-top:6px' }, c.ideas.map((i) => h('div', { class: 'item' }, h('div', { class: 'tx' }, i.text),
+        h('button', { class: 'x', 'aria-label': 'Delete idea', onclick: () => act(() => del('/api/study/ideas/' + i.id)) }, '✕')))),
+      c.decks.length ? (() => { const sel = h('select', { 'aria-label': 'Deck for the cards' }, c.decks.map((k) => h('option', { value: k.id }, k.name)));
+        return h('div', { class: 'form', style: 'margin-top:6px' }, sel, btn('Make cards from these ideas', 'sm pur', async (e) => { e.target.disabled = true; toast('Rosie is reading your ideas…');
+          try { const r = await post(`/api/study/decks/${sel.value}/from-ideas`); toast(`${r.drafted} drafts ready` + (r.dropped ? `, ${r.dropped} dropped by the check` : '')); again(); } catch (er) { toast(er.message, 1); e.target.disabled = false; } })); })() : null) : null,
     c.notes ? h('details', { style: 'margin-top:8px' }, h('summary', { class: 'muted' }, 'Study tips'), h('div', { class: 'muted', style: 'white-space:pre-wrap;margin-top:6px' }, c.notes)) : null);
   // make cards from notes
   const deckSel = h('select', { 'aria-label': 'Deck' }, decks.map((k) => h('option', { value: k.id }, `${k.course}: ${k.name}`)));
@@ -796,10 +834,23 @@ VIEWS.study = async (arg) => {
       let data; try { data = JSON.parse(await ifile.files[0].text()); } catch (er) { return toast('That file is not JSON', 1); }
       act(async () => { const r = await post('/api/study/import', { course: icourse.value, data }); toast(`${r.added} cards added in ${r.decks} decks` + (r.skipped ? `, ${r.skipped} already there` : '')); }); } },
       icourse, ifile, btn('Import', 'pur', null, 'submit')));
+  const ideaCourse = h('select', { 'aria-label': 'Course for the idea' }, d.courses.map((c) => h('option', { value: c.id }, c.name)));
+  const ideaText = h('input', { placeholder: 'Jot an idea, a term, or something from class…', 'aria-label': 'Idea' });
+  const ideaBox = d.courses.length ? h('div', { class: 'card', style: 'margin-top:12px' }, h('h3', {}, 'Quick idea'),
+    h('form', { class: 'form', onsubmit: (e) => { e.preventDefault(); if (!ideaText.value.trim()) return; act(() => post('/api/study/ideas', { course_id: +ideaCourse.value, text: ideaText.value }), 'Saved for later'); } },
+      ideaCourse, ideaText, btn('Save', 'pur', null, 'submit')),
+    h('div', { class: 'muted', style: 'margin-top:6px;font-size:calc(12px*var(--ts,1))' }, 'Good for your phone. Later, on your PC, turn a course\'s ideas into flash cards.')) : null;
+  const blockBox = h('div');
+  J('/api/study/next-block').then((r) => { const b = r.block; if (!b) return;
+    const t = (x) => new Date(x).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }), day = new Date(b.start).toDateString() === new Date().toDateString() ? 'Today' : 'Tomorrow';
+    blockBox.replaceChildren(h('div', { class: 'card', style: 'margin-top:12px' }, h('h3', {}, 'Next study block'),
+      h('div', {}, `${day} ${t(b.start)} to ${t(b.end)} · ${b.title}`),
+      b.todo.length ? h('ul', { style: 'margin:6px 0 0;padding-left:20px' }, b.todo.map((x) => h('li', {}, x[0].toUpperCase() + x.slice(1)))) : h('div', { class: 'muted' }, 'Nothing due: a good time for new notes or ideas.'))); }).catch(() => {});
   show(h('div', { class: 'pagehead' }, h('h2', {}, 'Study'), h('span', { class: 'muted' },
     d.courses.length ? `${d.due} cards due now · reviewed today: ${d.reviewed_today}` + (d.reviewed_today ? ` (${d.right_today} right)` : '') + '. Cards come back just before you would forget them.' : 'Flash cards that come back just before you would forget them.')),
     d.courses.length ? null : h('div', { class: 'empty', style: 'margin-top:12px' }, 'Start by adding a course, or import a cards file.'),
-    drafts, ...d.courses.map(courseCard), draftBox, addBox);
+    window.matchMedia('(max-width:599px)').matches ? ideaBox : null, blockBox, drafts, ...d.courses.map(courseCard), draftBox,
+    window.matchMedia('(max-width:599px)').matches ? null : ideaBox, addBox);
 };
 function studyEdit(x, onDone) {
   const q = h('textarea', { rows: 2, 'aria-label': 'Question', style: 'width:100%' }), a = h('textarea', { rows: 3, 'aria-label': 'Answer', style: 'width:100%' }), t = h('textarea', { rows: 2, 'aria-label': 'Clue', style: 'width:100%' });
@@ -864,6 +915,69 @@ async function studyReview(arg) {
   };
   show(bar, box, h('div', { class: 'muted', style: 'margin-top:10px;font-size:calc(12px*var(--ts,1))' }, 'Again = forgot, Hard = barely, Good = got it, Easy = instant. Keys: space shows the answer, 1 to 4 rate it.'));
   draw();
+}
+// Practice test: interleaved questions from her own cards (multiple choice uses her other cards' answers as wrong options). Grading
+// happens on the server against the card, and every result goes into the card's review schedule.
+async function studyTest(courseId) {
+  setHeader('Practice test', [btn('← Study', 'sm dim', () => go('#/study'))]);
+  show(h('div', { class: 'muted' }, 'Making your test…'));
+  let t;
+  try { t = await post('/api/study/tests', { course_id: courseId, n: 10 }); } catch (e) { show(h('div', { class: 'err' }, e.message)); return; }
+  const inputs = t.questions.map((q, i) => q.kind === 'choice'
+    ? h('div', { role: 'radiogroup', 'aria-label': 'Question ' + (i + 1) }, q.options.map((o) => h('label', { style: 'display:flex;gap:8px;align-items:flex-start;margin:6px 0;cursor:pointer' },
+        h('input', { type: 'radio', name: 'q' + i, value: o, style: 'margin-top:5px' }), h('span', {}, o))))
+    : h('textarea', { rows: 2, 'aria-label': 'Your answer to question ' + (i + 1), placeholder: 'Your answer, in your own words', style: 'width:100%' }));
+  const value = (i) => { const el = inputs[i]; return el.tagName === 'TEXTAREA' ? el.value : (el.querySelector('input:checked') || {}).value || ''; };
+  const submit = btn('Check my answers', 'pur', async () => {
+    submit.disabled = true; toast('Checking your answers (up to a minute)…');
+    try {
+      const answers = {}; t.questions.forEach((q, i) => { answers[i] = value(i); });
+      const r = await post(`/api/study/tests/${t.id}/grade`, { answers });
+      const mark = { right: ['✓', 'var(--ok)'], partly: ['½', 'var(--warn)'], wrong: ['✗', 'var(--bad)'] };
+      show(h('div', { class: 'pagehead' }, h('h2', {}, `${r.score} of ${r.total} right`), h('span', { class: 'muted' }, 'Every card here is now scheduled by how you did: missed ones come back soon.')),
+        h('div', { class: 'list' }, r.results.map((x) => h('div', { class: 'item', style: 'align-items:flex-start' }, h('span', { style: `color:${mark[x.verdict][1]};font-size:calc(22px*var(--ts,1));width:28px` }, mark[x.verdict][0]),
+          h('div', { class: 'tx' }, h('div', { style: 'color:#fff' }, x.q), x.given ? h('div', {}, 'You: ' + x.given) : h('div', { class: 'muted' }, 'No answer'),
+            x.verdict !== 'right' ? h('div', { style: 'color:var(--acc)' }, 'Answer: ' + x.key) : null, x.why ? h('div', { class: 'muted' }, x.why) : null,
+            x.verdict !== 'right' && x.clue ? h('div', { class: 'muted', style: 'font-style:italic' }, x.clue) : null)))),
+        h('div', { class: 'form', style: 'margin-top:14px' }, btn('Another test', 'pur', () => studyTest(courseId)), btn('Back to Study', 'dim', () => go('#/study'))));
+      studyXp(); refreshSide();
+    } catch (e) { toast(e.message, 1); submit.disabled = false; }
+  });
+  show(h('div', { class: 'pagehead' }, h('h2', {}, 'Practice test'), h('span', { class: 'muted' }, `${t.questions.length} questions from your cards, mixed across decks. Answer in your own words; spelling doesn't count.`)),
+    ...t.questions.map((q, i) => h('div', { class: 'card', style: 'margin-top:12px' }, h('div', { style: 'color:#fff;margin-bottom:8px' }, `${i + 1}. ${q.q}`), inputs[i])),
+    h('div', { style: 'margin-top:14px' }, submit));
+}
+// Tutor: answers only from her cards and notes, asks before it tells, and checks an explanation she gives back.
+async function studyTutor(courseId) {
+  const o = await J('/api/study');
+  const course = o.courses.find((c) => c.id === courseId);
+  if (!course) return go('#/study');
+  setHeader('Tutor', [btn('← Study', 'sm dim', () => go('#/study'))]);
+  const log = h('div', { class: 'list' }), history = [];
+  const say = (who, text, sources) => {
+    history.push({ who, text });
+    log.append(h('div', { class: 'item', style: 'align-items:flex-start;' + (who === 'me' ? 'background:var(--card2)' : '') },
+      h('span', { style: 'width:28px' }, who === 'me' ? '🙋' : '🤖'), h('div', { class: 'tx' }, h('div', { style: 'white-space:pre-wrap' }, text),
+        sources && sources.length ? h('details', { style: 'margin-top:4px' }, h('summary', { class: 'muted' }, `From your ${sources.map((x) => x.kind === 'card' ? 'cards' : 'notes').filter((v, i, a) => a.indexOf(v) === i).join(' and ')}`),
+          sources.map((x) => h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1));margin-top:4px' }, x.text))) : null)));
+    log.lastChild.scrollIntoView({ block: 'nearest' });
+  };
+  const box = h('textarea', { rows: 2, placeholder: 'Ask about anything in this course, or explain a topic back…', 'aria-label': 'Message', style: 'width:100%' });
+  const send = async (text) => {
+    text = (text || box.value).trim(); if (!text) return; box.value = '';
+    say('me', text);
+    const wait = h('div', { class: 'muted' }, 'Thinking…'); log.append(wait);
+    try { const r = await post('/api/study/tutor', { course_id: courseId, message: text, history: history.slice(0, -1) }); wait.remove(); say('rosie', r.reply, r.sources); }
+    catch (e) { wait.remove(); toast(e.message, 1); }
+  };
+  box.onkeydown = (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } };
+  const explain = btn('Explain it back', 'sm', async () => {
+    const c = (await J(`/api/study/due?course=${courseId}&limit=1&every=1`)).cards[0];
+    if (!c) return toast('No cards in this course yet.', 1);
+    say('rosie', `In your own words, explain: ${c.q}\nThen press Send and I'll tell you what you got and what's missing.`);
+  });
+  show(h('div', { class: 'pagehead' }, h('h2', {}, `Tutor · ${course.name}`), h('span', { class: 'muted' }, 'I only use your own cards and notes, and I ask before I tell. Say "just tell me" when you want the answer.')),
+    h('div', { class: 'card' }, log, h('div', { style: 'margin-top:10px' }, box), h('div', { class: 'form', style: 'margin-top:8px' }, btn('Send', 'pur', () => send()), explain)));
 }
 // Walk mode: Rosie reads each question, waits, reads the answer and clue. Tap Got it or Missed (or use the headphone buttons: next = got it,
 // previous = missed). A card you don't rate is just read, not scheduled.

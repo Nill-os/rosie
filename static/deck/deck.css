@@ -327,3 +327,14 @@ details.sec.dropbefore{box-shadow:0 -3px 0 var(--acc)}
 details.sec.dropafter{box-shadow:0 3px 0 var(--acc)}
 .secrow{display:flex;align-items:center;justify-content:space-between;gap:8px}
 .secmove{display:flex;gap:2px}
+
+/* Jetsons theme (owner 2026-10-24: easy to read for the partner): the same palette and font as Rosie's (static/app.css), followed from
+   Settings > Display through localStorage. Every text color is at least 7:1 on the navy; no all caps, letter spacing or glow. */
+@font-face{font-family:"Atkinson Hyperlegible";src:url(/vendor/fonts/atkinson-400.woff2) format("woff2");font-weight:400;font-display:swap}
+@font-face{font-family:"Atkinson Hyperlegible";src:url(/vendor/fonts/atkinson-700.woff2) format("woff2");font-weight:700 900;font-display:swap}
+html[data-theme="jetsons"]{--fg:#FFF6E5;--mute:#C9D4E8;--acc:#6FE3D8;--pur:#FFB454;--pink:#FFA8D2;--ok:#8CE99A;--warn:#FFD166;--bad:#FFB3A6;
+  --glass:#1C2E55;--glass-hi:rgba(255,255,255,.04);--edge:#5470A6;--edge-acc:#6FE3D8;--mono:"Atkinson Hyperlegible",Verdana,"DejaVu Sans",Arial,sans-serif;background:#10203E}
+html[data-theme="jetsons"] body{line-height:1.55}
+html[data-theme="jetsons"] body::before{display:none}
+html[data-theme="jetsons"] *{text-shadow:none!important;letter-spacing:normal!important;text-transform:none!important;box-shadow:none!important;backdrop-filter:none!important}
+html[data-theme="jetsons"] ::selection{background:#FFB454;color:#10203E}

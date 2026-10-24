@@ -27,6 +27,8 @@ code{background:var(--card2);color:var(--acc);padding:1px 6px;border-radius:4px;
 .nav .ic{width:20px;text-align:center}
 .navhead{padding:7px 15px 2px;font-size:calc(10px*var(--ts,1));font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--mute)}
 .navhead:first-child{padding-top:4px}
+button.navhead{display:flex;align-items:center;width:100%;border:0;background:none;text-align:left;cursor:pointer;font-family:inherit}
+button.navhead:hover{color:var(--fg)}button.navhead .fold{margin-left:auto;font-size:calc(11px*var(--ts,1))}
 .nav .cnt{margin-left:auto;font-size:calc(11px*var(--ts,1));color:var(--bg);background:var(--bad);border-radius:9px;padding:0 7px;font-weight:700}
 #side .scroll{flex:1 0 auto;padding:8px 8px 12px;min-height:120px}
 .sp-h{display:flex;align-items:center;gap:6px;margin-top:10px;padding:4px 8px;color:var(--mute);font-size:calc(11px*var(--ts,1));letter-spacing:.16em;text-transform:uppercase;cursor:pointer;user-select:none}
@@ -330,3 +332,53 @@ body.in-chat.a0-chat #chatview>#a0box{display:flex;flex:1;min-height:0;max-width
 body.a0-chat #newchat{display:none}
 #a0frame{flex:1;width:100%;height:100%;border:0;background:#04070c}
 .a0note{margin:16px;align-self:flex-start;max-width:560px}
+
+/* ---------- Jetsons theme (owner 2026-10-24: "make her rosie easy to read she has issues reading things with the colors i picked. she is
+   wanting a rosie theme from the jetsons"). Space-age navy with cream text, Googie orange and turquoise, rounded shapes, atomic starbursts
+   in the background only. Easy to read first: every text color is at least 7:1 on its background, one plain font made for low vision
+   (Atkinson Hyperlegible, Braille Institute, SIL OFL: static/vendor/fonts/atkinson.LICENSE), larger text, no glow, no blinking, no all caps,
+   no letter-spaced labels, underlined links. Picked in Settings > Display, per device, with an install-wide default (config ui_theme). ---------- */
+@font-face{font-family:"Atkinson Hyperlegible";src:url(/vendor/fonts/atkinson-400.woff2) format("woff2");font-weight:400;font-style:normal;font-display:swap}
+@font-face{font-family:"Atkinson Hyperlegible";src:url(/vendor/fonts/atkinson-700.woff2) format("woff2");font-weight:700 900;font-style:normal;font-display:swap}
+@font-face{font-family:"Atkinson Hyperlegible";src:url(/vendor/fonts/atkinson-400-italic.woff2) format("woff2");font-weight:400;font-style:italic;font-display:swap}
+html[data-theme="jetsons"]{--bg:#13213F;--card:#1C2E55;--card2:#253B6B;--fg:#FFF6E5;--mute:#C9D4E8;--line:#5470A6;--acc:#6FE3D8;--pur:#FFB454;
+  --ok:#8CE99A;--bad:#FFB3A6;--warn:#FFD166;--pink:#FFA8D2;--read:"Atkinson Hyperlegible",Verdana,"DejaVu Sans",Arial,sans-serif;background:#10203E}
+html[data-theme="jetsons"] body{font:calc(16px*var(--ts,1))/1.6 var(--read);color:var(--fg)}
+html[data-theme="jetsons"] button,html[data-theme="jetsons"] input,html[data-theme="jetsons"] select,html[data-theme="jetsons"] textarea{font-family:var(--read)}
+html[data-theme="jetsons"] code,html[data-theme="jetsons"] pre,html[data-theme="jetsons"] .xterm,html[data-theme="jetsons"] kbd{font-family:var(--mono)}
+html[data-theme="jetsons"] *{text-shadow:none!important;letter-spacing:normal!important;text-transform:none!important;animation-duration:0s!important}
+html[data-theme="jetsons"] body::before{opacity:min(1,var(--glow,1));filter:none;background:
+  url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 120'%3E%3Cellipse cx='120' cy='46' rx='66' ry='20' fill='none' stroke='%236FE3D8' stroke-opacity='.35' stroke-width='3' transform='rotate(-14 120 46)'/%3E%3Cpath d='M150 8l5 24 24 5-24 5-5 24-5-24-24-5 24-5z' fill='%23FFB454' fill-opacity='.5'/%3E%3Cpath d='M74 52l3 12 12 3-12 3-3 12-3-12-12-3 12-3z' fill='%236FE3D8' fill-opacity='.45'/%3E%3C/svg%3E") right 6px top -6px/150px auto no-repeat,
+  radial-gradient(70vmax 50vmax at 100% 0%,#24447a,transparent 70%),radial-gradient(60vmax 40vmax at 0% 100%,#1f3a66,transparent 70%),#10203E}
+html[data-theme="jetsons"] #side{background:#0F1D38;border-right:2px solid var(--line)}
+html[data-theme="jetsons"] body.side-open #side{background:#0F1D38}
+html[data-theme="jetsons"] #side .brand b{color:var(--pur);font-size:calc(20px*var(--ts,1))}
+html[data-theme="jetsons"] #side .brand b::before{content:"";display:inline-block;vertical-align:-5px;margin-right:8px;width:26px;height:26px;background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 26 26'%3E%3Cg fill='none' stroke='%236FE3D8' stroke-width='1.6'%3E%3Cellipse cx='13' cy='13' rx='12' ry='4.5'/%3E%3Cellipse cx='13' cy='13' rx='12' ry='4.5' transform='rotate(60 13 13)'/%3E%3Cellipse cx='13' cy='13' rx='12' ry='4.5' transform='rotate(120 13 13)'/%3E%3C/g%3E%3Ccircle cx='13' cy='13' r='3' fill='%23FFB454'/%3E%3C/svg%3E") center/contain no-repeat}
+html[data-theme="jetsons"] #side .brand i{box-shadow:none}
+html[data-theme="jetsons"] .nav{font-size:calc(16px*var(--ts,1));color:var(--fg)}
+html[data-theme="jetsons"] .nav.on{background:var(--card2);border-left:4px solid var(--pur);color:var(--fg)}
+html[data-theme="jetsons"] .navhead,html[data-theme="jetsons"] .sp-h,html[data-theme="jetsons"] .fgrp{color:var(--pur);font-size:calc(14px*var(--ts,1))}
+html[data-theme="jetsons"] .nav .cnt{background:var(--pur);color:#10203E}
+html[data-theme="jetsons"] #ttl{color:var(--fg);font-size:calc(19px*var(--ts,1))}
+html[data-theme="jetsons"] #ttl::before,html[data-theme="jetsons"] #ttl::after{content:none}
+html[data-theme="jetsons"] .card h3::before{content:"✦";color:var(--pur)}
+html[data-theme="jetsons"] .card{background:var(--card);border:2px solid var(--line);border-radius:20px;box-shadow:none}
+html[data-theme="jetsons"] .card h3,html[data-theme="jetsons"] .dayhead,html[data-theme="jetsons"] .modal .mh,html[data-theme="jetsons"] .conf>b{color:var(--pur);font-size:calc(17px*var(--ts,1))}
+html[data-theme="jetsons"] .btn,html[data-theme="jetsons"] #bar button,html[data-theme="jetsons"] #btns button,html[data-theme="jetsons"] .conf button,html[data-theme="jetsons"] #slash button{
+  border-radius:999px;background:var(--card2);color:var(--fg);font-size:calc(15px*var(--ts,1))}
+html[data-theme="jetsons"] .btn:hover,html[data-theme="jetsons"] .btn.pur:hover{background:var(--b);color:#10203E}
+html[data-theme="jetsons"] .item{background:#162749;border:1px solid var(--line);border-radius:14px}
+html[data-theme="jetsons"] .chip{background:#162749;color:var(--fg);border-color:var(--line)}
+html[data-theme="jetsons"] .seg{border-color:var(--acc);border-radius:999px}
+html[data-theme="jetsons"] .seg button{background:var(--card);color:var(--fg);font-size:calc(15px*var(--ts,1))}
+html[data-theme="jetsons"] .seg button.on{background:var(--acc);color:#10203E}
+html[data-theme="jetsons"] input,html[data-theme="jetsons"] select,html[data-theme="jetsons"] textarea{background:#0E1A33;border:2px solid var(--line);color:var(--fg)}
+html[data-theme="jetsons"] ::placeholder{color:#B4C1DC;opacity:1}
+html[data-theme="jetsons"] a{color:var(--acc);text-decoration:underline;text-underline-offset:3px}
+html[data-theme="jetsons"] a.btn,html[data-theme="jetsons"] a.chip{text-decoration:none}
+html[data-theme="jetsons"] :focus-visible{outline:3px solid var(--pur);outline-offset:2px}
+html[data-theme="jetsons"] ::selection{background:var(--pur);color:#10203E}
+html[data-theme="jetsons"] .modal{background:#182A50;border:2px solid var(--pur);border-radius:20px}
+html[data-theme="jetsons"] .menu,html[data-theme="jetsons"] #toast div,html[data-theme="jetsons"] #slash{background:#182A50}
+html[data-theme="jetsons"] .me{background:#24406E}
+html[data-theme="jetsons"] *{scrollbar-color:var(--line) transparent}

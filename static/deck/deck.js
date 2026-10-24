@@ -662,14 +662,21 @@ function readLook() {
   if (typeof v.text === 'number') SET.pct = v.text;
   if (['compact', 'normal', 'big'].includes(v.density)) SET.density = v.density;
   if (['off', 'low', 'medium', 'high'].includes(v.glow)) SET.glow = v.glow;
+  SET.theme = v.theme;
+}
+function lookTheme() {                                   // Rosie's theme (Settings > Display): this device's pick, else the install's default
+  let d = null;
+  try { d = JSON.parse(localStorage.getItem('rosie.theme.default')); } catch { /* none yet */ }
+  return ['cyberdeck', 'jetsons'].includes(SET.theme) ? SET.theme : (d === 'jetsons' ? 'jetsons' : 'cyberdeck');
 }
 if (typeof SET.pct !== 'number') SET.pct = Math.round(SET.text / 13 * 20) * 5;   // the Deck's old text size in px
 readLook();
-window.addEventListener('storage', (e) => { if (e.key === LOOK) { readLook(); applySettings(false); } });
+window.addEventListener('storage', (e) => { if (e.key === LOOK || e.key === 'rosie.theme.default') { readLook(); applySettings(false); } });
 function applySettings(share = true) {
   SET.pct = Math.min(150, Math.max(70, SET.pct));
   document.documentElement.style.zoom = FRAMED ? '' : SET.zoom;
-  document.documentElement.style.setProperty('--fs', 13 * SET.pct / 100 + 'px');
+  document.documentElement.dataset.theme = lookTheme();
+  document.documentElement.style.setProperty('--fs', 13 * SET.pct / 100 * (lookTheme() === 'jetsons' ? 1.15 : 1) + 'px');
   document.documentElement.style.setProperty('--glow', { off: 0, low: 0.45, medium: 1, high: 1.6 }[SET.glow] ?? 1);
   document.body.classList.toggle('compact', SET.density === 'compact');
   document.body.classList.toggle('big', SET.density === 'big');

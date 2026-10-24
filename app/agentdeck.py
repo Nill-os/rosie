@@ -42,6 +42,14 @@ STATES = {"R": "Running", "S": "Sleeping", "D": "Disk wait", "Z": "Zombie", "T":
 sys.path.insert(0, str(ROOT / "app"))
 import agentdeck_tokens as tokens  # noqa: E402
 
+WIN = None                                                   # off Linux, psutil gives the same readings (agentdeck_win.py, owner 2026-10-24)
+if not LINUX:
+    try:
+        import agentdeck_win as WIN  # noqa: E402
+    except ImportError:                                      # psutil missing: the Deck stays off, as before
+        WIN = None
+AVAILABLE = LINUX or WIN is not None
+
 _lock = threading.Lock()
 _prev = {"t": 0.0, "procs": {}, "cores": None, "net": None}
 _cache = {}
@@ -116,7 +124,7 @@ def user(uid):
         try:
             import pwd
             _users[uid] = pwd.getpwuid(uid).pw_name
-        except KeyError:
+        except (KeyError, ImportError):
             _users[uid] = str(uid)
     return _users[uid]
 
@@ -127,6 +135,8 @@ def live_slot() -> Path:
 
 # ---------------------------------------------------------------- system
 def _cpu_lines():
+    if WIN:
+        return WIN.cpu_lines()
     out = {}
     for line in read("/proc/stat").splitlines():
         if line.startswith("cpu"):
@@ -137,6 +147,8 @@ def _cpu_lines():
 
 
 def _meminfo():
+    if WIN:
+        return WIN.meminfo()
     m = {}
     for line in read("/proc/meminfo").splitlines():
         k, _, v = line.partition(":")
@@ -145,6 +157,8 @@ def _meminfo():
 
 
 def _disks():
+    if WIN:
+        return WIN.disks()
     out, seen = [], set()
     for line in read("/proc/mounts").splitlines():
         dev, mnt, fs = (line.split() + ["", "", ""])[:3]
@@ -162,6 +176,8 @@ def _disks():
 
 
 def _net():
+    if WIN:
+        return WIN.net()
     out = {}
     for line in read("/proc/net/dev").splitlines()[2:]:
         name, _, rest = line.partition(":")
@@ -188,6 +204,8 @@ def _gpu():
 
 
 def _cpu_temp():
+    if WIN:
+        return None                                      # Windows doesn't tell a user program the CPU temperature
     for hw in Path("/sys/class/hwmon").glob("hwmon*"):
         if read(hw / "name").strip() in ("k10temp", "coretemp", "zenpower"):
             t = read(hw / "temp1_input").strip()
@@ -227,17 +245,20 @@ def sample():
     with _lock:
         now = time.time()
         dt = max(now - _prev["t"], 0.05) if _prev["t"] else None
-        uptime = float(read("/proc/uptime", "0 0").split()[0])
-        procs = {}
-        try:
-            pids = os.listdir("/proc")
-        except OSError:                                  # no /proc (Windows): nothing to list
-            pids = []
-        for name in pids:
-            if name.isdigit():
-                p = _proc(int(name))
-                if p:
-                    procs[p["pid"]] = p
+        if WIN:
+            uptime, procs = WIN.uptime(), WIN.procs()
+        else:
+            uptime = float(read("/proc/uptime", "0 0").split()[0])
+            procs = {}
+            try:
+                pids = os.listdir("/proc")
+            except OSError:                              # no /proc and no psutil: nothing to list
+                pids = []
+            for name in pids:
+                if name.isdigit():
+                    p = _proc(int(name))
+                    if p:
+                        procs[p["pid"]] = p
         old = _prev["procs"]
         for p in procs.values():
             o = old.get(p["pid"])
@@ -249,7 +270,7 @@ def sample():
             p["rd_rate"] = (p["rd"] - o["rd"]) / dt if same and dt and p["rd"] is not None and o["rd"] is not None else None
             p["wr_rate"] = (p["wr"] - o["wr"]) / dt if same and dt and p["wr"] is not None and o["wr"] is not None else None
             p["age"] = max(0.0, uptime - p["start"])
-            p["user"] = user(p["uid"])
+            p["user"] = p.get("username") or user(p["uid"])
         cores_now = _cpu_lines()
         cores = {}
         if _prev["cores"]:
@@ -488,7 +509,7 @@ def agents(procs, gpu):
                        "task": clean_task(b.get("task")), "step": acts.get(s.get("sessionId") or ""), "title": titles.get(s.get("sessionId") or "", ""), "tokens": tok.get(s.get("sessionId") or "", {}),
                        "mcp": sum(1 for p in g["procs"] if " mcp" in p["cmd"] or "mcp_server" in p["cmd"] or "_mcp.py" in p["cmd"]), **g})
     cont = cached("docker", 5, _containers) or {}
-    rpid = cached("rosie-pid", 5, lambda: _unit_pid("assistant.service")) or 0
+    rpid = (WIN.find(procs, "server:app", "8765") if WIN else cached("rosie-pid", 5, lambda: _unit_pid("assistant.service"))) or 0
     health = cached("rosie-health", 3, lambda: _http_json(ROSIE_URL + "/healthz"))
     cfg = _rosie_config()
     units = {u: cached(f"unit-{u}", 5, lambda u=u: _unit_pid(u + ".service", True)) or 0 for u in USER_UNITS}
@@ -498,7 +519,7 @@ def agents(procs, gpu):
              "brain": cfg.get("brain") or "", "model": cfg.get("chat_model") or "", "graph": cached("graph", 15, _graph_done),
              "plan": cached("plan", 10, lambda: json.loads(read(live_slot() / "data" / "claude_plan.json") or "{}")),
              "task": (tasks.get("rosie") or {}).get("task") or "", "seen": (tasks.get("rosie") or {}).get("seen") or 0, **group(procs, rosie_pids, gpu)}
-    opid = cached("ollama-pid", 5, lambda: _unit_pid("ollama.service")) or 0
+    opid = (WIN.find(procs, "ollama", "serve") or WIN.find(procs, "ollama") if WIN else cached("ollama-pid", 5, lambda: _unit_pid("ollama.service"))) or 0
     ps = cached("ollama-ps", 2, lambda: _http_json(OLLAMA + "/api/ps")) or {}
     ollama = {"up": bool(opid), "models": [{"name": m.get("name"), "size": m.get("size"), "vram": m.get("size_vram"), "ctx": m.get("context_length"),
                                            "expires": m.get("expires_at", "")[:19], "params": (m.get("details") or {}).get("parameter_size")}
@@ -558,8 +579,8 @@ def _sum(rows):
 
 # ---------------------------------------------------------------- the snapshot
 def snapshot():
-    if not LINUX:                                        # it reads /proc and /sys; the page is hidden there, this keeps a direct call from raising
-        return {"error": "The Agent Deck reads Linux's /proc and is off on this system."}
+    if not AVAILABLE:                                    # not Linux and no psutil: the page is hidden, this keeps a direct call from raising
+        return {"error": "The Agent Deck needs Linux's /proc or the psutil package, and this system has neither."}
     start_counting()
     procs, cores, net, uptime = sample()
     gpu = cached("gpu", 2, _gpu)
@@ -576,10 +597,11 @@ def snapshot():
               "rd": p["rd_rate"], "wr": p["wr_rate"], "cmd": p["cmd"][:300], "kthread": p["kthread"], "agent": owner.get(p["pid"], ""),
               "vram": (gpu or {}).get("apps", {}).get(p["pid"], 0), "mine": p["uid"] == ME}
              for p in procs.values()]
-    load = read("/proc/loadavg").split()
+    load = WIN.loadavg() if WIN else read("/proc/loadavg").split()
     if gpu:
         gpu = {k: v for k, v in gpu.items() if k != "apps"}
-    return {"t": time.time(), "host": os.uname().nodename, "kernel": os.uname().release, "uptime": uptime,
+    hostname, kernel = WIN.host() if WIN else (os.uname().nodename, os.uname().release)
+    return {"t": time.time(), "host": hostname, "kernel": kernel, "uptime": uptime,
             "load": [float(x) for x in load[:3]] if len(load) >= 3 else [], "cpu": {"total": cores.get("cpu", 0.0),
             "cores": [cores.get(f"cpu{i}", 0.0) for i in range(NCPU)], "temp": _cpu_temp()},
             "mem": {"total": mem.get("MemTotal", 0), "available": mem.get("MemAvailable", 0), "free": mem.get("MemFree", 0),
@@ -590,6 +612,8 @@ def snapshot():
 
 
 def proc_info(pid: int) -> dict:
+    if WIN:
+        return WIN.proc_info(pid)
     p = _proc(pid)
     if not p:
         return {"error": "That process has ended."}
@@ -696,7 +720,7 @@ def act(body: dict) -> dict:
     if a == "claude_stop":
         pid = int(body.get("pid") or 0)
         s = read(CLAUDE / "sessions" / f"{pid}.json")
-        if not s or read(f"/proc/{pid}/comm").strip() != "claude":
+        if not s or (WIN.comm(pid) if WIN else read(f"/proc/{pid}/comm").strip()) != "claude":
             return {"error": "That Claude session is not running."}
         os.kill(pid, signal.SIGTERM)
         return {"ok": True, "msg": f"Asked Claude session {pid} to exit."}

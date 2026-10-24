@@ -775,4 +775,16 @@ def index():
     return FileResponse(STATIC / "index.html")
 
 
+ICON = STATIC.parent / "data" / "icon.svg"            # this PC's own icon (Settings can't make one; a person or their Claude puts it here)
+
+
+@app.get("/icon.svg")
+def icon():
+    """This PC's own icon when data/icon.svg exists (updates never touch data/), else Rosie's. The policy header keeps any script inside an
+    SVG from running if someone opens it as a page."""
+    p = ICON if ICON.is_file() and ICON.stat().st_size < 512_000 else STATIC / "icon.svg"
+    return FileResponse(p, media_type="image/svg+xml", headers={"Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; img-src data:",
+                                                               "X-Content-Type-Options": "nosniff", "Cache-Control": "no-cache"})
+
+
 app.mount("/", StaticFiles(directory=STATIC), name="static")

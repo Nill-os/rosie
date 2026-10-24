@@ -155,6 +155,73 @@ def draft(b: DraftBody):
         return err(f"Rosie's model could not draft cards right now ({type(e).__name__}).", 503)
 
 
+# ---------------------------------------------------------------- Phase 2: ideas, tests, tutor, next study block
+class IdeaBody(BaseModel):
+    course_id: int
+    text: str
+
+
+class TestBody(BaseModel):
+    course_id: int
+    n: int = 10
+
+
+class AnswersBody(BaseModel):
+    answers: dict
+
+
+class TutorBody(BaseModel):
+    course_id: int
+    message: str
+    history: list = []
+
+
+@router.post("/api/study/ideas")
+def idea_add(b: IdeaBody):
+    return safe(lambda: {"id": study.add_idea(b.course_id, b.text)})
+
+
+@router.delete("/api/study/ideas/{idea_id}")
+def idea_delete(idea_id: int):
+    study.delete_idea(idea_id)
+    return {"ok": True}
+
+
+@router.post("/api/study/decks/{deck_id}/from-ideas")
+def deck_from_ideas(deck_id: int):
+    try:
+        return study.cards_from_ideas(deck_id)
+    except ValueError as e:
+        return err(str(e))
+    except Exception as e:
+        return err(f"Rosie's model could not draft cards right now ({type(e).__name__}).", 503)
+
+
+@router.post("/api/study/tests")
+def test_make(b: TestBody):
+    return safe(study.make_test, b.course_id, b.n)
+
+
+@router.post("/api/study/tests/{test_id}/grade")
+def test_grade(test_id: int, b: AnswersBody):
+    return safe(study.grade_test, test_id, b.answers)
+
+
+@router.post("/api/study/tutor")
+def tutor(b: TutorBody):
+    try:
+        return study.tutor(b.course_id, b.message, b.history)
+    except ValueError as e:
+        return err(str(e))
+    except Exception as e:
+        return err(f"Rosie's model could not answer right now ({type(e).__name__}).", 503)
+
+
+@router.get("/api/study/next-block")
+def next_block():
+    return {"block": study.plan_for_block(study.next_block())}
+
+
 # ---------------------------------------------------------------- print page (the browser prints it; no PDF library needed)
 SHAPES = ['<circle cx="12" cy="12" r="9"/>', '<rect x="3.5" y="3.5" width="17" height="17"/>', '<polygon points="12,3 21,20 3,20"/>',
           '<polygon points="12,2 22,12 12,22 2,12"/>', '<polygon points="12,2 14.6,9 22,9 16,13.6 18.3,21 12,16.5 5.7,21 8,13.6 2,9 9.4,9"/>',

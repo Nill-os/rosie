@@ -400,9 +400,13 @@ class Settings(BaseModel):
 
 
 def pages_off() -> list[str]:
-    """Pages this PC can't run (owner 2026-10-23, the Windows copy): the Agent Deck, live terminals and the meeting recorder read Linux's
-    own tools, and Agent Zero runs in Linux Docker. They leave the menu instead of failing."""
-    return [] if sys.platform.startswith("linux") else ["deck", "terminal", "meetings", "agentzero"]
+    """Pages this PC can't run (owner 2026-10-23, the Windows copy): live terminals and the meeting recorder use Linux's own tools, and
+    the Agent Zero page expects Linux Docker. They leave the menu instead of failing. The Agent Deck works where psutil is installed."""
+    if sys.platform.startswith("linux"):
+        return []
+    import importlib.util
+    deck = [] if importlib.util.find_spec("psutil") else ["deck"]          # the Deck runs on Windows through psutil (agentdeck_win.py)
+    return deck + ["terminal", "meetings", "agentzero"]
 
 
 @router.get("/api/spaces")
@@ -713,8 +717,20 @@ class NewReminder(BaseModel):
 def badges():
     import proposals as _pr
     import study
-    return {"overdue": len(tasks.overdue()), "inbox": inbox.unread_count(), "proposals": _pr.count_pending(), "study_due": study.due_count(),
+    return {"overdue": len(tasks.overdue()), "inbox": inbox.unread_count(), "proposals": _pr.count_pending(), "study_due": study.due_count(), "ui_theme": config.load().get("ui_theme") or "cyberdeck",
             "pages_off": pages_off(), "google_login": plat.google_login(), "gmail_login": plat.google_login("main"), "pages_hidden": config.load().get("hidden_pages") or []}
+
+
+@router.post("/api/look/theme")
+def look_theme(body: dict):
+    """This Rosie's default theme, for every device that has not picked its own (Settings > Display)."""
+    t = str(body.get("theme") or "")
+    if t not in ("cyberdeck", "jetsons"):
+        return err("Pick cyberdeck or jetsons")
+    cfg = config.load()
+    cfg["ui_theme"] = t
+    config.save(cfg)
+    return {"ok": True, "ui_theme": t}
 
 
 @router.get("/api/inbox")

@@ -86,6 +86,8 @@ def test_the_decks_chats_folder_comes_from_a0_host(monkeypatch, tmp_path):
 
 def test_the_deck_snapshot_and_sample_do_not_raise_without_proc(monkeypatch):
     monkeypatch.setattr(agentdeck, "LINUX", False)
+    monkeypatch.setattr(agentdeck, "WIN", None)                  # no psutil either (with it, agentdeck_win.py does the readings)
+    monkeypatch.setattr(agentdeck, "AVAILABLE", False)
     assert "error" in agentdeck.snapshot()
     monkeypatch.setattr(agentdeck.os, "listdir", lambda p: (_ for _ in ()).throw(FileNotFoundError(p)))
     procs, _cores, _net, _up = agentdeck.sample()
