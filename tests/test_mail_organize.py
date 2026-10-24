@@ -29,15 +29,26 @@ class Req:
 
 
 class Batch:
-    def __init__(self, callback):
-        self.cb, self.reqs = callback, []
+    def __init__(self, callback, fail=None):
+        self.cb, self.reqs, self.fail = callback, [], fail
 
-    def add(self, req):
-        self.reqs.append(req)
+    def add(self, req, request_id=None):
+        self.reqs.append((request_id, req))
 
     def execute(self):
-        for i, r in enumerate(self.reqs):
-            self.cb(str(i), r.execute(), None)
+        for i, (rid, r) in enumerate(self.reqs):
+            rid = rid or str(i)
+            if self.fail and self.fail(rid):
+                self.cb(rid, None, RateLimited())
+            else:
+                self.cb(rid, r.execute(), None)
+
+
+class RateLimited(Exception):
+    """Like googleapiclient's HttpError for Gmail's per-minute quota (429)."""
+    def __init__(self):
+        super().__init__("Quota exceeded")
+        self.resp, self.content = type("R", (), {"status": 429})(), b"rateLimitExceeded"
 
 
 class FakeGmail:
@@ -61,7 +72,7 @@ class FakeGmail:
         return Req(lambda: {"id": id, "labelIds": sorted(self.msgs[id])} if id in self.msgs else {})
 
     def new_batch_http_request(self, callback):
-        return Batch(callback)
+        return Batch(callback, getattr(self, "fail_get", None))
 
     def batchModify(self, userId, body):
         def run():
@@ -279,3 +290,44 @@ def test_migration_with_nothing_to_move_writes_no_backup():
     assert mailwatch.migrate_email_tasks()["moved"] == 0
     assert not mailwatch.BACKUPS.exists() or not list(mailwatch.BACKUPS.glob("*.json"))
     assert [t["title"] for t in tasks.list_for()] == ["Only mine"]
+
+
+# ---------- Gmail's per-minute quota (2026-10-24: the first run stopped with a 403 rateLimitExceeded) ----------
+def test_a_busy_gmail_is_waited_out_and_reads_that_were_refused_are_asked_again(gm, monkeypatch):
+    from googleapiclient.errors import HttpError
+    settings()
+    for m in ("m1", "m2"):
+        gm.msgs[m] = {"INBOX"}
+        stored(m, "Bills")
+    waits, tries = [], {"n": 0}
+    monkeypatch.setattr(mailorganize, "_sleep", waits.append)
+    refused = {"m2"}
+    gm.fail_get = lambda rid: rid in refused and not refused.discard(rid)      # m2's first read is refused, the second works
+    real = gm.batchModify
+
+    def busy_once(userId, body):
+        req = real(userId, body)
+
+        class Once:
+            def execute(self):
+                tries["n"] += 1
+                if tries["n"] == 1:
+                    raise HttpError(type("R", (), {"status": 429, "reason": "Too Many Requests"})(), b"rateLimitExceeded")
+                return req.execute()
+        return Once()
+    monkeypatch.setattr(gm, "batchModify", busy_once)
+    r = mailorganize.apply()
+    assert r["changed"] == 2 and all("LBL_1" in gm.msgs[m] for m in ("m1", "m2"))
+    assert len(waits) == 2 and tries["n"] == 2                                  # one wait for the refused read, one for the busy change
+
+
+def test_a_second_run_soon_after_keeps_the_first_runs_undo(gm, monkeypatch):
+    settings()
+    monkeypatch.setattr(mailclean, "CAP", 1)                                    # one email a run: two runs, like a run stopped part way
+    for m in ("m1", "m2"):
+        gm.msgs[m] = {"INBOX"}
+        stored(m, "Bills")
+    mailorganize.apply()
+    mailorganize.apply()
+    assert sum(len(g["ids"]) for g in json.loads(mailorganize.UNDO.read_text())["groups"]) == 2
+    assert mailorganize.undo()["restored"] == 2

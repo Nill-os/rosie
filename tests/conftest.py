@@ -41,7 +41,7 @@ import testguard  # noqa: E402
 testguard.block_network()                                    # from collection on, also for imports and module-level fixtures
 
 # (module, attribute, stand-in name under tmp_path). Modules marked lazy are only patched when something already imported them.
-PATCHES = [("config", "PATH", "config.json"), ("tasks", "DB", "tasks.db"), ("lifequest", "DB", "lifequest.db"), ("inbox", "DB", "inbox.db"), ("chats", "DB", "chats.db"),
+PATCHES = [("config", "PATH", "config.json"), ("tasks", "DB", "tasks.db"), ("lifequest", "DB", "lifequest.db"), ("study", "DB", "study.db"), ("inbox", "DB", "inbox.db"), ("chats", "DB", "chats.db"),
            ("memory", "DB", "memory.db"), ("lessons", "DB", "lessons.db"), ("mind", "DB", "mind.db"),
            ("proposals", "DB", "proposals.db"), ("skills", "DIR", "skills"), ("pc_tools", "LOG", "audit.log"),
            ("server", "VOICE_CHAT", "voice_chat.json"), ("server", "SECRETS", "secrets"), ("server", "VOICE_DIR", "voices"),
@@ -66,7 +66,7 @@ PATCHES = [("config", "PATH", "config.json"), ("tasks", "DB", "tasks.db"), ("lif
            ("server", "VECTOR_CHAT", "vector_chat.json"), ("vector_pod", "DIR", "vector"), ("vector_pod", "CERT", "vector/cert.pem"), ("vector_pod", "KEY", "vector/key.pem"),
            ("vector_pod", "DOCS", "vector/jdocs.json"), ("vector_pod", "TOKEN", "vector/client_token"), ("vector_pod", "SSH_KEY", "vector/ssh_root_key"), ("vector_pod", "WIREPOD", "wire-pod"), ("vector_pod", "EP_CERT", "vector/ep.crt"), ("vector_pod", "EP_KEY", "vector/ep.key"), ("vector_pod", "HEY_ROSIE", "vector/hey_rosie_1-5.ppn"), ("vector_pod", "LAST_HEARD", "vector/last_heard.wav")]
 ALWAYS = ("config", "tasks", "inbox", "chats", "memory", "lessons", "proposals", "skills", "pc_tools", "server",
-          "briefs", "projects", "mailwatch", "mailorganize", "gcal", "gmail", "workflows", "corner_graph", "a0", "paper", "agentboard", "skill_sync", "vector_pod", "lifequest", "board_link")
+          "briefs", "projects", "mailwatch", "mailorganize", "gcal", "gmail", "workflows", "corner_graph", "a0", "paper", "agentboard", "skill_sync", "vector_pod", "lifequest", "board_link", "study")
 
 
 # Linux-only parts (owner 2026-10-23, the Windows copy): on Windows these features are off (hub.pages_off) or replaced, so their tests

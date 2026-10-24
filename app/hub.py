@@ -712,7 +712,8 @@ class NewReminder(BaseModel):
 @router.get("/api/badges")
 def badges():
     import proposals as _pr
-    return {"overdue": len(tasks.overdue()), "inbox": inbox.unread_count(), "proposals": _pr.count_pending(),
+    import study
+    return {"overdue": len(tasks.overdue()), "inbox": inbox.unread_count(), "proposals": _pr.count_pending(), "study_due": study.due_count(),
             "pages_off": pages_off(), "google_login": plat.google_login(), "gmail_login": plat.google_login("main"), "pages_hidden": config.load().get("hidden_pages") or []}
 
 

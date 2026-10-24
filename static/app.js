@@ -85,7 +85,7 @@ const DOWN = 'Can\'t reach the assistant. Is the PC on?';
 // ---------- state ----------
 let chatId = store.get('chat_id', null), chatSpace = null, chatTitle = 'New chat';
 let meetTimer = null;
-let dirty = false, prevHash = location.hash, sideData = { chats: [], spaces: [] }, overdueCount = 0, unreadCount = 0, pagesOff = [], pagesHidden = [], loginHint = 'run ~/assistant/login.sh', gmailHint = 'run ~/assistant/login-gmail.sh main';
+let dirty = false, prevHash = location.hash, sideData = { chats: [], spaces: [] }, overdueCount = 0, unreadCount = 0, studyDue = 0, pagesOff = [], pagesHidden = [], loginHint = 'run ~/assistant/login.sh', gmailHint = 'run ~/assistant/login-gmail.sh main';
 const log = $('#log'), t = $('#t');
 // the message box grows as you write (up to ~45% of the screen, then scrolls), so everything you typed stays visible
 const fit = () => { if (!t.value) { t.style.height = ''; return; } t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight + 2, innerHeight * 0.45) + 'px'; };
@@ -99,7 +99,7 @@ function setHeader(title, actions) { $('#ttl').textContent = title; $('#actions'
 function show(...nodes) { $('#view').replaceChildren(h('div', { class: 'page' }, ...nodes)); $('#view').scrollTop = 0; }
 // In the order of a day (owner 2026-10-20: "reorder rosies side tab to make more sense for daily use"): what needs you and today's plan
 // first, then the work you come back to, then Rosie's own pages. ['-', label] starts a group.
-const NAV = [['-', 'Today'], ['home', '⌂', 'Home'], ['inbox', '🔔', 'Inbox'], ['brief', '☀', 'Daily Brief'], ['calendar', '▦', 'Calendar'], ['tasks', '✓', 'Tasks'], ['lifequest', '★', 'Life Quest'],
+const NAV = [['-', 'Today'], ['home', '⌂', 'Home'], ['inbox', '🔔', 'Inbox'], ['brief', '☀', 'Daily Brief'], ['calendar', '▦', 'Calendar'], ['tasks', '✓', 'Tasks'], ['lifequest', '★', 'Life Quest'], ['study', '📚', 'Study'],
   ['mail', '📧', 'Mail'], ['paper', '📰', 'Morning Paper'],
   ['-', 'Work'], ['projects', '🧭', 'Projects'], ['meetings', '🎙', 'Meetings'], ['notes', '✎', 'Notes'], ['servers', '🖧', 'Servers'], ['terminal', '⌨', 'Terminal'],
   ['-', 'Rosie'], ['memory', '◈', 'Memory'], ['skills', '✦', 'Skills'], ['corner', '❀', "Rosie's corner"], ['graph', '⌬', 'Memory graph'], ['agentzero', '🧠', 'Agent Zero'], ['deck', '◫', 'Agent Deck'], ['vector', '🤖', 'Vector'], ['settings', '⚙', 'Settings']];
@@ -168,7 +168,8 @@ function navShown() {
 function renderNav(active) {
   $('#nav').replaceChildren(...navShown().map(([k, ic, label]) => k === '-' ? h('div', { class: 'navhead', role: 'presentation' }, ic) : h('button', { class: 'nav' + (k === active ? ' on' : ''), title: label, 'aria-label': label, onclick: () => go('#/' + k) },
     h('span', { class: 'ic' }, ic), label, k === 'tasks' && overdueCount ? h('span', { class: 'cnt', title: 'Overdue tasks' }, overdueCount) : null,
-    k === 'inbox' && unreadCount ? h('span', { class: 'cnt', style: 'background:var(--pur);color:#fff', title: 'Unread' }, unreadCount) : null)));
+    k === 'inbox' && unreadCount ? h('span', { class: 'cnt', style: 'background:var(--pur);color:#fff', title: 'Unread' }, unreadCount) : null,
+    k === 'study' && studyDue ? h('span', { class: 'cnt', style: 'background:var(--acc);color:#000', title: 'Flash cards due' }, studyDue) : null)));
 }
 function go(hash) { if (location.hash === hash) route(); else location.hash = hash; }
 window.addEventListener('hashchange', () => {
@@ -185,6 +186,7 @@ async function route() {
   if (!inChat && talking) stopTalk();
   if (name !== 'terminal') closeTerm();
   if (name !== 'meetings') clearInterval(meetTimer);
+  if (name !== 'study') walkStop();
   renderNav(inChat ? '' : name);
   try {
     if (inChat) await showChat(arg); else await (VIEWS[name] || VIEWS.home)(arg);
@@ -198,7 +200,7 @@ async function route() {
 async function refreshSide() {
   try { sideData = await J('/api/chats'); } catch (e) { $('#dot').className = 'off'; return; }
   $('#dot').className = '';
-  try { const b = await J('/api/badges'); overdueCount = b.overdue; unreadCount = b.inbox; pagesOff = b.pages_off || []; loginHint = b.google_login || loginHint; gmailHint = b.gmail_login || gmailHint; pagesHidden = b.pages_hidden || []; } catch (e) { /* badges only */ }
+  try { const b = await J('/api/badges'); overdueCount = b.overdue; unreadCount = b.inbox; studyDue = b.study_due || 0; pagesOff = b.pages_off || []; loginHint = b.google_login || loginHint; gmailHint = b.gmail_login || gmailHint; pagesHidden = b.pages_hidden || []; } catch (e) { /* badges only */ }
   renderNav((location.hash.replace(/^#\/?/, '') || 'home').split('/')[0].replace('chat', ''));
   drawChats();
 }
@@ -725,6 +727,203 @@ VIEWS.tasks = async () => {
     sec('Overdue', d.overdue, 'today'), sec('Today', d.due_today), sec('Upcoming', d.upcoming), sec('Done recently', d.done_recent),
     !(d.overdue.length + d.due_today.length + d.upcoming.length) ? h('div', { class: 'empty', style: 'margin-top:16px' }, 'Nothing open. Add one above, or just tell the assistant.') : null);
 };
+
+// ----- Study (owner 2026-10-24: a study helper for the partner): courses, decks of flash cards with spaced review (FSRS), a read-aloud
+// walk mode, cards drafted from her notes (each checked against a quote from them) and a print page. Rules and storage in app/study.py.
+const STUDY_RATE = [[1, 'Again', 'bad'], [2, 'Hard', 'dim'], [3, 'Good', 'ok'], [4, 'Easy', 'pur']];
+let walk = null;
+const studyScope = (arg) => { const m = /^(?:review|walk)\/([cd])\/(\d+)/.exec(arg || ''); return m ? (m[1] === 'c' ? 'course=' : 'deck=') + m[2] : ''; };
+async function studyXp() {
+  try { const r = await post('/api/study/xp'); if (r.award) toast('+' + r.award.xp + ' XP to ' + r.award.stat + (r.award.level_up ? ' · level up!' : '')); } catch (e) { /* XP is a bonus */ }
+}
+VIEWS.study = async (arg) => {
+  if (/^review/.test(arg || '')) return studyReview(arg);
+  if (/^walk/.test(arg || '')) return studyWalk(arg);
+  if (/^deck\/\d+/.test(arg || '')) return studyDeck(+arg.split('/')[1]);
+  setHeader('Study', [btn('▶ Review', 'sm pur', () => go('#/study/review')), btn('🚶 Walk', 'sm', () => go('#/study/walk'))]);
+  show(h('div', { class: 'muted' }, 'Loading…'));
+  const d = await J('/api/study');
+  const again = async () => { await keepScroll(() => VIEWS.study()); refreshSide(); };
+  const act = async (f, msg) => { try { await f(); if (msg) toast(msg); again(); } catch (e) { toast(e.message, 1); } };
+  const decks = d.courses.flatMap((c) => c.decks.map((k) => ({ ...k, course: c.name })));
+  const printBtn = (q) => h('a', { class: 'btn sm dim', href: '/api/study/print?' + q, target: '_blank', rel: 'noopener', style: 'display:inline-flex;align-items:center;text-decoration:none' }, 'Print');
+  const courseCard = (c) => h('div', { class: 'card', style: 'margin-top:14px' },
+    h('div', { style: 'display:flex;align-items:center;gap:8px;flex-wrap:wrap' }, h('h3', { style: 'margin:0;flex:1' }, c.name),
+      h('button', { class: 'chip' + (c.days_to_exam != null && c.days_to_exam <= 3 && c.days_to_exam >= 0 ? ' bad' : ''), title: 'Set the exam day', onclick: () => {
+        const v = prompt('Exam day (like 2026-10-26), or empty for none:', c.exam_day || ''); if (v === null) return;
+        act(() => post(`/api/study/courses/${c.id}/exam`, { day: v.trim() }), 'Saved'); } },
+        c.exam_day ? (c.days_to_exam > 0 ? `exam in ${c.days_to_exam} days` : c.days_to_exam === 0 ? 'exam today' : 'exam ' + c.exam_day) : '+ exam day'),
+      h('span', { class: 'muted' }, `${c.due} due · ${c.cards} cards`)),
+    h('div', { class: 'list', style: 'margin-top:8px' }, c.decks.map((k) => h('div', { class: 'item', style: 'flex-wrap:wrap' },
+      h('div', { class: 'tx', role: 'button', tabindex: '0', style: 'cursor:pointer', onclick: () => go('#/study/deck/' + k.id) },
+        h('div', { style: 'color:#fff' }, k.name), h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1))' },
+          [k.chapters, `${k.due} due of ${k.cards}`, k.drafts ? `${k.drafts} drafts to check` : ''].filter(Boolean).join(' · '))),
+      btn('Review', 'sm ' + (k.due ? 'pur' : 'dim'), () => go('#/study/review/d/' + k.id)), btn('Walk', 'sm dim', () => go('#/study/walk/d/' + k.id)), printBtn('deck=' + k.id)))),
+    c.decks.length ? null : h('div', { class: 'empty' }, 'No decks yet: add one below or import cards.'),
+    h('div', { style: 'display:flex;gap:8px;flex-wrap:wrap;margin-top:10px' },
+      btn('Review all', 'sm ' + (c.due ? 'pur' : 'dim'), () => go('#/study/review/c/' + c.id)), btn('Walk all', 'sm dim', () => go('#/study/walk/c/' + c.id)), printBtn('course=' + c.id),
+      btn('Save a copy', 'sm dim', async () => { const x = await J('/api/study/export/' + c.id); const a = h('a', { href: URL.createObjectURL(new Blob([JSON.stringify(x, null, 1)], { type: 'application/json' })), download: c.name.replace(/[^\w-]+/g, '_') + '-cards.json' }); a.click(); }),
+      btn('Delete course', 'sm dim', () => { if (confirm(`Delete ${c.name} and all its cards and review history?`)) act(() => del('/api/study/courses/' + c.id), 'Deleted'); })),
+    c.notes ? h('details', { style: 'margin-top:8px' }, h('summary', { class: 'muted' }, 'Study tips'), h('div', { class: 'muted', style: 'white-space:pre-wrap;margin-top:6px' }, c.notes)) : null);
+  // make cards from notes
+  const deckSel = h('select', { 'aria-label': 'Deck' }, decks.map((k) => h('option', { value: k.id }, `${k.course}: ${k.name}`)));
+  const notes = h('textarea', { rows: 6, placeholder: 'Paste your class notes or a chapter section here (or pick a .txt or .md file).', 'aria-label': 'Notes', style: 'width:100%;resize:vertical' });
+  const file = h('input', { type: 'file', accept: '.txt,.md,text/plain,text/markdown', 'aria-label': 'Notes file', onchange: async () => { if (file.files[0]) notes.value = (await file.files[0].text()).slice(0, 12000); } });
+  const how = h('input', { type: 'number', value: 10, min: 1, max: 15, 'aria-label': 'How many cards', style: 'max-width:80px' });
+  const draftBox = decks.length ? h('div', { class: 'card', style: 'margin-top:14px' }, h('h3', {}, 'Make cards from your notes'),
+    h('div', { class: 'muted', style: 'margin-bottom:8px' }, 'Rosie drafts cards from your own notes. Each one quotes the line it came from, and a card whose answer isn\'t in your notes is dropped. You keep the good ones.'),
+    h('div', { class: 'form' }, deckSel, how), notes, h('div', { class: 'form', style: 'margin-top:8px' }, file,
+      btn('Draft cards', 'pur', async (e) => { const b = e.target; b.disabled = true; toast('Rosie is reading your notes (up to a minute)…');
+        try { const r = await post('/api/study/draft', { deck_id: +deckSel.value, notes: notes.value, n: +how.value || 10 }); toast(`${r.drafted} drafts ready` + (r.dropped ? `, ${r.dropped} dropped by the check` : '')); notes.value = ''; again(); }
+        catch (er) { toast(er.message, 1); } finally { b.disabled = false; } }))) : null;
+  const drafts = d.drafts.length ? h('div', { class: 'card', style: 'margin-top:14px;border-color:var(--warn)' }, h('h3', { style: 'color:var(--warn)' }, 'Drafts to check · ' + d.drafts.length),
+    h('div', { class: 'list' }, d.drafts.map((x) => h('div', { class: 'item', style: 'align-items:flex-start;flex-wrap:wrap' }, h('div', { class: 'tx' },
+      h('div', { style: 'color:#fff' }, x.q), h('div', {}, x.a), x.clue ? h('div', { class: 'muted', style: 'font-style:italic' }, x.clue) : null,
+      x.quote ? h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1));margin-top:4px' }, 'From your notes: “' + x.quote + '”') : null, h('span', { class: 'chip' }, x.deck)),
+      btn('Keep', 'sm ok', () => act(() => post(`/api/study/cards/${x.id}/keep`), 'Kept')), btn('Edit', 'sm dim', () => studyEdit(x, again)),
+      btn('Drop', 'sm dim', () => act(() => del('/api/study/cards/' + x.id))))))) : null;
+  // add a course, a deck, or import
+  const cname = h('input', { placeholder: 'New course, like ENVS 101', 'aria-label': 'Course name' });
+  const dcourse = h('select', { 'aria-label': 'Course' }, d.courses.map((c) => h('option', { value: c.id }, c.name)));
+  const dname = h('input', { placeholder: 'New deck, like Ecology', 'aria-label': 'Deck name' }), dch = h('input', { placeholder: 'chapters (optional)', 'aria-label': 'Chapters', style: 'max-width:160px' });
+  const icourse = h('input', { placeholder: 'Course for the imported cards', 'aria-label': 'Course for import' });
+  const ifile = h('input', { type: 'file', accept: '.json,application/json', 'aria-label': 'Cards file' });
+  const addBox = h('div', { class: 'card', style: 'margin-top:14px' }, h('h3', {}, 'Add'),
+    h('form', { class: 'form', onsubmit: (e) => { e.preventDefault(); if (cname.value.trim()) act(() => post('/api/study/courses', { name: cname.value }), 'Course added'); } }, cname, btn('Add course', 'pur', null, 'submit')),
+    d.courses.length ? h('form', { class: 'form', style: 'margin-top:8px', onsubmit: (e) => { e.preventDefault(); if (dname.value.trim()) act(() => post('/api/study/decks', { course_id: +dcourse.value, name: dname.value, chapters: dch.value }), 'Deck added'); } }, dcourse, dname, dch, btn('Add deck', 'pur', null, 'submit')) : null,
+    h('div', { class: 'muted', style: 'margin:12px 0 6px' }, 'Import a cards file (the cards.json format: decks, cards with q, a and a clue t, and tips). Cards already there are skipped.'),
+    h('form', { class: 'form', onsubmit: async (e) => { e.preventDefault(); if (!ifile.files[0] || !icourse.value.trim()) return toast('Pick a file and name the course', 1);
+      let data; try { data = JSON.parse(await ifile.files[0].text()); } catch (er) { return toast('That file is not JSON', 1); }
+      act(async () => { const r = await post('/api/study/import', { course: icourse.value, data }); toast(`${r.added} cards added in ${r.decks} decks` + (r.skipped ? `, ${r.skipped} already there` : '')); }); } },
+      icourse, ifile, btn('Import', 'pur', null, 'submit')));
+  show(h('div', { class: 'pagehead' }, h('h2', {}, 'Study'), h('span', { class: 'muted' },
+    d.courses.length ? `${d.due} cards due now · reviewed today: ${d.reviewed_today}` + (d.reviewed_today ? ` (${d.right_today} right)` : '') + '. Cards come back just before you would forget them.' : 'Flash cards that come back just before you would forget them.')),
+    d.courses.length ? null : h('div', { class: 'empty', style: 'margin-top:12px' }, 'Start by adding a course, or import a cards file.'),
+    drafts, ...d.courses.map(courseCard), draftBox, addBox);
+};
+function studyEdit(x, onDone) {
+  const q = h('textarea', { rows: 2, 'aria-label': 'Question', style: 'width:100%' }), a = h('textarea', { rows: 3, 'aria-label': 'Answer', style: 'width:100%' }), t = h('textarea', { rows: 2, 'aria-label': 'Clue', style: 'width:100%' });
+  q.value = x.q; a.value = x.a; t.value = x.clue || '';
+  const lab = (s) => h('div', { class: 'muted', style: 'margin:8px 0 4px' }, s);
+  return modal('Card', h('div', { style: 'white-space:normal' }, lab('Question'), q, lab('Answer'), a, lab('Memory clue (optional)'), t), { ok: 'Save', cancel: 'Close' }).then(async (ok) => {
+    if (!ok) return; try { await put('/api/study/cards/' + x.id, { q: q.value, a: a.value, clue: t.value }); toast('Saved'); onDone(); } catch (e) { toast(e.message, 1); } });
+}
+async function studyDeck(id) {
+  const d = await J('/api/study/decks/' + id);
+  const again = () => keepScroll(() => studyDeck(id));
+  setHeader(d.deck.name, [btn('← Study', 'sm dim', () => go('#/study')), btn('▶ Review', 'sm pur', () => go('#/study/review/d/' + id))]);
+  const q = h('input', { placeholder: 'Question', 'aria-label': 'Question' }), a = h('input', { placeholder: 'Answer', 'aria-label': 'Answer' }), t = h('input', { placeholder: 'Clue (optional)', 'aria-label': 'Clue' });
+  show(h('div', { class: 'pagehead' }, h('h2', {}, d.deck.name), h('span', { class: 'muted' }, `${d.deck.course}${d.deck.chapters ? ' · ' + d.deck.chapters : ''} · ${d.cards.length} cards. Tap a card to change it.`)),
+    h('div', { class: 'card' }, h('form', { class: 'form', style: 'flex-wrap:wrap', onsubmit: async (e) => { e.preventDefault(); if (!q.value.trim() || !a.value.trim()) return;
+      try { await post('/api/study/cards', { deck_id: id, q: q.value, a: a.value, clue: t.value }); again(); } catch (er) { toast(er.message, 1); } } }, q, a, t, btn('Add card', 'pur', null, 'submit'))),
+    h('div', { class: 'list', style: 'margin-top:14px' }, d.cards.map((x) => h('div', { class: 'item', style: 'align-items:flex-start' },
+      h('div', { class: 'tx', role: 'button', tabindex: '0', style: 'cursor:pointer', onclick: () => studyEdit(x, again) }, h('div', { style: 'color:#fff' }, x.q), h('div', { class: 'muted' }, x.a),
+        x.status === 'draft' ? h('span', { class: 'chip' }, 'draft') : null),
+      h('button', { class: 'x', 'aria-label': 'Delete card', onclick: async () => { if (!confirm('Delete this card?')) return; await del('/api/study/cards/' + x.id); again(); } }, '✕')))));
+}
+async function studyReview(arg) {
+  const scope = studyScope(arg);
+  const cards = (await J('/api/study/due?limit=200&' + scope)).cards;
+  let i = 0, right = 0, done = 0, shown = false;
+  const finish = async () => { document.onkeydown = null; await studyXp(); refreshSide(); go('#/study'); };
+  setHeader('Review', [btn('Done', 'sm dim', finish)]);
+  const box = h('div', { class: 'card', style: 'min-height:260px;display:flex;flex-direction:column;justify-content:center;text-align:center;padding:24px' });
+  const bar = h('div', { class: 'muted', style: 'margin-bottom:10px' });
+  const draw = () => {
+    if (i >= cards.length) {
+      document.onkeydown = null;
+      bar.textContent = '';
+      box.replaceChildren(h('h2', {}, cards.length ? 'Done for now' : 'Nothing due'), h('div', { class: 'muted', style: 'margin:8px 0 16px' },
+        cards.length ? `${done} cards, ${right} remembered. The ones you missed come back soon.` : 'Every card is resting until it is due again. Come back later, or study with Walk.'), btn('Back to Study', 'pur', finish));
+      return;
+    }
+    const c = cards[i];
+    bar.textContent = `${i + 1} of ${cards.length} · ${c.course}: ${c.deck}`;
+    const kids = [h('div', { style: 'font-size:calc(22px*var(--ts,1));color:#fff;margin-bottom:16px' }, c.q)];
+    if (shown) {
+      kids.push(h('div', { style: 'font-size:calc(17px*var(--ts,1));margin-bottom:8px' }, c.a));
+      if (c.clue) kids.push(h('div', { class: 'muted', style: 'font-style:italic;margin-bottom:8px' }, c.clue));
+      kids.push(h('div', { style: 'display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:12px' },
+        STUDY_RATE.map(([n, label, cls]) => btn(`${n} ${label}`, cls, () => rate(n)))));
+    } else kids.push(btn('Show answer (space)', 'pur', () => { shown = true; draw(); }));
+    box.replaceChildren(...kids);
+  };
+  const again = {};
+  const rate = async (n) => {
+    const c = cards[i];
+    try { await post('/api/study/review', { card_id: c.id, rating: n }); } catch (e) { toast(e.message, 1); return; }
+    done += 1; if (n > 1) right += 1;
+    if (n === 1 && (again[c.id] = (again[c.id] || 0) + 1) <= 2) cards.push(c);   // a missed card comes round again (twice at most)
+    i += 1; shown = false; draw();
+    if (done % 20 === 0) studyXp();
+  };
+  document.onkeydown = (e) => {
+    if (e.target.closest && e.target.closest('input,textarea')) return;
+    if (!shown && (e.key === ' ' || e.key === 'Enter')) { e.preventDefault(); shown = true; draw(); }
+    else if (shown && /^[1-4]$/.test(e.key)) rate(+e.key);
+  };
+  show(bar, box, h('div', { class: 'muted', style: 'margin-top:10px;font-size:calc(12px*var(--ts,1))' }, 'Again = forgot, Hard = barely, Good = got it, Easy = instant. Keys: space shows the answer, 1 to 4 rate it.'));
+  draw();
+}
+// Walk mode: Rosie reads each question, waits, reads the answer and clue. Tap Got it or Missed (or use the headphone buttons: next = got it,
+// previous = missed). A card you don't rate is just read, not scheduled.
+function walkStop() { if (walk) { walk.stop = true; try { walk.audio.pause(); } catch (e) { /* none */ } walk = null; document.onkeydown = null; } }
+async function walkSay(text) {
+  const r = await fetch('/api/speak', jopt('POST', { text }));
+  if (!r.ok) throw new Error('Rosie\'s voice is not available');
+  const url = URL.createObjectURL(await r.blob());
+  await new Promise((res) => { if (!walk) return res(); walk.audio.src = url; walk.audio.onended = res; walk.audio.onerror = res; walk.audio.play().catch(res); });
+  URL.revokeObjectURL(url);
+}
+const walkWait = (ms) => new Promise((res) => { const t = setTimeout(res, ms); if (walk) walk.wake = () => { clearTimeout(t); res(); }; });
+async function studyWalk(arg) {
+  walkStop();
+  const scope = studyScope(arg);
+  const dueNow = (await J('/api/study/due?limit=200&' + scope)).cards;
+  setHeader('Walk', [btn('Stop', 'sm dim', () => { walkStop(); studyXp(); go('#/study'); })]);
+  const pause = h('input', { type: 'number', min: 2, max: 30, value: store.get('walk_pause', 6), 'aria-label': 'Seconds to answer', style: 'max-width:80px', onchange: () => store.set('walk_pause', +pause.value || 6) });
+  const clue = h('input', { type: 'checkbox', checked: store.get('walk_clue', true), onchange: () => store.set('walk_clue', clue.checked) });
+  const onlyDue = h('input', { type: 'checkbox', checked: dueNow.length > 0 });
+  const now = h('div', { style: 'font-size:calc(22px*var(--ts,1));color:#fff;min-height:90px;text-align:center;margin:12px 0' },
+    dueNow.length ? `${dueNow.length} cards due. Ready when you are.` : 'Nothing is due, so the walk goes through every card.');
+  const info = h('div', { class: 'muted', style: 'text-align:center' });
+  let pick = null;
+  const big = (label, cls, n) => h('button', { class: 'btn ' + cls, style: 'flex:1;min-height:110px;font-size:calc(20px*var(--ts,1))', onclick: () => { pick = n; if (walk && walk.wake) walk.wake(); } }, label);
+  const start = btn('▶ Start', 'pur', async () => {
+    if (walk) return;
+    const cards = onlyDue.checked ? dueNow.slice() : (await J('/api/study/due?limit=500&every=1&' + scope)).cards;
+    if (!cards.length) return toast('No cards here yet.', 1);
+    const again = {};
+    walk = { stop: false, audio: new Audio(), wake: null };
+    if ('mediaSession' in navigator) {
+      navigator.mediaSession.setActionHandler('nexttrack', () => { pick = 3; if (walk && walk.wake) walk.wake(); });
+      navigator.mediaSession.setActionHandler('previoustrack', () => { pick = 1; if (walk && walk.wake) walk.wake(); });
+    }
+    let done = 0, right = 0;
+    try {
+      for (let i = 0; walk && !walk.stop && i < cards.length; i++) {
+        const c = cards[i]; pick = null;
+        info.textContent = `${i + 1} of ${cards.length} · ${c.course}: ${c.deck}`;
+        now.textContent = c.q;
+        await walkSay(c.q); if (!walk || walk.stop) break;
+        await walkWait((+pause.value || 6) * 1000); if (!walk || walk.stop) break;
+        now.replaceChildren(h('div', {}, c.q), h('div', { style: 'font-size:calc(17px*var(--ts,1));color:var(--acc);margin-top:8px' }, c.a));
+        await walkSay('Answer. ' + c.a + (clue.checked && c.clue ? '. Clue. ' + c.clue : '')); if (!walk || walk.stop) break;
+        if (pick == null) await walkWait(5000);
+        if (pick != null) {
+          try { await post('/api/study/review', { card_id: c.id, rating: pick }); done += 1; if (pick > 1) right += 1; else if ((again[c.id] = (again[c.id] || 0) + 1) <= 2) cards.push(c); } catch (e) { /* keep walking */ }
+        }
+      }
+    } catch (e) { toast(e.message, 1); }
+    if (walk && !walk.stop) { now.textContent = `Done: ${done} rated, ${right} remembered.`; await walkSay(`Done. ${right} of ${done} remembered. Nice walk.`).catch(() => {}); }
+    walkStop(); studyXp(); refreshSide();
+  });
+  show(h('div', { class: 'pagehead' }, h('h2', {}, 'Walk mode'), h('span', { class: 'muted' }, 'Rosie reads each question, gives you time to answer out loud, then reads the answer. Tap Got it or Missed, or use your headphone buttons (next = got it, back = missed).')),
+    h('div', { class: 'card' }, h('div', { class: 'form', style: 'align-items:center' }, start, h('label', { class: 'muted' }, 'Seconds to answer '), pause,
+      h('label', { class: 'muted', style: 'display:flex;align-items:center;gap:6px' }, clue, 'Read the clue'),
+      h('label', { class: 'muted', style: 'display:flex;align-items:center;gap:6px' }, onlyDue, 'Only cards that are due')), info, now,
+      h('div', { style: 'display:flex;gap:10px' }, big('✗ Missed', 'bad', 1), big('✓ Got it', 'ok', 3))));
+}
 
 // ----- Life Quest (a gamified life: stats, quests, evidence-gated XP, a Sunday review; rules and storage in app/lifequest.py) -----
 const LQ_COLORS = ['var(--acc)', 'var(--pur)', 'var(--ok)', '#FFD23F', 'var(--pink)', 'var(--warn)', '#FF9F43', '#5EEAD4', '#FDA4AF', '#A3E635'];

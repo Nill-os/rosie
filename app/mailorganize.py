@@ -14,6 +14,25 @@ ROOT = Path(__file__).resolve().parent.parent
 UNDO = ROOT / "data" / "mail_organize_undo.json"
 MAX_LABELS = 40                             # most labels the owner may allow
 SKIP = {"STARRED", "TRASH", "SPAM", "DRAFT"}
+RATE_WAITS = (5, 15, 40)                    # seconds between tries when Gmail says "too many requests" (its per-minute quota, 2026-10-24)
+_sleep = time.sleep
+
+
+def _rate_limited(e) -> bool:
+    status = getattr(getattr(e, "resp", None), "status", 0)
+    return status == 429 or (status == 403 and b"ateLimitExceeded" in (getattr(e, "content", b"") or b""))
+
+
+def _run(req):
+    """req.execute(), waiting and trying again while Gmail says the per-minute quota is used up."""
+    from googleapiclient.errors import HttpError
+    for wait in (*RATE_WAITS, None):
+        try:
+            return req.execute()
+        except HttpError as e:
+            if wait is None or not _rate_limited(e):
+                raise
+            _sleep(wait)
 
 
 def account_labels(name) -> dict:
@@ -59,12 +78,25 @@ def choices_for(name) -> dict:
 
 def _current(svc, ids) -> dict:
     """{id: set of label ids} as Gmail has them right now (so mail the owner starred or archived since triage is seen)."""
-    got = {}
-    for i in range(0, len(ids), 50):
-        b = svc.new_batch_http_request(callback=lambda rid, resp, exc: got.update({resp["id"]: set(resp.get("labelIds", []))}) if resp else None)
-        for m in ids[i:i + 50]:
-            b.add(svc.users().messages().get(userId="me", id=m, format="minimal"))
-        b.execute()
+    got, todo = {}, list(ids)
+    for wait in (*RATE_WAITS, None):
+        limited = []
+
+        def seen(rid, resp, exc):
+            if resp:
+                got[resp["id"]] = set(resp.get("labelIds", []))
+            elif exc is not None and _rate_limited(exc):
+                limited.append(rid)                        # asked again after a wait; any other error means the mail is gone
+
+        for i in range(0, len(todo), 50):
+            b = svc.new_batch_http_request(callback=seen)
+            for m in todo[i:i + 50]:
+                b.add(svc.users().messages().get(userId="me", id=m, format="minimal"), request_id=m)
+            _run(b)
+        if not limited or wait is None:
+            return got
+        todo = limited
+        _sleep(wait)
     return got
 
 
@@ -123,19 +155,30 @@ def apply(account="") -> dict:
         if not groups:
             return {"status": "nothing", "message": "Nothing to label."}
         UNDO.parent.mkdir(exist_ok=True)
+        try:                                                   # a run right after one that stopped part way: one undo covers both
+            prev = json.loads(UNDO.read_text())
+            if prev.get("account") == p["account"] and prev.get("archived") == archive and time.time() - prev.get("ts", 0) < 3600:
+                groups = prev["groups"] + groups
+        except (OSError, ValueError, KeyError):
+            pass
         UNDO.write_text(json.dumps({"account": p["account"], "archived": archive, "groups": groups, "ts": time.time()}))
         UNDO.chmod(0o600)                                      # written first: a failure part way through can still be undone
         svc = gmail.service(p["account"])
         for g in groups:
             for i in range(0, len(g["ids"]), 1000):
-                svc.users().messages().batchModify(userId="me", body={"ids": g["ids"][i:i + 1000], "addLabelIds": [g["label_id"]]}).execute()
+                _run(svc.users().messages().batchModify(userId="me", body={"ids": g["ids"][i:i + 1000], "addLabelIds": [g["label_id"]]}))
             if archive:
                 for i in range(0, len(g["ids"]), 1000):
-                    svc.users().messages().batchModify(userId="me", body={"ids": g["ids"][i:i + 1000], "removeLabelIds": ["INBOX"]}).execute()
+                    _run(svc.users().messages().batchModify(userId="me", body={"ids": g["ids"][i:i + 1000], "removeLabelIds": ["INBOX"]}))
         mailwatch.mark_labeled(p["account"], [i for g in groups for i in g["ids"]], "applied")
         return {"status": "done", "changed": sum(len(g["ids"]) for g in groups), "archived": archive, "note": "Undo removes the labels again."}
     except (gmail.MailLoginExpired, ValueError) as e:
         return {"error": str(e)}
+    except Exception as e:                                     # Gmail refused (still busy after the waits, or down): say so; the undo file is kept
+        if type(e).__name__ != "HttpError":
+            raise
+        return {"error": "Gmail is busy right now. Wait a minute and press OK again: mail already labeled is skipped." if _rate_limited(e)
+                else f"Gmail refused the change ({getattr(getattr(e, 'resp', None), 'status', '?')})."}
 
 
 def undo() -> dict:
@@ -153,7 +196,7 @@ def undo() -> dict:
                 body = {"ids": g["ids"][i:i + 1000], "removeLabelIds": [g["label_id"]]}
                 if u["archived"]:
                     body["addLabelIds"] = ["INBOX"]
-                svc.users().messages().batchModify(userId="me", body=body).execute()
+                _run(svc.users().messages().batchModify(userId="me", body=body))
     except gmail.MailLoginExpired as e:
         return {"error": str(e)}
     mailwatch.mark_labeled(u["account"], [i for g in u["groups"] for i in g["ids"]], "undone")      # not offered again

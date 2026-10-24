@@ -40,6 +40,7 @@ import corner
 import corner_api
 import hub
 import lifequest_api
+import study_api
 import models
 import a0_api
 import vector_api
@@ -59,6 +60,7 @@ app.include_router(paper_api.router)
 app.include_router(a0_api.router)
 app.include_router(corner_api.router)
 app.include_router(lifequest_api.router)
+app.include_router(study_api.router)
 app.include_router(agentdeck_api.router)
 app.include_router(graphview_api.router)
 app.include_router(vector_api.router)
