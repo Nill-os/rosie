@@ -156,12 +156,12 @@ def test_only_one_tune_at_a_time(monkeypatch):
 def test_settings_show_and_start_a_tune(tmp_path, monkeypatch):
     import server
     (tmp_path / "secrets").mkdir(exist_ok=True)
-    (tmp_path / "secrets" / "session_key").write_text("testkey")
+    (tmp_path / "secrets" / "session_key").write_text("testkey-0123456789abcdef0123456789abcdef")
     monkeypatch.setattr(server, "SECRETS", tmp_path / "secrets")
     started = []
     monkeypatch.setattr(ctxsize, "start", lambda m: started.append(m) or True)
     c = TestClient(server.app)
-    c.cookies.set("assistant_session", hmac.new(b"testkey", b"assistant-ok", hashlib.sha256).hexdigest())
+    c.cookies.set("assistant_session", hmac.new(b"testkey-0123456789abcdef0123456789abcdef", b"assistant-ok", hashlib.sha256).hexdigest())
     got = c.get("/api/ctx").json()
     assert got["current"] == {"num_ctx": ctxsize.DEFAULT_CTX} and got["tuned"] is False and got["status"]["running"] is False
     assert c.post("/api/ctx/tune", json={}).json() == {"started": True} and started
@@ -175,7 +175,7 @@ def test_agent_zero_follows_rosies_model_and_keeps_its_own_extras(tmp_path):
     presetf.write_text(yaml.safe_dump([{"name": "Default", "chat": {"provider": "openrouter", "name": "x"}},
                                        {"name": "Local", "chat": {"provider": "ollama", "name": "old", "kwargs": {"num_ctx": 32768}},
                                         "utility": {"provider": "ollama", "name": "old", "kwargs": {"reasoning_effort": "none", "num_ctx": 32768}}}]))
-    script = ctxsize.SYNC_SCRIPT.replace("/a0/usr/plugins/_model_config/config.json", str(cfgf)).replace("/a0/usr/plugins/_model_config/presets.yaml", str(presetf))
+    script = ctxsize.SYNC_SCRIPT.replace("/a0/usr/plugins/_model_config/config.json", cfgf.as_posix()).replace("/a0/usr/plugins/_model_config/presets.yaml", presetf.as_posix())
     out = subprocess.run([sys.executable, "-c", script, json.dumps({"model": "new:9b", "num_ctx": 65536, "num_gpu": 99})], capture_output=True, text=True)
     assert out.returncode == 0 and "updated preset Local" in out.stdout
     local = next(p for p in yaml.safe_load(presetf.read_text()) if p["name"] == "Local")

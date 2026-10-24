@@ -8,6 +8,7 @@ import inbox
 import phone
 import tasks
 import workflows
+import timefmt
 
 R = re.I
 
@@ -48,10 +49,10 @@ def try_fast(text: str, now: dt.datetime | None = None):
     # ---- time and date
     if re.fullmatch(r"(what(?:'s| is) the time|what time is it(?: right now| now)?|tell me the time|time)", low):
         n = now or dt.datetime.now()
-        return _result(f"It's {n.strftime('%-I:%M %p')}.")
+        return _result(f"It's {n.strftime(timefmt.nopad('%-I:%M %p'))}.")
     if re.fullmatch(r"(what(?:'s| is) (?:the )?(?:date|day)(?: today)?|what day is it(?: today)?|what(?:'s| is) today(?:'s date)?)", low):
         n = now or dt.datetime.now()
-        return _result(f"It's {n.strftime('%A, %B %-d')}.")
+        return _result(f"It's {n.strftime(timefmt.nopad('%A, %B %-d'))}.")
 
     # ---- reminders
     m = re.match(r"^(?:please )?(?:remind me|set (?:a )?reminder|remember(?= to )) (?:to |that |about )?(.+)$", t, R)
@@ -66,7 +67,7 @@ def try_fast(text: str, now: dt.datetime | None = None):
             except ValueError as e:
                 return _result(str(e))
             due = dt.datetime.strptime(r["due"], "%A %Y-%m-%d %H:%M")
-            return _result(f"Reminder set for {due.strftime('%A %-I:%M %p')}: {what}.", "set_reminder", {"text": what, "when": when}, r)
+            return _result(f"Reminder set for {due.strftime(timefmt.nopad('%A %-I:%M %p'))}: {what}.", "set_reminder", {"text": what, "when": when}, r)
 
     # ---- timers and alarms (phone)
     m2 = re.match(r"^(?:set (?:a |an )?)?timer (?:for )?(\d+(?:\.\d+)?) ?(minutes?|mins?|hours?|hrs?|seconds?|secs?)$", low) or re.match(r"^(?:set (?:a |an )?)?(\d+(?:\.\d+)?)[ -](minutes?|mins?|hours?|hrs?)[ -]?timer$", low)
@@ -89,7 +90,7 @@ def try_fast(text: str, now: dt.datetime | None = None):
         r = phone.alarm(f"{h:02d}:{mi:02d}", "")
         if r.get("error"):
             return _result(r["error"])
-        shown = dt.time(h, mi).strftime("%-I:%M %p")
+        shown = dt.time(h, mi).strftime(timefmt.nopad("%-I:%M %p"))
         return _result(f"Alarm set for {shown}.", "phone_set_alarm", {"time_24h": f"{h:02d}:{mi:02d}"}, r)
 
     # ---- tasks

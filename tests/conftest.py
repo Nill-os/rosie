@@ -30,7 +30,8 @@ for _k, _v in {"ROSIE_OPS_DIR": "rosie-ops", "ROSIE_CHATS_DB": "chats.db", "ROSI
     os.environ[_k] = str(_SANDBOX / _v)                      # always a stand-in, even if the shell had a real one set
 os.environ["ROSIE_PORT"] = "1"                               # never the live port (8765) or the staging port
 os.environ["TZ"] = "America/Los_Angeles"                    # the test data's clock times are Pacific: same results in any zone
-time.tzset()
+if hasattr(time, "tzset"):                                   # Windows has none: its CI job sets the machine's zone to Pacific instead
+    time.tzset()
 os.environ["ROSIE_STAGE_PORT"] = "2"
 
 sys.path.insert(0, str(ROOT / "app"))
@@ -57,11 +58,23 @@ PATCHES = [("config", "PATH", "config.json"), ("tasks", "DB", "tasks.db"), ("inb
            ("dictation", "LOG", "dictation.log"), ("dictation", "STATUS", "dictation.status.json"), ("dictation", "STATUS_AI", "ai.status.json"),
            ("dictation", "LOCK", "dictation.lock"), ("corner", "DIR", "corner"),
            ("corner_graph", "SECRET", "secrets/graphiti_falkordb_password"),
-           ("a0", "SECRETS", "secrets/agent_zero.json"), ("a0", "CONTEXTS", "a0_contexts.json"), ("a0", "INCLUDE", "rosie.promptinclude.md"),
-           ("a0", "INCLUDE_TOOLS", "rosie-tools.promptinclude.md"),
-           ("a0_mcp", "AUDIT", "mcp_audit.log"), ("a0_api", "AUDIT", "mcp_audit.log"), ("paper", "DB", "paper.db"), ("paper", "DIR", "paper"), ("paper", "REDDIT_KEYS", "secrets/reddit.json")]
+           ("a0", "SECRETS", "secrets/agent_zero.json"), ("a0_host", "FILE", "a0_host.json"), ("a0", "CONTEXTS", "a0_contexts.json"), ("a0", "OUTSIDE", "a0_outside.json"), ("a0", "INCLUDE", "rosie.promptinclude.md"),
+           ("a0", "INCLUDE_TOOLS", "rosie-tools.promptinclude.md"), ("a0", "INCLUDE_CLAUDE", "claude.promptinclude.md"),
+           ("a0", "EXT_DIR", "a0-ext/python"), ("a0", "TURNS", "a0-turns"),
+           ("a0_mcp", "AUDIT", "mcp_audit.log"), ("a0_api", "AUDIT", "mcp_audit.log"), ("paper", "DB", "paper.db"), ("paper", "DIR", "paper"), ("paper", "REDDIT_KEYS", "secrets/reddit.json"),
+           ("agentboard", "DB", "board.db"), ("agentboard", "OPS", "rosie-ops"), ("agentboard", "SESSIONS", "claude-sessions"), ("claude_plan", "STATE", "claude_plan.json"), ("model_scout", "STATE", "model_scout.json"), ("security_watch", "STATE", "security_watch.json"), ("servers", "STATE", "servers.json"), ("ctxsize", "LIVE_FILE", "live_model.json"), ("claude_plan", "WORKDIR", "claude_plan_cwd"), ("skill_sync", "CLAUDE", "claude-home"), ("skill_sync", "CLAUDE_SKILLS", "claude-home/skills"), ("skill_sync", "A0_SKILLS", "a0-skills"), ("skill_sync", "STATE", "skill_sync.json"), ("skill_sync", "APPROVED", "skill_sync_approved.json"), ("hub", "ORCH", "claude-home/skills/orchestrate/state.json"),
+           ("server", "VECTOR_CHAT", "vector_chat.json"), ("vector_pod", "DIR", "vector"), ("vector_pod", "CERT", "vector/cert.pem"), ("vector_pod", "KEY", "vector/key.pem"),
+           ("vector_pod", "DOCS", "vector/jdocs.json"), ("vector_pod", "TOKEN", "vector/client_token"), ("vector_pod", "SSH_KEY", "vector/ssh_root_key"), ("vector_pod", "WIREPOD", "wire-pod"), ("vector_pod", "EP_CERT", "vector/ep.crt"), ("vector_pod", "EP_KEY", "vector/ep.key"), ("vector_pod", "HEY_ROSIE", "vector/hey_rosie_1-5.ppn"), ("vector_pod", "LAST_HEARD", "vector/last_heard.wav")]
 ALWAYS = ("config", "tasks", "inbox", "chats", "memory", "lessons", "proposals", "skills", "pc_tools", "server",
-          "briefs", "projects", "mailwatch", "gcal", "gmail", "workflows", "corner_graph", "a0", "paper")
+          "briefs", "projects", "mailwatch", "gcal", "gmail", "workflows", "corner_graph", "a0", "paper", "agentboard", "skill_sync", "vector_pod")
+
+
+# Linux-only parts (owner 2026-10-23, the Windows copy): on Windows these features are off (hub.pages_off) or replaced, so their tests
+# don't run there. Everything else runs on both.
+LINUX_ONLY = ["test_agentdeck.py", "test_backup.py", "test_slots.py", "test_selfdev.py", "test_skill_sync.py", "test_a0_monitor.py",
+              "test_audit_1020.py", "test_vector.py", "test_terminals.py", "test_dictation.py", "test_overlay.py", "test_meetings.py",
+              "test_power.py", "test_security_watch.py"]
+collect_ignore = LINUX_ONLY if sys.platform == "win32" else []
 
 
 class NetworkBlocked(Exception):
@@ -92,6 +105,11 @@ def isolated(tmp_path, monkeypatch):
             monkeypatch.setattr(m, attr, tmp_path / stand_in)
     import inbox
     monkeypatch.setattr(inbox, "notify_desktop", lambda *a, **k: False)       # never a real desktop notification
+    import pchealth                                          # a healthy PC with nobody at it, whatever this PC's memory, heat and power are
+    monkeypatch.setattr(pchealth, "mem_available", lambda fresh=False: 32 * 1024 ** 3)
+    monkeypatch.setattr(pchealth, "cpu_temp", lambda: 50.0)
+    monkeypatch.setattr(pchealth, "on_battery", lambda: False)
+    monkeypatch.setattr(pchealth, "input_idle_s", lambda: 3600.0)
     _no_network(monkeypatch)
     testguard.block_network(monkeypatch.setattr)             # even if a test swapped a socket function, it's guarded again
     return tmp_path

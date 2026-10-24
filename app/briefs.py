@@ -59,6 +59,8 @@ def build_text(day: dt.date | None = None) -> str:
         cal = [e for e in gcal.events_on(day) if not e["all_day"]]
     except gcal.LoginExpired as e:
         cal, cal_error = [], str(e)
+    except Exception as e:                                # no network yet after a wake-up: a brief without the calendar beats no brief
+        cal, cal_error = [], f"The calendar couldn't be read ({type(e).__name__}); check it yourself today."   # (audit 2026-10-23)
     open_today = [t for t in tasks.list_for(day.isoformat()) if not t["done"]]
     overdue = tasks.overdue()
     aging = []

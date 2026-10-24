@@ -245,7 +245,8 @@ def make_plan(ref, guidance=""):
     ms = [m["title"] for m in milestones(p["id"])]
     g = git_info(p["folder"])
     today = workflows.today()
-    r = workflows.llm_json(
+    import claude_plan
+    r = claude_plan.llm_json(          # Claude when Settings > Planning allows, else her own model
         "You plan a small project for a busy user: calm, concrete, honest. Make 3 to 5 milestones (each a visible result, not an activity), each with 1 to 4 small tasks that fit "
         "in under 90 minutes and start with a verb. 'next_action' = the single smallest first step to do next (under 12 words). risks = up to 3 honest risks or unknowns (including "
         "'this may be harder than it looks' if so). Use 'due' only as date words or YYYY-MM-DD, or leave it empty; never invent deadlines. Do not repeat existing tasks or milestones. Plain words.",

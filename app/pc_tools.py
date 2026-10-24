@@ -7,9 +7,22 @@ from pathlib import Path
 import os
 import shutil
 
+def user_bus_env() -> dict:
+    """This environment plus the owner's user systemd bus. Rosie runs as a system service without them, so `systemd-run --user` and
+    `systemctl --user` failed with "Failed to connect to bus" (audit 2026-10-20: Shut down all and the self-update jobs)."""
+    if os.name == "nt":                                    # Windows has no user bus: the plain environment
+        return dict(os.environ)
+    run = f"/run/user/{os.getuid()}"
+    return {**os.environ, "XDG_RUNTIME_DIR": os.environ.get("XDG_RUNTIME_DIR") or run,
+            "DBUS_SESSION_BUS_ADDRESS": os.environ.get("DBUS_SESSION_BUS_ADDRESS") or f"unix:path={run}/bus"}
+
+
 def gui_env() -> dict:
     """Environment of the user's live desktop session (DISPLAY, XAUTHORITY, ...), read from the running
-    desktop shell, because this service runs headless. Works for X11 and Wayland."""
+    desktop shell, because this service runs headless. Works for X11 and Wayland. On Windows Rosie runs in the owner's own session:
+    nothing extra is needed ({})."""
+    if os.name == "nt":
+        return {}
     me = os.getuid()
     for name in ("gnome-shell", "gnome-session-binary", "cinnamon", "plasmashell", "xfce4-session"):
         r = subprocess.run(["pgrep", "-u", str(me), "-x", name], capture_output=True, text=True)
@@ -25,7 +38,25 @@ def gui_env() -> dict:
                 keep.setdefault("XDG_RUNTIME_DIR", f"/run/user/{me}")
                 keep.setdefault("DBUS_SESSION_BUS_ADDRESS", f"unix:path=/run/user/{me}/bus")
                 return keep
-    return {}
+    return _session_env(me)
+
+
+GUI_KEYS = ("DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS", "XDG_CURRENT_DESKTOP", "XDG_SESSION_TYPE")
+
+
+def _session_env(me: int) -> dict:
+    """The desktop session's environment as the user's systemd keeps it. On a Wayland session gnome-shell's own environment has no
+    DISPLAY or WAYLAND_DISPLAY (it makes them), so the loop in gui_env found nothing and every desktop feature of the service
+    (notifications, the voice-key and overlay checks) went without (2026-10-22)."""
+    run = f"/run/user/{me}"
+    base = {"XDG_RUNTIME_DIR": run, "DBUS_SESSION_BUS_ADDRESS": f"unix:path={run}/bus"}
+    try:
+        out = subprocess.run(["systemctl", "--user", "show-environment"], capture_output=True, text=True, timeout=5, env={**os.environ, **base}).stdout
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    env = dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
+    keep = {**base, **{k: env[k] for k in GUI_KEYS if k in env}}
+    return keep if "DISPLAY" in keep or "WAYLAND_DISPLAY" in keep else {}
 
 
 LOG = Path(__file__).resolve().parent.parent / "data" / "audit.log"
@@ -46,24 +77,70 @@ def _trim(s):
 
 
 def run_command(command: str, cwd: str = "~", timeout: int = 60):
+    """One command in the user's shell (PowerShell on Windows, bash here). It runs in its own process group, so a timeout stops
+    exactly what it started, by PID (a program it left running would otherwise hold the output pipe open forever on Windows)."""
+    import plat
     cwd = str(Path(cwd).expanduser())
     _log("run", {"command": command, "cwd": cwd})
     try:
-        p = subprocess.run(["bash", "-lc", command], cwd=cwd, capture_output=True, text=True,
-                           timeout=min(int(timeout), 600), stdin=subprocess.DEVNULL, env={**os.environ, **gui_env()})
-        return {"exit_code": p.returncode, "stdout": _trim(p.stdout), "stderr": _trim(p.stderr)}
+        limit = min(max(int(timeout), 1), 600)
+    except (TypeError, ValueError):
+        limit = 60
+    kw = {"cwd": cwd, "stdin": subprocess.DEVNULL, "stdout": subprocess.PIPE, "stderr": subprocess.PIPE, "text": True,
+          "encoding": "utf-8", "errors": "replace", "env": {**os.environ, **gui_env()}}
+    if os.name == "nt":
+        kw["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | plat.NO_WINDOW
+    else:
+        kw["start_new_session"] = True
+    try:
+        p = subprocess.Popen(plat.shell_argv(command), **kw)
+    except OSError as e:
+        return {"error": f"Could not run it: {e}"}
+    try:
+        out, err = p.communicate(timeout=limit)
+        return {"exit_code": p.returncode, "stdout": _trim(out), "stderr": _trim(err)}
     except subprocess.TimeoutExpired:
-        return {"error": f"Timed out after {timeout}s"}
+        if p.poll() is None:                                  # the command itself still runs: stop it and what it started
+            _stop_tree(p.pid)
+            msg = f"Timed out after {limit}s"
+        else:                                                 # it finished, but an app it started (`app &`) still holds the output
+            msg = f"Done (exit {p.returncode}); a program it started is still running"
+        try:
+            out, err = p.communicate(timeout=5)
+        except subprocess.TimeoutExpired as e:
+            dec = lambda b: b.decode("utf-8", "replace") if isinstance(b, bytes) else (b or "")   # noqa: E731
+            out, err = dec(e.stdout), dec(e.stderr)
+            p.stdout.close()
+            p.stderr.close()
+        return {"error": msg, "stdout": _trim(out or ""), "stderr": _trim(err or "")}
+
+
+def _stop_tree(pid: int):
+    """Stop a timed-out command and only the processes it started (its own process group / tree), by PID."""
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)], capture_output=True, timeout=20)
+        else:
+            import signal
+            os.killpg(pid, signal.SIGKILL)
+    except (OSError, subprocess.SubprocessError):
+        pass
 
 
 def read_file(path: str, max_chars: int = 6000):
-    p = Path(path).expanduser()
-    _log("read", {"path": str(p)})
+    """Through fsguard, like the notes MCP: inside the home folder only, never keys, tokens, credential stores or Rosie's own
+    secrets and databases, and known secret patterns are redacted (audit 2026-10-20: an injected turn could read a token and send it out)."""
+    import fsguard
+    _log("read", {"path": str(Path(path).expanduser())})
     try:
-        data = p.read_text(errors="replace")
+        r = fsguard.read_text(path, min(int(max_chars), 12000))
+    except fsguard.Blocked as e:
+        return {"error": str(e)}
     except Exception as e:
         return {"error": f"{type(e).__name__}: {e}"}
-    return {"path": str(p), "total_chars": len(data), "content": data[:min(int(max_chars), 12000)]}
+    if r.get("binary"):
+        return r
+    return {"path": r["path"], "total_chars": r["size"], "content": r["text"], **({"redacted": r["redactions"]} if r["redactions"] else {})}
 
 
 def write_file(path: str, content: str, append: bool = False):
@@ -83,13 +160,15 @@ def write_file(path: str, content: str, append: bool = False):
 
 
 def list_dir(path: str = "~"):
-    p = Path(path).expanduser()
-    _log("list", {"path": str(p)})
+    import fsguard
+    _log("list", {"path": str(Path(path).expanduser())})
     try:
-        items = sorted(p.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower()))[:200]
-        return {"path": str(p), "items": [x.name + ("/" if x.is_dir() else "") for x in items]}
+        r = fsguard.list_dir(path)
+    except fsguard.Blocked as e:
+        return {"error": str(e)}
     except Exception as e:
         return {"error": f"{type(e).__name__}: {e}"}
+    return {"path": r["path"], "items": r["entries"]}
 
 
 def open_on_desktop(target: str):

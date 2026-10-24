@@ -3,6 +3,8 @@
 What it shows: whether Agent Zero's container runs and answers, the turn it is working on now (the request, how long, which of
 Rosie's tools it called), Rosie's recent tool calls by Agent Zero, the model on the GPU, and its own recent activity (its log,
 colour codes removed). What it can do: start, stop or restart Agent Zero (a restart is also how a stuck task is stopped).
+It also shows the agent board (agentboard.py): what the owner's Claude sessions, Rosie and Agent Zero are doing, their claims and
+posts; the owner can leave a note for them and end a stuck claim.
 Shut down all: power.py."""
 import datetime as dt
 import re
@@ -14,6 +16,7 @@ import httpx
 from fastapi import APIRouter
 
 import a0
+import agentboard
 import config
 import ctxsize
 import power
@@ -109,7 +112,24 @@ def a0_status():
     model = config.load().get("chat_model")
     return {"container": c, "answers": up and reachable(), "brain": config.load().get("brain"), "turn": a0.current_turn(),
             "calls": recent_calls(), "models": loaded_models(), "model": model, "ctx": ctxsize.settings(model),
-            "chats": _cached("chats", 30, chats) if up else None, "activity": activity() if up else [], "url": a0.URL}
+            "chats": _cached("chats", 30, chats) if up else None, "activity": activity() if up else [], "url": a0.URL, "board": board()}
+
+
+def board() -> dict:
+    try:
+        return agentboard.snapshot()
+    except Exception as e:                                     # the board is extra: the page still shows Agent Zero
+        return {"error": f"{type(e).__name__}: {e}"}
+
+
+@router.post("/api/board/note")
+def board_note(body: dict):
+    return agentboard.post(body.get("text", ""), "note", body.get("to", ""), agent="owner")
+
+
+@router.post("/api/board/release")
+def board_release(body: dict):
+    return agentboard.release(body.get("thing", ""), agent="owner", force=True)
 
 
 def _act(*args):

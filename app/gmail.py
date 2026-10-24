@@ -5,6 +5,8 @@ import json
 import re
 from pathlib import Path
 
+import testguard
+
 from google.auth.exceptions import RefreshError
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -40,7 +42,7 @@ def login(name="main"):
     flow = InstalledAppFlow.from_client_secrets_file(str(CLIENT_FILE), SCOPES)
     creds = flow.run_local_server(port=0, prompt="consent")
     tp = token_path(name)
-    tp.write_text(creds.to_json())
+    testguard.check(tp).write_text(creds.to_json())
     tp.chmod(0o600)
     try:
         import health
@@ -56,7 +58,7 @@ def login(name="main"):
 
 
 def disconnect(name):
-    token_path(name).unlink(missing_ok=True)
+    testguard.check(token_path(name)).unlink(missing_ok=True)
     cfg = config.load()
     cfg["gmail_accounts"] = [a for a in cfg.get("gmail_accounts", []) if a["name"] != _safe(name)]
     config.save(cfg)
@@ -73,7 +75,7 @@ def service(name):
             creds.refresh(Request())
         except RefreshError as e:
             raise MailLoginExpired(f"Gmail login for '{name}' expired (about weekly). Run ~/assistant/login-gmail.sh {name}") from e
-        tp.write_text(creds.to_json())
+        testguard.check(tp).write_text(creds.to_json())
         tp.chmod(0o600)
     return build("gmail", "v1", credentials=creds, cache_discovery=False)
 

@@ -29,11 +29,12 @@ def ui(isolated, monkeypatch):
         pytest.skip("node not installed")
     import server
     (isolated / "secrets").mkdir(exist_ok=True)
-    (isolated / "secrets" / "session_key").write_text("testkey")
+    (isolated / "secrets" / "session_key").write_text("testkey-0123456789abcdef0123456789abcdef")
     monkeypatch.setattr(server, "SECRETS", isolated / "secrets")
     c = TestClient(server.app)
-    c.cookies.set("assistant_session", hmac.new(b"testkey", b"assistant-ok", hashlib.sha256).hexdigest())
+    c.cookies.set("assistant_session", hmac.new(b"testkey-0123456789abcdef0123456789abcdef", b"assistant-ok", hashlib.sha256).hexdigest())
     now = dt.datetime.now(gcal.TZ).replace(hour=7, minute=0, second=0, microsecond=0)
+    monkeypatch.setattr(paper, "_now", lambda: now)                          # the API's "today" is the built paper's day, even past midnight
     kw = paper_fake.install(monkeypatch.setattr, now)
     answers = {"_empty": c.get("/api/paper").json()}
     paper.build(now.date(), now=now, model=paper_fake.FakeModel(), make_pdf=False, **kw)

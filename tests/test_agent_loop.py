@@ -181,7 +181,8 @@ def test_audit_batch_two_guards():
     assert not agent.call_problem("add_task", {"title": "put things back"}, "add a task to put everything back in the garage", "", sun)
     assert not agent.call_problem("phone_call", {"to": "Sam"}, "Find Sam's number and call him", "", sun)
     assert not agent.call_problem("add_event", {"title": "Gym", "start": "2026-10-09T17:00:00"}, "How about a gym session Friday at 5?", "gym friday", sun)
-    assert agent.named_days("next Sunday", sun) == {sun, sun + dt.timedelta(days=7)}              # same weekday as today: never guessed
+    assert agent.named_days("next Sunday", sun) == set()                                          # "next ...": never guessed (audit 2026-10-20)
+    assert agent.named_days("Sunday", sun) == {sun, sun + dt.timedelta(days=7)}                   # same weekday as today: never guessed
 
 
 def test_the_history_keeps_the_corrected_reply_and_ollama_errors_are_survivable(fake_phone, monkeypatch):

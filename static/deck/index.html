@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Deck</title>
+<link rel="icon" href="icon.svg">
+<link rel="stylesheet" href="deck.css">
+</head>
+<body>
+<div class="aurora" aria-hidden="true"></div>
+<div id="chrome">
+<header id="top">
+  <div class="brand"><b>AGENT DECK</b><span class="cursor">_</span><i id="live" class="dot" title="Live"></i></div>
+  <div id="chips" class="chips"></div>
+  <div class="tools">
+    <select id="every" aria-label="Refresh every" title="Refresh every">
+      <option value="1000">1 s</option><option value="2000">2 s</option><option value="3000">3 s</option><option value="5000">5 s</option><option value="10000">10 s</option>
+    </select>
+    <button id="pause" class="btn ghost" aria-label="Pause updates" title="Pause updates">❚❚</button>
+    <button id="gear" class="btn ghost" aria-label="Settings" title="Settings (zoom, text size, sections)">⚙</button>
+  </div>
+</header>
+<nav id="tabs" role="tablist">
+  <button role="tab" data-tab="monitor">Monitor</button>
+  <button role="tab" data-tab="board">Agent board <span id="tabcount"></span></button>
+</nav>
+</div>
+
+<main id="tab-board" hidden>
+  <div class="bgrid">
+    <div class="glass bpanel"><h4>Around now</h4><div id="b-around"></div></div>
+    <div class="glass bpanel"><h4>Claims</h4><div id="b-claims"></div></div>
+  </div>
+  <form id="noteform" class="glass note">
+    <b>Post a note</b>
+    <select id="noteto" aria-label="Note to"></select>
+    <input id="notetext" maxlength="600" placeholder="A note for your agents (information, not a task)" aria-label="Note text">
+    <button class="btn acc">Post</button>
+  </form>
+  <div class="glass procbar">
+    <input id="bsearch" placeholder="Search posts" aria-label="Search posts">
+    <select id="bagent" aria-label="Agent"><option value="">Every agent</option></select>
+    <div class="seg" id="bkinds"></div>
+    <label class="bold"><input type="checkbox" id="bold"> Older history</label>
+  </div>
+  <div id="b-feed" class="feed"></div>
+</main>
+
+<main id="tab-monitor">
+  <details class="sec" data-sec="glance" open>
+    <summary><span class="tw">▾</span>At a glance<small id="glance-sum"></small></summary>
+    <div id="glance" class="glass glance"></div>
+  </details>
+
+  <details class="sec" data-sec="agents" open>
+    <summary><span class="tw">▾</span>Agent details<small id="agents-sum"></small></summary>
+    <div id="agents" class="agents"></div>
+  </details>
+
+  <details class="sec" data-sec="board" open>
+    <summary><span class="tw">▾</span>Agent board<small id="mboard-sum"></small></summary>
+    <div id="mboard" class="mboard"></div>
+  </details>
+
+  <details class="sec" data-sec="system" open>
+    <summary><span class="tw">▾</span>System<small id="sys-sum"></small></summary>
+    <div id="system" class="sysgrid"></div>
+  </details>
+
+  <details class="sec" data-sec="procs" open>
+    <summary><span class="tw">▾</span>Processes<small id="proc-sum"></small></summary>
+    <div class="glass procbar">
+      <input id="search" placeholder="Search: name, pid, user, command · regex like d$ · u:root s:running a:claude" aria-label="Search processes">
+      <details class="dd" id="filters"><summary class="btn ghost">Filters ▾</summary><div class="menu glass" id="filtermenu"></div></details>
+      <details class="dd" id="columns"><summary class="btn ghost">Columns ▾</summary><div class="menu glass" id="colmenu"></div></details>
+      <select id="per" aria-label="Rows per page"><option>15</option><option selected>25</option><option>50</option><option>100</option><option value="0">All</option></select>
+      <div class="pager"><button class="btn ghost" data-pg="first">«</button><button class="btn ghost" data-pg="prev">‹</button>
+        <span id="pageinfo"></span><button class="btn ghost" data-pg="next">›</button><button class="btn ghost" data-pg="last">»</button></div>
+    </div>
+    <div class="glass tablewrap"><table id="ptable"><thead></thead><tbody></tbody></table></div>
+  </details>
+</main>
+
+<div id="modal" class="scrim" hidden><div class="glass dialog" role="dialog" aria-modal="true"><div id="modalbody"></div></div></div>
+<div id="toast" role="status" aria-live="polite"></div>
+<script src="deck.js"></script>
+</body>
+</html>

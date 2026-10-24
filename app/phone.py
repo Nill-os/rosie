@@ -138,11 +138,17 @@ def _one_contact(to):
 
 
 force_ask = False          # set by the agent while it works from outside content: nothing is sent or dialled without the user's own OK
+import threading as _threading
+_here = _threading.local()   # a0_mcp holds texts and calls for its own worker thread only (a shared flag raced with Rosie's loop: audit)
+
+
+def forced() -> bool:
+    return force_ask or bool(getattr(_here, "ask", False))
 
 
 def _auto_text() -> bool:
     import config
-    if force_ask:
+    if forced():
         return False
     mode = config.load().get("sms_confirm", "ask")
     if mode == "always":
@@ -170,7 +176,7 @@ def call(to, _confirmed=False):
     if _confirmed:
         return run("call", {"to": to})
     import config
-    mode = "ask" if force_ask else config.load().get("call_confirm", "announce")
+    mode = "ask" if forced() else config.load().get("call_confirm", "announce")
     c, err = _one_contact(to)
     if err:
         return err

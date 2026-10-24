@@ -31,7 +31,7 @@ function ppSettings(d, again) {
   const save = async (patch, msg) => { try { await post('/api/paper/settings', patch); toast(msg || 'Saved'); again(); } catch (e) { toast(e.message, 1); } };
   const title = h('input', { value: s.title, 'aria-label': 'Paper name', maxlength: 40 }), place = h('input', { value: s.place, 'aria-label': 'Weather place', maxlength: 60 });
   const extra = h('input', { value: (s.email_to || []).join(', '), placeholder: 'you@example.com', 'aria-label': 'Extra addresses' });
-  const row = (label, ctl, hint) => h('div', { class: 'item pp-set' }, h('div', { class: 'tx' }, h('b', {}, label), hint ? h('div', { class: 'muted', style: 'font-size:12px' }, hint) : null), ctl);
+  const row = (label, ctl, hint) => h('div', { class: 'item pp-set' }, h('div', { class: 'tx' }, h('b', {}, label), hint ? h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1))' }, hint) : null), ctl);
   const seg = (opts, cur, fn) => h('div', { class: 'seg' }, opts.map(([v, l]) => h('button', { class: cur === v ? 'on' : '', onclick: () => fn(v) }, l)));
   const sections = h('div', { class: 'form' }, d.sections.map((x) => h('label', { class: 'chip', style: 'display:inline-flex;gap:6px;align-items:center' },
     h('input', { type: 'checkbox', checked: !!s.sections[x.key], onchange: (e) => save({ sections: { [x.key]: e.target.checked } }) }), x.label)));
@@ -39,7 +39,7 @@ function ppSettings(d, again) {
     const label = (d.sections.find((x) => x.key === sec) || {}).label || sec;
     const nm = h('input', { placeholder: 'Name', 'aria-label': 'Feed name', style: 'max-width:160px' }), url = h('input', { placeholder: 'https://… (RSS or Atom)', 'aria-label': 'Feed address' });
     return h('div', { class: 'pp-feeds' }, h('div', { class: 'muted', style: 'margin:8px 0 4px' }, label),
-      list.map((f, i) => h('div', { class: 'item' }, h('span', { class: 'tx' }, h('b', {}, f.name + '  '), h('span', { class: 'muted', style: 'font-size:12px;word-break:break-all' }, f.url)),
+      list.map((f, i) => h('div', { class: 'item' }, h('span', { class: 'tx' }, h('b', {}, f.name + '  '), h('span', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1));word-break:break-all' }, f.url)),
         h('button', { class: 'x', 'aria-label': 'Remove ' + f.name, onclick: () => save({ feeds: { [sec]: list.filter((_, j) => j !== i) } }, 'Removed') }, '✕'))),
       h('form', { class: 'form', style: 'margin-top:4px', onsubmit: (e) => { e.preventDefault(); if (!url.value.trim()) return; save({ feeds: { [sec]: [...list, { name: nm.value.trim() || '', url: url.value.trim() }] } }, 'Added'); } },
         nm, url, btn('Add', 'sm', null, 'submit')));
@@ -93,13 +93,13 @@ VIEWS.paper = async (arg) => {
       p && st.pdf ? h('a', { class: 'btn sm dim', href: '/api/paper/pdf?day=' + d.day, target: '_blank', rel: 'noopener', style: 'display:inline-flex;align-items:center;text-decoration:none' }, 'PDF') : null),
     d.state.running ? h('div', { id: 'pp-step', class: 'muted', style: 'margin-top:8px' }, 'Making the paper: ' + (d.state.step || 'starting') + '…') : null,
     d.state.error ? h('div', { class: 'err', style: 'margin-top:8px' }, 'The last try failed: ' + d.state.error) : null,
-    lines.length ? h('div', { class: 'muted', style: 'margin-top:8px;font-size:13px' }, lines.join(' · ')) : null,
-    p && p.model ? h('div', { class: 'muted', style: 'margin-top:6px;font-size:12px' }, p.model.down ? 'The local model was off, so summaries are the feeds\' own words.' : 'Summaries: ' + p.model.used + ' calls to ' + p.model.name + ', checked against each item\'s own text.') : null);
+    lines.length ? h('div', { class: 'muted', style: 'margin-top:8px;font-size:calc(13px*var(--ts,1))' }, lines.join(' · ')) : null,
+    p && p.model ? h('div', { class: 'muted', style: 'margin-top:6px;font-size:calc(12px*var(--ts,1))' }, p.model.down ? 'The local model was off, so summaries are the feeds\' own words.' : 'Summaries: ' + p.model.used + ' calls to ' + p.model.name + ', checked against each item\'s own text.') : null);
   const follow = p && p.follow && p.follow.length ? h('div', { class: 'card', style: 'margin-top:14px' }, h('h3', {}, 'You could also follow'),
-    h('div', { class: 'list' }, p.follow.map((f) => h('div', { class: 'item' }, h('div', { class: 'tx' }, h('b', {}, f.label), h('div', { class: 'muted', style: 'font-size:13px' }, f.why)),
+    h('div', { class: 'list' }, p.follow.map((f) => h('div', { class: 'item' }, h('div', { class: 'tx' }, h('b', {}, f.label), h('div', { class: 'muted', style: 'font-size:calc(13px*var(--ts,1))' }, f.why)),
       btn('Add to my paper', 'sm ok', async () => { try { await post('/api/paper/follow', { kind: f.kind, value: f.value, section: f.section || '' }); toast('Added. It shows up in tomorrow\'s paper.'); } catch (e) { toast(e.message, 1); } }))))) : null;
   const notes = p && p.notes && p.notes.length ? h('details', { class: 'card', style: 'margin-top:14px' }, h('summary', { class: 'muted' }, 'What couldn\'t be read today (' + p.notes.length + ')'),
-    h('div', { class: 'muted', style: 'font-size:13px;margin-top:6px' }, p.notes.join(' · '))) : null;
+    h('div', { class: 'muted', style: 'font-size:calc(13px*var(--ts,1));margin-top:6px' }, p.notes.join(' · '))) : null;
   show(h('div', { class: 'pp-page' + (ppNarrow() ? ' pp-narrow' : '') },
     h('div', { class: 'pagehead' }, h('h2', {}, 'Morning Paper'), h('span', { class: 'muted' }, d.settings.title + ', made every morning at ' + d.settings.time + ' from real news, your calendar, your deliveries and Rosie\'s data.')),
     tools,

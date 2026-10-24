@@ -12,11 +12,14 @@ import re
 import struct
 import threading
 import time
+import types
 import urllib.parse
 import zlib
 from pathlib import Path
 
 import httpx
+import sys
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -92,7 +95,9 @@ def fresh(monkeypatch):
     monkeypatch.setattr(corner, "_activity", {"last": time.time() - 3600, "in_flight": 0})
     monkeypatch.setattr(corner, "_stop", threading.Event())
     monkeypatch.setattr(corner, "_busy_probe", None)
-    monkeypatch.setattr(corner.os, "getloadavg", lambda: (0.0, 0.0, 0.0))
+    monkeypatch.setattr(corner, "GRAPH_BACKLOG", 0)
+    monkeypatch.setattr(corner, "_catching", {"up": False})
+    monkeypatch.setattr(corner.os, "getloadavg", lambda: (0.0, 0.0, 0.0), raising=False)
     corner_browse._robots.clear()
     corner_browse._last_hit.clear()
     corner_browse._last_any["t"] = 0.0
@@ -113,10 +118,10 @@ def turn_on(**kw):
 def client(tmp_path, monkeypatch):
     import server
     (tmp_path / "secrets").mkdir(exist_ok=True)
-    (tmp_path / "secrets" / "session_key").write_text("testkey")
+    (tmp_path / "secrets" / "session_key").write_text("testkey-0123456789abcdef0123456789abcdef")
     monkeypatch.setattr(server, "SECRETS", tmp_path / "secrets")
     c = TestClient(server.app)
-    c.cookies.set("assistant_session", hmac.new(b"testkey", b"assistant-ok", hashlib.sha256).hexdigest())
+    c.cookies.set("assistant_session", hmac.new(b"testkey-0123456789abcdef0123456789abcdef", b"assistant-ok", hashlib.sha256).hexdigest())
     return c
 
 
@@ -147,8 +152,8 @@ def test_the_browsing_agent_imports_nothing_private():
         assert not _imports(ROOT / "app" / f) & (FORBIDDEN - {"os"}), f
 
 
-def test_the_only_web_tools_are_read_a_page_and_search():
-    assert set(corner_browse.TOOLS) == {"fetch_page", "search_web"}
+def test_the_only_web_tools_are_read_a_page_and_search_the_web_or_github():
+    assert set(corner_browse.TOOLS) == {"fetch_page", "search_web", "search_github"}
     src = (ROOT / "app" / "corner_browse.py").read_text()
     assert ".post(" not in src.replace("c.post(OLLAMA_GENERATE", "").replace('c.stream("POST", OLLAMA_CHAT', "")   # no POST anywhere but local Ollama
     assert "web.fetch_url(" not in src and "web.get_public(" in src
@@ -368,15 +373,16 @@ def test_she_waits_until_the_owner_has_been_away():
 
 def test_a_busy_pc_or_scheduled_job_comes_first(monkeypatch):
     turn_on()
-    monkeypatch.setattr(corner.os, "getloadavg", lambda: (99.0, 0, 0))
+    monkeypatch.setattr(corner.os, "getloadavg", lambda: (99.0, 0, 0), raising=False)
     assert corner.busy_reason() == "The PC is busy."
-    monkeypatch.setattr(corner.os, "getloadavg", lambda: (0.0, 0, 0))
+    monkeypatch.setattr(corner.os, "getloadavg", lambda: (0.0, 0, 0), raising=False)
     corner.set_busy_probe(lambda now: "A scheduled job is running.")
     assert corner.busy_reason() == "A scheduled job is running."
     corner.set_busy_probe(lambda now: 1 / 0)                              # a broken probe keeps her off, never on
     assert corner.busy_reason().startswith("Could not check")
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Linux-only: the user bus, systemd timers or Unix sockets")
 def test_the_automation_probe_sees_the_timers_and_long_ticks(monkeypatch):
     import datetime as dt
     import subprocess
@@ -412,13 +418,34 @@ def test_job_corner_starts_only_when_on_and_idle_and_stops_a_running_session(mon
     assert corner.stopping() and len(started) == 1
 
 
-def test_any_owner_request_stops_her_at_once_but_background_polls_dont(client):
+def test_reading_waits_while_her_memory_graph_catches_up(fresh, monkeypatch):
+    turn_on(corner_graph_wait=100)
+    monkeypatch.setattr(corner, "GRAPH_BACKLOG", 101)
+    why = corner.pause_reason()
+    assert why == "Letting her memory graph catch up (101 pieces waiting)." and corner.busy_reason() == why
+    corner.GRAPH_BACKLOG = 50                                                # still waiting until nearly all are in
+    assert corner.pause_reason() and corner.busy_reason()
+    corner.GRAPH_BACKLOG = 10
+    assert corner.pause_reason() is None and corner.busy_reason() is None
+    corner.GRAPH_BACKLOG = 90                                                # below the mark again: she reads on
+    assert corner.pause_reason() is None
+    turn_on(corner_graph_wait=0)                                             # 0 = never wait
+    corner.GRAPH_BACKLOG = 5000
+    assert corner.pause_reason() is None
+
+
+def test_any_owner_request_stops_her_at_once_but_background_polls_and_tabs_dont(client):
     turn_on()
     corner.begin_session()
     for path in ("/api/corner/status", "/api/badges", "/api/phone/online"):
         client.get(path)
         assert not corner.stopping(), path
-    client.get("/api/corner")
+    last = corner._activity["last"]
+    for path in ("/api/corner", "/api/tasks", "/api/calendar", "/api/chats"):  # clicking through the tabs only reads (owner 2026-10-22)
+        client.get(path)
+        assert not corner.stopping(), path
+    assert corner._activity["last"] == last
+    client.post("/api/no-such-thing", json={})                              # anything she is asked to do is a POST
     assert corner.stopping() and corner.state["last_stop"] == "You started using Rosie."
     assert corner._activity["in_flight"] == 0
 
@@ -716,6 +743,7 @@ def test_vision_is_batched_then_unloaded_and_the_chat_model_comes_back(fresh, mo
     session = {"vision": False}
     corner_browse.pictures_step([{"url": f"https://radio.example/{n}.png", "alt": "", "page_url": "https://radio.example/yagi", "page_title": "Yagi"} for n in (1, 2)], session)
     assert session["vision"] is True
+    assert ("generate", "qwen3.5:9b", 0, None, False) in calls                # the chat model is freed first, so the vision model loads at once
     looks = [c for c in calls if c[0] == "chat"]
     assert len(looks) == 2 and all(c[1] == "gemma4:12b" and c[4] for c in looks)
     assert all(p["look"] == "A yagi antenna on a wooden boom." for p in corner.pictures())
@@ -723,6 +751,26 @@ def test_vision_is_batched_then_unloaded_and_the_chat_model_comes_back(fresh, mo
     corner_browse.unload_vision()
     corner_browse.warm_chat()
     assert calls == [("generate", "gemma4:12b", 0, None, False), ("generate", "qwen3.5:9b", "30m", corner_browse.CTX_OPTIONS["num_ctx"], False)]
+
+
+def test_a_vision_model_that_never_answers_ends_the_round_at_once(fresh, monkeypatch):
+    turn_on()
+    _pics_on(monkeypatch, FakeClam(), lambda s, k, wh: (b"\x89PNG" + bytes([wh[0] % 256]) * 10, "png", wh))
+    for n in (1, 2, 3):
+        fresh["net"].pages[f"https://radio.example/{n}.png"] = (200, {"content-type": "image/png"}, png(100 + n, 100))
+    fresh["net"].pages["https://radio.example/robots.txt"] = ROBOTS_OK
+    asked = []
+
+    def ollama(request):
+        if str(request.url).endswith("/api/chat"):
+            asked.append(1)
+            raise httpx.ReadTimeout("the model never loaded")
+        return httpx.Response(200, content=b"{}")
+    monkeypatch.setattr(corner_browse, "_ollama_transport", httpx.MockTransport(ollama))
+    corner_browse.pictures_step([{"url": f"https://radio.example/{n}.png", "alt": "", "page_url": "https://radio.example/yagi", "page_title": "Yagi"}
+                                 for n in (1, 2, 3)], {"vision": False})
+    assert len(asked) == 1                                                  # not 3 x 300 s
+    assert len(corner.pictures()) == 3 and not any(p["looked"] for p in corner.pictures())   # all three wait for the next round
 
 
 def test_a_stop_mid_look_still_unloads_the_vision_model(fresh, monkeypatch):
@@ -839,7 +887,7 @@ def test_the_corner_api_needs_a_login(tmp_path, monkeypatch):
 def test_settings_api_validates_and_the_off_switch_stops_her(client):
     assert client.post("/api/corner/settings", json={"corner_on": "yes"}).status_code == 400
     assert client.post("/api/corner/settings", json={"corner_quiet_from": "5am"}).status_code == 400
-    assert client.post("/api/corner/settings", json={"corner_pages_day": 10000}).status_code == 400
+    assert client.post("/api/corner/settings", json={"corner_pages_day": 10001}).status_code == 400
     assert client.post("/api/corner/settings", json={"agents": {}}).status_code == 400
     assert client.post("/api/corner/settings", json={"corner_block_domains": ["not a domain!"]}).status_code == 400
     r = client.post("/api/corner/settings", json={"corner_on": True, "corner_block_domains": ["Spam.Example"]})
@@ -989,14 +1037,16 @@ def test_the_default_interests_are_general_until_the_owner_sets_their_own():
     assert "local news" in corner.DEFAULTS["corner_interests"] and len(corner.DEFAULTS["corner_interests"]) >= 4
 
 
-def test_nonstop_ignores_the_budgets_idle_wait_and_rest(fresh, monkeypatch):
-    turn_on(corner_pages_hour=1, corner_pages_day=1, corner_pages_session=1, corner_idle_min=240, corner_rest_min=720, corner_changes_day=0)
+def test_nonstop_ignores_the_hour_budget_idle_wait_and_rest(fresh, monkeypatch):
+    turn_on(corner_pages_hour=1, corner_pages_day=2, corner_pages_session=1, corner_idle_min=240, corner_rest_min=720, corner_changes_day=0)
     corner.log("page", "https://a.example/1", status="read")
     corner._activity["last"] = time.time() - 120                           # away 2 minutes: past the grace, far from the idle wait
     corner.state["last_end"] = time.time()                                  # a session just ended: normally a 720 min rest
     assert corner.busy_reason(check_rest=True)                              # the idle-time mode would wait
     corner.set_nonstop(True)
     assert corner.pause_reason() is None
+    corner.log("page", "https://a.example/2", status="read")
+    assert "2 pages are read" in corner.pause_reason()                      # the day's budget still holds (owner: about 5000 a day)
     corner.state["nonstop"] = True
     assert corner_layout.rosie_change({"op": "set_accent", "color": "green"})["what"]   # no layout change budget
     assert corner_layout.history()[0]["by"] == "rosie"                     # still logged, still undoable
@@ -1004,8 +1054,8 @@ def test_nonstop_ignores_the_budgets_idle_wait_and_rest(fresh, monkeypatch):
     assert corner_layout.current()["accent"] == "cyan"
 
 
-def test_a_nonstop_run_reads_past_every_page_budget_until_stop(fresh, monkeypatch):
-    turn_on(corner_pages_hour=1, corner_pages_day=1, corner_pages_session=1, corner_site_gap_s=20)
+def test_a_nonstop_run_reads_past_the_hour_and_session_budgets_until_stop(fresh, monkeypatch):
+    turn_on(corner_pages_hour=1, corner_pages_day=100, corner_pages_session=1, corner_site_gap_s=20)
     _chain_site(fresh, 8)
     monkeypatch.setattr(web, "web_search", lambda q: [{"title": "Yagi", "url": "https://radio.example/p1", "snippet": ""}])
     brain = StopAfter(5)
@@ -1013,7 +1063,7 @@ def test_a_nonstop_run_reads_past_every_page_budget_until_stop(fresh, monkeypatc
     corner.set_nonstop(True)
     corner_browse.run_session()
     read = [u for u in fresh["net"].urls() if "/p" in u]
-    assert read == [f"https://radio.example/p{i}" for i in range(1, 6)]   # 5 pages: past the session, hour and day budgets of 1
+    assert read == [f"https://radio.example/p{i}" for i in range(1, 6)]   # 5 pages: past the session and hour budgets of 1
     assert not corner.state["running"] and corner.settings()["corner_nonstop"] is False
     last = corner.trail()[0]
     assert last["kind"] == "session" and last["status"] == "stopped" and "You pressed Stop." in last["detail"]
@@ -1098,7 +1148,7 @@ def test_nonstop_pictures_have_no_budget_and_looks_wait_until_the_owner_is_away(
     assert len(corner.pictures()) == 6 and len(looks) == 6 and session["vision"] is True
 
 
-def test_the_disk_safety_stop_replaces_the_storage_budget(fresh, monkeypatch):
+def test_the_disk_safety_stop_comes_on_top_of_the_storage_budget(fresh, monkeypatch):
     turn_on()
     _pics_on(monkeypatch, FakeClam(), lambda s, k, wh: (b"\x89PNG" + bytes([wh[0] % 256]) * 10, "png", wh))
     fresh["net"].pages["https://radio.example/robots.txt"] = ROBOTS_OK
@@ -1118,6 +1168,8 @@ def test_the_paper_window_comes_from_the_timer_and_pauses_nonstop(tmp_path, monk
     import datetime as dt
     timer = tmp_path / "rosie-paper-print.timer"
     timer.write_text("[Timer]\nOnCalendar=*-*-* 06:30:00\nPersistent=true\n")
+    (tmp_path / "timers.target.wants").mkdir()
+    (tmp_path / "timers.target.wants" / timer.name).symlink_to(timer)     # enabled
     monkeypatch.setattr(corner, "PAPER_TIMER", timer)
     assert corner.paper_window() == ("06:15", "06:45")
     corner.set_nonstop(True)
@@ -1129,12 +1181,19 @@ def test_the_paper_window_comes_from_the_timer_and_pauses_nonstop(tmp_path, monk
     monkeypatch.setattr(corner, "_paper", {"t": 0.0, "w": ("06:15", "06:45")})
     timer.write_text("[Timer]\nOnCalendar=*-*-* 05:40\n")
     assert corner.paper_window() == ("05:25", "05:55")
+    (tmp_path / "timers.target.wants" / timer.name).unlink()               # printing paused (timer disabled): no paper window
+    monkeypatch.setattr(corner, "_paper", {"t": 0.0, "w": ("06:15", "06:45")})
+    assert corner.paper_window() == ("", "")
+    corner.save_settings({"corner_nonstop_quiet": False})
+    assert corner.pause_reason(day.replace(hour=5, minute=40)) is None and corner.status()["paper_window"] == ""
 
 
 def test_the_paper_window_follows_the_newspaper_settings_first(tmp_path, monkeypatch):
     import config
     timer = tmp_path / "rosie-paper-print.timer"
     timer.write_text("[Timer]\nOnCalendar=*-*-* 05:40\n")
+    (tmp_path / "timers.target.wants").mkdir()
+    (tmp_path / "timers.target.wants" / timer.name).symlink_to(timer)
     monkeypatch.setattr(corner, "PAPER_TIMER", timer)
     monkeypatch.setattr(corner, "_paper", {"t": 0.0, "w": ("06:15", "06:45")})
     cfg = config.load()
@@ -1441,3 +1500,233 @@ def test_her_background_model_use_pauses_while_a_new_version_is_tested(tmp_path,
     import os
     os.utime(flag, (1, 1))                                                    # a flag left behind by a crash is ignored after an hour
     assert "new version" not in (corner._load_probe(now, corner.settings()) or "")
+
+
+# ---------------------------------------------------------------- Scrapling's engine (owner 2026-10-22: "make her as fast as possible")
+class FakeCurl:
+    """Stands in for curl_cffi's Session: records how it was made and what it fetched; answers from `pages`."""
+    made, got, pages = [], [], {}
+
+    def __init__(self, **kw):
+        FakeCurl.made.append(kw)
+
+    def get(self, url, stream=False, timeout=None):
+        FakeCurl.got.append(url)
+        status, headers, body = FakeCurl.pages.get(url, (404, {"content-type": "text/html"}, "not found"))
+        body = body if isinstance(body, bytes) else body.encode()
+        return types.SimpleNamespace(status_code=status, headers=httpx.Headers(headers), close=lambda: None,
+                                     iter_content=lambda: iter([body[i:i + 400] for i in range(0, len(body), 400)] or [b""]))
+
+    def close(self):
+        pass
+
+
+@pytest.fixture
+def curl(monkeypatch):
+    FakeCurl.made, FakeCurl.got, FakeCurl.pages = [], [], {}
+    monkeypatch.setattr(web, "_browser_session", FakeCurl)
+    monkeypatch.setattr(web, "_public_transport", None)
+    monkeypatch.setattr(web, "_resolve", lambda host: ["127.0.0.1"] if host == "localhost" else [PUBLIC_IP])
+    return FakeCurl
+
+
+def test_the_browser_engine_is_pinned_to_the_checked_address_and_follows_no_redirect(curl):
+    curl.pages["https://shop.example/a"] = (302, {"location": "https://shop.example/b", "set-cookie": "s=1"}, "")
+    curl.pages["https://shop.example/b"] = (200, {"content-type": "text/html; charset=utf-8"}, "<p>hi</p>")
+    r = web.get_public("https://shop.example/a", max_bytes=1000, browser=True)
+    assert r["status"] == 200 and r["body"] == b"<p>hi</p>" and r["url"] == "https://shop.example/b" and r["encoding"] == "utf-8"
+    from curl_cffi import CurlOpt
+    assert [m["curl_options"][CurlOpt.RESOLVE] for m in curl.made] == [[f"shop.example:443:{PUBLIC_IP}"]] * 2   # each hop pinned again
+    assert all(m["impersonate"] and m["allow_redirects"] is False and m["discard_cookies"] and m["trust_env"] is False for m in curl.made)
+
+
+def test_the_browser_engine_keeps_every_check(curl):
+    curl.pages["https://evil.example/go"] = (302, {"location": "http://localhost/api/chat"}, "")
+    curl.pages["https://a.example/big"] = (200, {"content-type": "text/html"}, "x" * 5000)
+    curl.pages["https://a.example/app.exe"] = (200, {"content-type": "application/x-msdownload"}, b"MZ")
+    r = web.get_public("https://evil.example/go", max_bytes=1000, browser=True)
+    assert r.get("blocked") and curl.got == ["https://evil.example/go"]           # the local address was never requested
+    assert "Too big" in web.get_public("https://a.example/big", max_bytes=1000, browser=True)["error"]
+    assert "Not a readable page" in web.get_public("https://a.example/app.exe", max_bytes=1000, browser=True)["error"]
+    stop = threading.Event()
+    stop.set()
+    assert web.get_public("https://a.example/big", max_bytes=10000, browser=True, stop=stop).get("stopped")
+
+
+def test_a_broken_connection_in_the_browser_engine_is_a_plain_error(curl, monkeypatch):
+    monkeypatch.setattr(FakeCurl, "get", lambda self, url, **kw: (_ for _ in ()).throw(RuntimeError("TLS handshake failed")))
+    assert "TLS handshake failed" in web.get_public("https://a.example/", max_bytes=1000, browser=True)["error"]
+
+
+def test_a_sites_first_page_follows_its_robots_txt_without_the_site_gap(fresh):
+    turn_on(corner_site_gap_s=20)
+    fresh["net"].pages["https://fast.example/robots.txt"] = ROBOTS_OK
+    fresh["net"].pages["https://fast.example/1"] = html_page("P1", "text")
+    fresh["net"].pages["https://fast.example/2"] = html_page("P2", "text")
+    assert corner_browse.fetch_page("https://fast.example/1")
+    assert max(fresh["waits"] or [0]) <= corner_browse.GLOBAL_GAP_S + 1.5          # no 20 s wait between robots.txt and the first page
+    fresh["waits"].clear()
+    corner_browse.fetch_page("https://fast.example/2")
+    assert max(fresh["waits"]) >= 19                                               # the site's gap still holds between its pages
+
+
+# ---------------------------------------------------------------- GitHub (owner 2026-10-22: "focus on github 60% or so of the time")
+def test_only_a_repositorys_own_page_counts_as_a_repository():
+    assert corner_browse.github_repo("https://github.com/meshtastic/firmware") == ("meshtastic", "firmware")
+    assert corner_browse.github_repo("https://github.com/meshtastic/firmware/") == ("meshtastic", "firmware")
+    assert corner_browse.github_repo("https://github.com/meshtastic/firmware.git") == ("meshtastic", "firmware")
+    for u in ("https://github.com/features/copilot", "https://github.com/meshtastic/firmware/issues", "https://github.com/topics/sdr",
+              "https://github.com/meshtastic", "https://gitlab.com/a/b", "https://github.com/a/b/blob/main/x.md"):
+        assert corner_browse.github_repo(u) is None
+
+
+def test_a_repository_is_read_from_its_readme(fresh):
+    turn_on()
+    fresh["net"].pages["https://raw.githubusercontent.com/robots.txt"] = (404, {"content-type": "text/plain"}, "")
+    fresh["net"].pages["https://raw.githubusercontent.com/w2/yagi/HEAD/README.md"] = (404, {"content-type": "text/plain"}, "")
+    fresh["net"].pages["https://raw.githubusercontent.com/w2/yagi/HEAD/readme.md"] = (200, {"content-type": "text/plain; charset=utf-8"},
+        "# 915 MHz Yagi\n\nA printable Yagi for Meshtastic.\n\n![build](https://img.shields.io/badge/x.svg) ![photo](docs/yagi.jpg)\n\n"
+        "See [the build notes](docs/BUILD.md) and [Meshtastic](https://meshtastic.org/docs/).\n")
+    page = corner_browse.fetch_page("https://github.com/w2/yagi")
+    assert page["url"] == "https://github.com/w2/yagi" and page["title"] == "w2/yagi on GitHub" and "printable Yagi" in page["text"]
+    assert [l["url"] for l in page["links"]] == ["https://github.com/w2/yagi/blob/HEAD/docs/BUILD.md", "https://meshtastic.org/docs/"]
+    assert [i["url"] for i in page["images"]] == ["https://raw.githubusercontent.com/w2/yagi/HEAD/docs/yagi.jpg"]   # badges left out
+    assert not any(u.startswith("https://github.com/") for u in fresh["net"].urls())                             # GitHub's menus never read
+    assert corner.trail()[0]["url"] == "https://github.com/w2/yagi" and corner.trail()[0]["status"] == "read"
+
+
+def test_github_search_tries_fewer_words_and_falls_back_to_the_web(fresh, monkeypatch):
+    turn_on(corner_github_pct=100)
+    api = "https://api.github.com/search/repositories?q={}&per_page=8"
+    fresh["net"].pages[api.format("meshtastic+yagi+antenna+for+hiking")] = (200, {"content-type": "application/json"}, '{"items": []}')
+    fresh["net"].pages[api.format("meshtastic+yagi+antenna")] = (200, {"content-type": "application/json"}, json.dumps({"items": [
+        {"html_url": "https://github.com/w2/yagi", "full_name": "w2/yagi", "description": "A Yagi", "stargazers_count": 12},
+        {"html_url": "https://github.com/old/thing", "full_name": "old/thing", "archived": True},
+        {"html_url": "https://github.com/features/copilot", "full_name": "x"}]}))
+    res = corner_browse.search("meshtastic yagi antenna for hiking")
+    assert res == [{"title": "w2/yagi", "url": "https://github.com/w2/yagi", "snippet": "A Yagi (12 stars)"}]
+    web_calls = []
+    monkeypatch.setattr(web, "web_search", lambda q: web_calls.append(q) or [{"title": "T", "url": "https://radio.example/a", "snippet": ""}])
+    assert corner_browse.search("nothing here at all") == [{"title": "T", "url": "https://radio.example/a", "snippet": ""}]   # 404: the web
+    turn_on(corner_github_pct=0)
+    corner_browse.search("meshtastic yagi antenna")
+    assert web_calls == ["nothing here at all", "meshtastic yagi antenna"]
+
+
+def test_the_picture_storage_budget_holds_in_nonstop_mode_too(fresh, monkeypatch):
+    turn_on(corner_storage_mb=50)
+    corner.set_nonstop(True)
+    calls = []
+    monkeypatch.setattr(corner, "enforce_storage", lambda cap_mb=None: calls.append(cap_mb) or [])
+    monkeypatch.setattr(corner_pics, "ready", lambda: (True, ""))          # a PC without the virus scanner (CI) skips pictures entirely
+    corner_pics.check_and_keep([])
+    assert calls == [None]
+
+
+# ================================================================ the PC's health (owner 2026-10-23: "cap rosies browsing ram when i am using the pc")
+def _pc(monkeypatch, mem_gb=32.0, temp=50.0, battery=False, idle=3600.0):
+    import pchealth
+    monkeypatch.setattr(pchealth, "mem_available", lambda fresh=False: int(mem_gb * 1024 ** 3))
+    monkeypatch.setattr(pchealth, "cpu_temp", lambda: temp)
+    monkeypatch.setattr(pchealth, "on_battery", lambda: battery)
+    monkeypatch.setattr(pchealth, "input_idle_s", lambda: idle)
+
+
+@pytest.fixture
+def health(monkeypatch):
+    monkeypatch.setattr(corner, "_health", {"hot": False, "ram_held": False, "freed": 0, "unload": False})
+
+
+def test_she_keeps_memory_free_while_the_owner_uses_the_pc_and_lets_go_of_her_models_once(monkeypatch, health):
+    turn_on(corner_nonstop=True)
+    _pc(monkeypatch, mem_gb=6, idle=30)                                   # at the PC, 6 GB free: fine
+    assert corner.pause_reason() is None
+    _pc(monkeypatch, mem_gb=2.5, idle=30)                                 # someone opened a big program
+    assert corner.pause_reason().startswith("Keeping 4 GB of memory free while you use the PC (2.5 GB free now)")
+    assert corner.take_unload() is True and corner.take_unload() is False   # once per pause
+    corner.ram_freed(3 * 1024 ** 3)                                       # her models gave back 3 GB: 5.5 GB free now
+    _pc(monkeypatch, mem_gb=5.5, idle=30)
+    assert corner.pause_reason().startswith("Keeping 4 GB")               # loading them again would leave only 2.5 GB
+    _pc(monkeypatch, mem_gb=7.5, idle=30)                                 # the owner closed the program: room for her models and the floor
+    assert corner.pause_reason() is None
+    assert corner.take_unload() is False
+
+
+def test_away_from_the_pc_she_only_keeps_one_gb_free(monkeypatch, health):
+    turn_on(corner_nonstop=True)
+    _pc(monkeypatch, mem_gb=2.5, idle=3600)
+    assert corner.pause_reason() is None
+    _pc(monkeypatch, mem_gb=0.6, idle=3600)
+    assert "so the PC doesn't slow down" in corner.pause_reason()
+    _pc(monkeypatch, mem_gb=2.5, idle=3600)
+    assert corner.pause_reason() is None
+
+
+def test_the_memory_floor_can_be_turned_off_and_unknown_readings_are_skipped(monkeypatch, health):
+    turn_on(corner_nonstop=True, corner_pc_free_gb=0)
+    _pc(monkeypatch, mem_gb=2.5, idle=30)
+    assert corner.pause_reason() is None
+    import pchealth
+    monkeypatch.setattr(pchealth, "mem_available", lambda fresh=False: None)   # a PC that can't tell
+    monkeypatch.setattr(pchealth, "cpu_temp", lambda: None)
+    monkeypatch.setattr(pchealth, "on_battery", lambda: None)
+    monkeypatch.setattr(pchealth, "input_idle_s", lambda: None)
+    assert corner.pause_reason() is None and corner.at_pc(corner.settings()) is False
+
+
+def test_a_hot_cpu_pauses_her_until_it_is_ten_degrees_cooler(monkeypatch, health):
+    turn_on(corner_nonstop=True)
+    _pc(monkeypatch, temp=91)
+    assert corner.pause_reason().startswith("Letting the PC cool down (CPU 91 °C")
+    _pc(monkeypatch, temp=85)
+    assert corner.pause_reason().startswith("Letting the PC cool down")    # still inside the gap
+    _pc(monkeypatch, temp=79)
+    assert corner.pause_reason() is None
+    turn_on(corner_max_temp=0)
+    _pc(monkeypatch, temp=99)
+    assert corner.pause_reason() is None
+
+
+def test_on_battery_she_waits_for_the_charger_unless_allowed(monkeypatch, health):
+    turn_on()
+    corner._activity["last"] = time.time() - 3600
+    _pc(monkeypatch, battery=True)
+    assert corner.busy_reason() == "The laptop is on battery. She goes on when it's plugged in."
+    turn_on(corner_on_battery=True)
+    assert corner.busy_reason() is None
+    with pytest.raises(ValueError):
+        corner.save_settings({"corner_on_battery": "yes"})
+    with pytest.raises(ValueError):
+        corner.save_settings({"corner_pc_free_gb": 65})
+
+
+def test_a_memory_pause_frees_her_models_and_records_what_that_gave_back(fresh, monkeypatch, health):
+    turn_on(corner_nonstop=True)
+    corner.state["nonstop"] = True
+    calls, mem = [], iter([2.0, 5.0])
+    monkeypatch.setattr(corner_browse, "unload_chat", lambda: calls.append("chat"))
+    monkeypatch.setattr(corner_browse, "unload_vision", lambda: calls.append("vision"))
+    monkeypatch.setattr(corner, "mem_free", lambda: int(next(mem) * 1024 ** 3))
+    _pc(monkeypatch, mem_gb=2.0, idle=30)
+    real_pause, n = corner_browse._pause, {"i": 0}
+
+    def pause(s):                                                         # the owner closes their program while she waits
+        n["i"] += 1
+        if n["i"] > 2:
+            _pc(monkeypatch, mem_gb=8.0, idle=30)
+        return real_pause(s)
+    monkeypatch.setattr(corner_browse, "_pause", pause)
+    assert corner_browse.wait_while_paused() is False
+    assert calls == ["chat", "vision"]
+    assert corner._health["ram_held"] is False
+
+
+def test_picture_looks_wait_while_the_owner_is_at_the_pc(fresh, monkeypatch, health):
+    turn_on(corner_nonstop=True)
+    corner.state["nonstop"] = True
+    _pc(monkeypatch, idle=30)
+    monkeypatch.setattr(corner_browse, "unload_chat", lambda: pytest.fail("a look started while the owner was at the PC"))
+    monkeypatch.setattr(corner_pics, "ready", lambda: (True, ""))
+    with corner._db() as db:
+        db.execute("INSERT INTO pictures (at, file, fmt, width, height, bytes, src_url, looked) VALUES ('2026-10-16', 'x.jpg', 'jpeg', 1, 1, 1, 'https://example.org/x.jpg', 0)")
+    corner_browse.pictures_step([], {"vision": False})

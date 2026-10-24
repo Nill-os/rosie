@@ -4,6 +4,8 @@ import datetime as dt
 import re
 import sqlite3
 import time
+
+import httpx
 from email.utils import parseaddr
 from pathlib import Path
 
@@ -86,8 +88,11 @@ def _seen(acct) -> set:
 
 def _propose(acct, msg, t, cfg):
     n = 0
+    sent = dt.datetime.fromtimestamp(msg["ts"]).date() if msg.get("ts") else None             # the local day it was sent
     for i, task in enumerate(t["tasks"]):
-        if proposals.add("task", task["title"], {"title": task["title"], "due": task["when"]}, detail=f"From {sender_name(msg['from'])}: {msg['subject'][:80]}",
+        # "tomorrow" means the day after the email, not after the owner approves it (audit 2026-10-23): resolved now, as a date
+        due = workflows.resolve_due(task["when"], sent) if task.get("when") else ""
+        if proposals.add("task", task["title"], {"title": task["title"], "due": due}, detail=f"From {sender_name(msg['from'])}: {msg['subject'][:80]}",
                          source=f"email:{acct}:{msg['id']}", key=f"emailtask:{acct}:{msg['id']}:{i}"):
             n += 1
     for i, ev in enumerate(t["events"]):
@@ -117,8 +122,19 @@ def check(now=None, max_per_run=15, query="in:inbox newer_than:2d") -> dict:
         ids = gmail.list_ids(a["name"], query, 40)
         seen = _seen(a["name"])
         for mid in list(reversed([i for i in ids if i not in seen][:max_per_run])):
-            msg = gmail.get(a["name"], mid)
-            t = triage(msg)
+            try:
+                msg = gmail.get(a["name"], mid)
+            except gmail.MailLoginExpired:
+                raise
+            except Exception:                                  # a deleted or unreadable message never stops the rest
+                continue
+            try:
+                t = triage(msg)
+            except (httpx.HTTPError, OSError):                 # the model is down or busy: stop; these emails are tried again next time
+                break
+            except Exception:                                  # one bad model answer must not stop every later email (audit 2026-10-20)
+                t = {"importance": "normal", "needs_reply": False, "suspicious": False, "tasks": [], "events": [],
+                     "reason": "Couldn't sort this one automatically.", "summary": str(msg.get("snippet") or "")[:140]}
             _store(a["name"], msg, t)
             stats["new"] += 1
             stats["suspicious"] += int(t["suspicious"])

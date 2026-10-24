@@ -13,7 +13,8 @@ PartOf=graphical-session.target
 
 [Service]
 Environment=PATH=$HOME/.local/bin:/usr/bin:/bin
-ExecStart=$HOME/assistant/.venv/bin/python $HOME/assistant/app/dictation.py
+# the LIVE code slot (~/assistant or ~/assistant-b, per ~/rosie-ops/active), not always slot A (audit 2026-10-23)
+ExecStart=/bin/sh -c 'R=%h/assistant; [ "\$\$(cat %h/rosie-ops/active 2>/dev/null)" = B ] && R=%h/assistant-b; exec "\$\$R/.venv/bin/python" "\$\$R/app/dictation.py"'
 Restart=on-failure
 RestartSec=5
 
@@ -27,7 +28,7 @@ After=graphical-session.target
 PartOf=graphical-session.target
 
 [Service]
-ExecStart=/usr/bin/python3 $HOME/assistant/app/overlay.py
+ExecStart=/bin/sh -c 'R=%h/assistant; [ "\$\$(cat %h/rosie-ops/active 2>/dev/null)" = B ] && R=%h/assistant-b; exec /usr/bin/python3 "\$\$R/app/overlay.py"'
 Restart=on-failure
 RestartSec=5
 

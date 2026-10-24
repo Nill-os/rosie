@@ -13,12 +13,12 @@ import server
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     (tmp_path / "secrets").mkdir()
-    (tmp_path / "secrets" / "session_key").write_text("testkey")
+    (tmp_path / "secrets" / "session_key").write_text("testkey-0123456789abcdef0123456789abcdef")
     monkeypatch.setattr(server, "SECRETS", tmp_path / "secrets")
     monkeypatch.setattr(server, "VOICE_CHAT", tmp_path / "voice_chat.json")
     monkeypatch.setattr(server, "_voice_pending", [])
     monkeypatch.setattr(server, "_voice_edit", {})
-    cookie = hmac.new(b"testkey", b"assistant-ok", hashlib.sha256).hexdigest()
+    cookie = hmac.new(b"testkey-0123456789abcdef0123456789abcdef", b"assistant-ok", hashlib.sha256).hexdigest()
     c = TestClient(server.app)
     c.cookies.set("assistant_session", cookie)
     return c

@@ -275,15 +275,14 @@ def check_and_keep(items: list[dict]) -> list[dict]:
             p.unlink(missing_ok=True)
     out = []
     for it, r in zip(items, results):
-        if r["ok"] and corner.disk_low():                     # disk safety: never fill the disk (nonstop mode has no storage budget)
+        if r["ok"] and corner.disk_low():                     # disk safety: never fill the disk (on top of the storage budget)
             r = {"ok": False, "why": "less than 5 GB free on the disk"}
         if not r["ok"]:
             corner.log("picture", it.get("src_url", ""), it.get("page_title", ""), "blocked", r["why"])
             out.append(r)
             continue
         out.append({"ok": True, "id": _store(it, r["data"], r["ext"], r["size"])})
-    if not corner.nonstop():
-        corner.enforce_storage()
+    corner.enforce_storage()                                  # nonstop too (owner 2026-10-22: "10 gb for pictures")
     return out
 
 

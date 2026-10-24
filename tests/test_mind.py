@@ -332,7 +332,9 @@ def test_mail_days_are_redone_with_only_the_owners_words(fake):
                          {"role": "assistant", "content": "Your bank says a new device signed in."}])
     with mind._db() as c:                                                                # as the first back-fill kept it
         c.execute("INSERT INTO meta(k, v) VALUES('backfilled', 'x')")
-    day = mind._iso()[:10]
+    import sqlite3
+    with sqlite3.connect(chats.DB) as cc:                                                # the chat's own day (real clock), not mind's frozen one
+        day = cc.execute("SELECT created FROM msgs WHERE role='tool'").fetchone()[0][:10]
     doc = mind.queue("Sam: check my mail please\nRosie: Your bank says a new device signed in.", "chat", f"backfill:chat:{cid}:{day}",
                      "an earlier chat with Rosie")
     with mind._db() as c:
@@ -433,3 +435,12 @@ def test_a_belief_stays_one_short_facet(fake):
     with mind._db() as c:
         assert c.execute("SELECT consolidated_at FROM units WHERE id=?", (ids[0],)).fetchone()["consolidated_at"] is None
     assert mind.status()["observations"] == 0
+
+
+def test_an_ollama_outage_is_a_wait_not_a_failure(monkeypatch):
+    def down(request):
+        raise httpx.ConnectError("Ollama is restarting")
+    monkeypatch.setattr(mind, "_transport", httpx.MockTransport(down))
+    monkeypatch.setattr(mind, "_wait_reason", lambda: None)
+    with pytest.raises(mind.Busy, match="Ollama isn't answering"):
+        mind.ask("s", "u", {"type": "object"})

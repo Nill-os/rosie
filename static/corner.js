@@ -174,27 +174,36 @@ function cnSettings(st, again) {
   const interests = h('input', { value: (s.corner_interests || []).join(', '), 'aria-label': 'Interests' });
   const block = h('textarea', { rows: 4, 'aria-label': 'Sites to never open', placeholder: 'one site per line, like example.com' });
   block.value = (s.corner_block_domains || []).join('\n');
-  let pics = !!s.corner_pictures, nsq = !!s.corner_nonstop_quiet;
+  let pics = !!s.corner_pictures, nsq = !!s.corner_nonstop_quiet, bat = !!s.corner_on_battery;
+  const pc = st.pc || {}, pcNow = [pc.mem_free_gb != null ? pc.mem_free_gb + ' GB memory free' : '', pc.cpu_temp != null ? 'CPU ' + Math.round(pc.cpu_temp) + ' °C' : '',
+    pc.on_battery == null ? '' : pc.on_battery ? 'on battery' : 'plugged in', pc.idle_s == null ? '' : pc.at_pc ? 'you are using the PC' : 'you are away from the PC'].filter(Boolean).join(' · ');
   const form = h('dl', { class: 'kv cn-set' },
     h('dt', {}, 'Also browse when idle'), h('dd', {}, onOff(st.on, async (v) => { try { await post('/api/corner/settings', { corner_on: v }); toast(v ? 'Rosie may browse when you are away' : 'Idle-time browsing is off'); again(); } catch (e) { toast(e.message, 1); } }),
       h('div', { class: 'muted cn-meta' }, 'When nonstop is stopped, Rosie may still read on her own after you have been away a while, within the limits here.')),
-    h('dt', {}, 'Quiet hours'), h('dd', {}, h('div', { class: 'form' }, qf, 'to', qt), h('div', { class: 'muted cn-meta' }, 'No idle-time browsing at these times. The morning paper always pauses her (' + st.paper_window + ').')),
+    h('dt', {}, 'Quiet hours'), h('dd', {}, h('div', { class: 'form' }, qf, 'to', qt), h('div', { class: 'muted cn-meta' }, 'No idle-time browsing at these times.' + (/\d/.test(st.paper_window || '') ? ' The morning paper always pauses her (' + st.paper_window + ').' : ''))),
     h('dt', {}, 'Quiet hours when nonstop'), h('dd', {}, onOff(nsq, (v) => { nsq = v; }), h('div', { class: 'muted cn-meta' }, 'Off: nonstop browsing only pauses for the morning paper and while you use Rosie.')),
     num('corner_idle_min', 'Wait after I stop', 'Minutes with no chat or request from you before Rosie starts.', 1, 240),
     num('corner_rest_min', 'Rest between sessions', 'Minutes.', 1, 720),
-    num('corner_pages_session', 'Pages per session', '', 1, 20),
-    num('corner_pages_hour', 'Pages per hour', '', 1, 60),
-    num('corner_pages_day', 'Pages per day', '', 1, 400),
+    num('corner_pages_session', 'Pages per session', '', 1, 100),
+    num('corner_pages_hour', 'Pages per hour', '', 1, 1000),
+    num('corner_pages_day', 'Pages per day', '', 1, 10000),
+    num('corner_github_pct', 'GitHub share (%)', 'How many of her searches go to GitHub. She reads each repository from its README.', 0, 100),
+    num('corner_graph_wait', 'Let her memory catch up after', 'Pieces (finds, pictures, notes from the last day) waiting for her memory graph before she pauses reading so it can catch up; she goes on when nearly all are in. 0 = never pause.', 0, 5000),
+    h('dt', {}, 'Your PC now'), h('dd', {}, pcNow || 'Rosie can\'t read this PC\'s health.'),
+    num('corner_pc_free_gb', 'Keep memory free for me (GB)', 'While you use the PC, she pauses and lets go of her AI models when less than this is free, and loads them again only when there is room. With you away she still keeps 1 GB free. 0 = off.', 0, 64),
+    num('corner_pc_away_min', 'Away from the PC after', 'Minutes with no key press or mouse move. While you are at the PC she also skips picture looks (a second AI model).', 1, 120),
+    num('corner_max_temp', 'Pause when the CPU reaches (°C)', 'She goes on when it is 10 °C cooler. 0 = never pause for heat.', 0, 105),
+    h('dt', {}, 'Read on battery'), h('dd', {}, onOff(bat, (v) => { bat = v; }), h('div', { class: 'muted cn-meta' }, 'Off: on a laptop she waits until it is plugged in.')),
     num('corner_site_gap_s', 'Seconds between pages of one site', 'A site\'s robots.txt can ask for longer.', 5, 600),
     h('dt', {}, 'Pictures'), h('dd', {}, onOff(pics, (v) => { pics = v; }), h('div', { class: 'muted cn-meta' }, st.pictures_why)),
     num('corner_images_day', 'Pictures per day', '', 0, 100),
     num('corner_looks_day', 'Picture looks per day', 'Looking at a picture loads a second AI model, which pushes the chat model off the graphics card for a moment.', 0, 50),
-    num('corner_storage_mb', 'Picture storage (MB)', 'Oldest pictures go first when it is full. Starred ones stay. Nonstop mode has no storage limit; it stops saving pictures when the disk has less than 5 GB free.', 50, 10240),
+    num('corner_storage_mb', 'Picture storage (MB)', 'Oldest pictures go first when it is full. Starred ones stay. She also stops saving pictures when the disk has less than 5 GB free.', 50, 10240),
     num('corner_changes_day', 'Corner changes per day', 'How many changes Rosie may make to her own space each day.', 0, 100),
     h('dt', {}, 'Interests'), h('dd', {}, h('div', { class: 'form' }, interests), h('div', { class: 'muted cn-meta' }, 'Comma separated. Rosie also follows her own curiosity.')),
     h('dt', {}, 'Never open'), h('dd', {}, block, h('div', { class: 'muted cn-meta' }, 'Added to the built-in block list (adult, gambling, piracy and malware sites, and sites that need a login).')));
   const save = async () => {
-    const body = { corner_quiet_from: qf.value, corner_quiet_to: qt.value, corner_pictures: pics, corner_nonstop_quiet: nsq,
+    const body = { corner_quiet_from: qf.value, corner_quiet_to: qt.value, corner_pictures: pics, corner_nonstop_quiet: nsq, corner_on_battery: bat,
       corner_interests: interests.value.split(',').map((x) => x.trim()).filter(Boolean), corner_block_domains: block.value.split(/\s+/).map((x) => x.trim()).filter(Boolean) };
     form.querySelectorAll('input[type=number]').forEach((i) => { body[i.dataset.k] = +i.value; });
     try { await post('/api/corner/settings', body); toast('Saved'); again(); } catch (e) { toast(e.message, 1); }
@@ -218,12 +227,12 @@ VIEWS.corner = async (arg) => {
   const head = h('div', { class: 'card wide cn-head' },
     h('h3', {}, 'Browse nonstop'),
     h('div', { class: 'form' }, nonstopBtn),
-    h('div', { class: 'muted cn-meta' }, 'Start: Rosie reads until you press Stop, with no page, picture or change limits. She pauses while you use Rosie and while the morning paper is built (' + st.paper_window + '), and still keeps every safety rule.'),
+    h('div', { class: 'muted cn-meta' }, 'Start: Rosie reads until you press Stop or reads her pages per day, with no other page, picture or change limits. She pauses while you use Rosie' + (st.paper_window ? ' and while the morning paper is built (' + st.paper_window + ')' : '') + ', and still keeps every safety rule.'),
     st.nonstop && st.paused ? h('div', { class: 'cn-status' }, 'Paused: ' + st.paused) : null,
     st.disk_low ? h('div', { class: 'cn-pics-state off' }, `Pictures paused: less than 5 GB free on the disk (${st.disk_free_gb} GB).`) : null,
     st.running && !st.nonstop ? h('div', { class: 'form', style: 'margin-top:8px' }, btn('Stop now', 'sm bad', async () => { await post('/api/corner/stop'); toast('Stopped'); again(); })) : null,
     h('div', { class: 'cn-status' }, line), st.last_stop && !st.running ? h('div', { class: 'muted cn-meta' }, 'Last stop: ' + st.last_stop) : null,
-    h('div', { class: 'muted cn-meta' }, st.nonstop ? `Pages today: ${st.pages_today} · this hour: ${st.pages_hour} · pictures today: ${st.images_today}`
+    h('div', { class: 'muted cn-meta' }, st.nonstop ? `Pages today: ${st.pages_today} of ${st.settings.corner_pages_day} · this hour: ${st.pages_hour} · pictures today: ${st.images_today}`
       : `Pages today: ${st.pages_today} of ${st.settings.corner_pages_day} · this hour: ${st.pages_hour} of ${st.settings.corner_pages_hour} · pictures today: ${st.images_today}`),
     h('div', { class: 'cn-pics-state ' + (st.pictures_on ? 'ok' : 'off') }, st.pictures_why),
     st.graph ? h('div', { class: 'cn-pics-state ' + (st.graph.on ? 'ok' : 'off') }, st.graph.line) : null,

@@ -66,7 +66,7 @@ PY
 step "6/11 Rosie's memory graph (FalkorDB in Docker)"
 if ! docker inspect rosie-graph >/dev/null 2>&1; then
   docker run -d --name rosie-graph --restart unless-stopped -p 127.0.0.1:6380:6379 -v rosie-graph-data:/var/lib/falkordb/data \
-    -v "$D/secrets/graphiti_falkordb_password:/run/secrets/falkordb_password:ro" --entrypoint /bin/sh falkordb/falkordb-server:v4.22.1 \
+    -v "$D/secrets/graphiti_falkordb_password:/run/secrets/falkordb_password:ro" --entrypoint /bin/sh falkordb/falkordb-server:v4.22.2 \
     -c 'REDIS_ARGS="--requirepass $(cat /run/secrets/falkordb_password) --appendonly yes" exec /var/lib/falkordb/bin/run.sh' >/dev/null
 fi
 note "running"

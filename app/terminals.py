@@ -113,7 +113,7 @@ def get(name):
     return next((s for s in list_sessions() if s["name"] == name), None)
 
 
-def start(command="", folder="~", kind="shell", agent="", name="", check_flags=True):
+def start(command="", folder="~", kind="shell", agent="", name="", check_flags=True, extra_env: dict | None = None):
     ensure_server()
     if check_flags and command and FORBIDDEN.search(command):
         raise ValueError("That command skips an agent's permission checks, which I won't do. Start it yourself in the Terminal page if you really want that.")
@@ -127,7 +127,9 @@ def start(command="", folder="~", kind="shell", agent="", name="", check_flags=T
     mark = f"{shlex.quote(TMUX)} -L {SOCK} set-option @done 1"
     inner = (command + f'; echo; echo "[finished - this is now a normal shell]"; {mark}; exec bash -l') if command else "exec bash -l"
     e = env()
-    r = _tmux("new-session", "-d", "-s", final, "-c", str(cwd), "-x", "180", "-y", "45", "-e", f"PATH={e['PATH']}", "-e", "TERM=xterm-256color", "bash -lc " + shlex.quote(inner))
+    more = [x for k, v in (extra_env or {}).items() if re.fullmatch(r"[A-Z_][A-Z0-9_]*", k) for x in ("-e", f"{k}={v}")]
+    r = _tmux("new-session", "-d", "-s", final, "-c", str(cwd), "-x", "180", "-y", "45", "-e", f"PATH={e['PATH']}", "-e", "TERM=xterm-256color", *more,
+              "bash -lc " + shlex.quote(inner))
     if r.returncode != 0:
         raise RuntimeError(f"Could not start session: {r.stderr.strip()[:200]}")
     for k, v in (("@kind", kind), ("@agent", agent), ("@folder", str(cwd))):
@@ -136,7 +138,7 @@ def start(command="", folder="~", kind="shell", agent="", name="", check_flags=T
     return {"name": final, "kind": kind, "agent": agent, "folder": str(cwd)}
 
 
-def launch_agent(agent, task="", folder="~", name=""):
+def launch_agent(agent, task="", folder="~", name="", extra_env: dict | None = None):
     tpls = config.load()["agents"]
     if agent not in tpls:
         raise ValueError(f"Unknown agent '{agent}'. Available: {', '.join(tpls)}")
@@ -150,7 +152,7 @@ def launch_agent(agent, task="", folder="~", name=""):
         cmd = tpl.replace("{prompt}", shlex.quote(task.strip()[:4000]))
     else:
         cmd = tpl.replace("{prompt}", "").replace("run ", "").strip() if agent == "opencode" else tpl.replace("{prompt}", "").replace(" -i ", " ").strip()
-    r = start(cmd, folder, kind="agent", agent=agent, name=name or agent)
+    r = start(cmd, folder, kind="agent", agent=agent, name=name or agent, extra_env=extra_env)
     r["note"] = ("Started. The agent asks its own permission questions inside the session. Open the Terminal page to watch and answer them.")
     return r
 

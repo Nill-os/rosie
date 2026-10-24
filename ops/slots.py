@@ -3,7 +3,9 @@
 Everything else (data, notes, logins, Python environment, port, Tailscale address) is SHARED, so a switch never changes your connections.
 
 This file is installed OUTSIDE both slots (~/rosie-ops) and is not editable by the assistant. Commands (all print JSON):
-  status | prepare [topic] | commit "message" | diff | stage | switch | rollback [reason] | events
+  status | prepare [topic] | commit "message" | diff | stage | switch | rollback [reason] | events | claim [why] | release
+The idle slot is claimed on the agent board (app/agentboard.py) by whoever prepares it; while another live agent holds it,
+prepare, commit, stage and switch refuse (prepare --force and switch --force override).
 """
 import json
 import os
@@ -136,16 +138,59 @@ def ensure_b():
     return {"slot": "B", "path": str(b), "head": head("B")}
 
 
+# ---------- the agent board (app/agentboard.py): the idle slot is claimed by whoever prepares it, so no other agent changes it meanwhile ----------
+def _board():
+    """The live slot's agent board module, or None (then the slots work exactly as before)."""
+    try:
+        app = str(SLOT[active()] / "app")
+        if "agentboard" not in sys.modules and app not in sys.path:
+            sys.path.append(app)
+        import agentboard
+        return agentboard
+    except Exception:
+        return None
+
+
+def _board_call(fn, *a, **k):
+    b = _board()
+    try:
+        return getattr(b, fn)(*a, **k) if b else None
+    except Exception:
+        return None
+
+
+def claimed(slot: str) -> str:
+    """'' if the caller may change this slot, else who holds it."""
+    return _board_call("blocked_by", f"slot-{slot}") or ""
+
+
+def claim(why="working on it", force=False):
+    """Claim the idle slot on the agent board for the caller (12 hours, or until released, switched, or the caller's session ends)."""
+    idle = other(active())
+    return _board_call("claim", f"slot-{idle}", why, 12, force=force) or {"error": "The agent board is not available."}
+
+
+def release():
+    return _board_call("release", f"slot-{other(active())}") or {"ok": True}
+
+
 def prepare(topic="update", force=False):
     """Make the inactive slot an exact copy of the live code, on a fresh working branch."""
     live = active()
     idle = other(live)
+    if claimed(idle) and not force:                    # the plain reason first (the atomic claim below decides)
+        return {"error": claimed(idle), "claimed": True}
+    if (load_state().get("probation_until") or 0) > time.time() and not force:   # the idle slot is the way back until probation ends (audit 2026-10-20)
+        return {"error": f"Slot {idle} is the way back while the new version is on probation (about {int((load_state()['probation_until'] - time.time()) // 60) + 1} more minutes). Wait, or prepare with force."}
     if idle == "B":
         ensure_b()
     if not SLOT[idle].exists():
         raise RuntimeError(f"slot {idle} does not exist")
     if dirty(idle) and not force:
         return {"error": f"Slot {idle} has uncommitted work ({len(dirty(idle))} files). Commit it, or prepare with force to throw it away.", "dirty": dirty(idle)[:10]}
+    got = _board_call("claim", f"slot-{idle}", topic, 12, force=force)   # claimed first (atomic), before anything changes (audit 2026-10-20)
+    if isinstance(got, dict) and got.get("ok") is False:
+        return {"error": claimed(idle) or f"slot {idle} is claimed by another agent", "claimed": True}
     if dirty(live):                                    # the live slot is the source of truth: snapshot its current files so the copy is exact
         git(live, "add", "-A")
         git(live, "-c", "user.name=Rosie", "-c", "user.email=rosie@localhost", "commit", "-q", "-m", "Snapshot before self-update")
@@ -156,11 +201,14 @@ def prepare(topic="update", force=False):
     git(idle, "clean", "-fdq")
     save_state(prepared={"slot": idle, "base": base, "branch": branch, "at": time.time()}, last_stage=None)
     log_event("prepare", slot=idle, base=base, branch=branch)
+    _board_call("post", f"prepared Rosie slot {idle} on {branch} (from live {base}) for: {topic}", "doing")
     return {"slot": idle, "path": str(SLOT[idle]), "base": base, "branch": branch}
 
 
 def commit(message="Self-update"):
     idle = other(active())
+    if claimed(idle):
+        return {"error": claimed(idle), "claimed": True}
     if not dirty(idle):
         return {"ok": True, "note": "nothing to commit", "head": head(idle)}
     git(idle, "add", "-A")
@@ -202,8 +250,11 @@ def smoke(idle: str) -> dict:
     """Start the candidate on a spare port with copied data and check the basics."""
     import hashlib
     import hmac
+    if healthz(STAGE_PORT, 1):                                    # an old stage server still answers there: it would be checked instead
+        return {"ok": False, "checks": {}, "error": f"port {STAGE_PORT} is already in use (an earlier check's server?)"}
     tmp = _build_stage(idle)
-    env = {**os.environ, "ROSIE_SANDBOX": "1", "ROSIE_SLOT": idle + "-stage"}
+    me = f"{idle}-stage-{_secrets.token_hex(4)}"                  # only this check's own server counts as up
+    env = {**os.environ, "ROSIE_SANDBOX": "1", "ROSIE_SLOT": me}
     venv = SLOT["A"] / ".venv" / "bin" / "uvicorn"
     proc = subprocess.Popen([str(venv), "server:app", "--host", "127.0.0.1", "--port", str(STAGE_PORT)], cwd=tmp / "app", env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     out = {"ok": False, "checks": {}}
@@ -211,6 +262,7 @@ def smoke(idle: str) -> dict:
         up = None
         for _ in range(60):
             up = healthz(STAGE_PORT, 2)
+            up = up if up and up.get("slot") == me else None
             if up or proc.poll() is not None:
                 break
             time.sleep(1)
@@ -245,6 +297,8 @@ def smoke(idle: str) -> dict:
 def stage(with_eval=True):
     """Tests + a sandboxed start + (optionally) the model benchmark. The switch is only allowed after this passes for the exact commit."""
     idle = other(active())
+    if claimed(idle):
+        return {"ok": False, "error": claimed(idle), "claimed": True}
     commit("Self-update (staged)")
     flag = OPS / "staging"                                   # her corner and memory pause their model use while this runs
     flag.parent.mkdir(parents=True, exist_ok=True)
@@ -281,6 +335,8 @@ def _stage(idle, with_eval):
     res["finished"] = time.time()
     save_state(last_stage=res)
     log_event("stage", slot=idle, head=res["head"], ok=res["ok"])
+    _board_call("post", f"stage check of slot {idle} ({res['head']}) {'passed' if res['ok'] else 'FAILED'}: tests {res['tests']['summary'][:80]}, "
+                f"smoke {'ok' if res['smoke']['ok'] else 'failed'}, eval {res['eval'].get('score', 'skipped')}", "done" if res["ok"] else "blocked")
     return res
 
 
@@ -312,15 +368,19 @@ def switch(force=False):
     ls = st.get("last_stage") or {}
     if not force and not (ls.get("ok") and ls.get("head") == head(idle) and not dirty(idle)):
         return {"error": "Not allowed: the new version has not passed the full check for its exact current code. Run stage first.", "last_stage": ls.get("ok")}
+    if claimed(idle) and not force:
+        return {"error": claimed(idle), "claimed": True}
     try:                                               # a verified, encrypted snapshot of your data before anything changes
         run([str(SLOT[live] / ".venv" / "bin" / "python"), str(SLOT[live] / "app" / "backup.py"), "backup"], timeout=300)
     except Exception as e:
         log_event("backup-failed", error=str(e)[:200])
-    save_state(previous=live, switched_at=time.time(), probation_until=time.time() + PROBATION_MIN * 60, wd_fails=0)
+    save_state(previous=live, previous_head=head(live), previous_dirty=len(dirty(live)), switched_at=time.time(), probation_until=time.time() + PROBATION_MIN * 60, wd_fails=0)
     set_active(idle)
     log_event("switch", frm=live, to=idle, head=head(idle))
     restart_service()
     if wait_healthy(idle):
+        _board_call("release", f"slot-{idle}", force=True)          # it is live now: nobody's work in progress any more
+        _board_call("post", f"switched Rosie to slot {idle} ({head(idle)}); slot {live} is idle now", "done")
         return {"ok": True, "active": idle, "head": head(idle), "probation_minutes": PROBATION_MIN, "note": f"If anything goes wrong in the next {PROBATION_MIN} minutes I go back automatically."}
     rb = rollback("new version did not come up healthy")
     return {"ok": False, "rolled_back": True, "detail": rb}
@@ -330,9 +390,13 @@ def rollback(reason="requested"):
     st = load_state()
     prev = st.get("previous") or other(active())
     cur = active()
+    if st.get("previous_head") and (head(prev) != st["previous_head"] or len(dirty(prev)) != st.get("previous_dirty", 0)):   # it was prepared again since: not the old version
+        log_event("rollback-refused", to=prev, reason=reason)
+        return {"ok": False, "error": f"Slot {prev} no longer holds the previous version (it was prepared again), so going back to it is refused."}
     set_active(prev)
-    save_state(previous=cur, probation_until=0, wd_fails=0)
+    save_state(previous=cur, previous_head=head(cur), previous_dirty=len(dirty(cur)), probation_until=0, wd_fails=0)
     log_event("rollback", frm=cur, to=prev, reason=reason)
+    _board_call("post", f"Rosie went back from slot {cur} to slot {prev}: {reason}", "note", "all")
     restart_service()
     ok = wait_healthy(prev)
     return {"ok": ok, "active": prev, "reason": reason}
@@ -342,7 +406,7 @@ def status():
     st = load_state()
     live = active()
     idle = other(live)
-    return {"active": live, "inactive": idle, "paths": {k: str(v) for k, v in SLOT.items()}, "heads": {k: head(k) for k in SLOT if SLOT[k].exists()},
+    return {"claimed_by": claimed(idle), "active": live, "inactive": idle, "paths": {k: str(v) for k, v in SLOT.items()}, "heads": {k: head(k) for k in SLOT if SLOT[k].exists()},
             "inactive_dirty": len(dirty(idle)), "inactive_exists": SLOT[idle].exists(), "prepared": st.get("prepared"), "last_stage": st.get("last_stage"),
             "probation_seconds_left": max(0, int(st.get("probation_until", 0) - time.time())), "previous": st.get("previous"), "events": events(5), "healthy": bool(healthz())}
 
@@ -354,7 +418,9 @@ if __name__ == "__main__":
                "prepare": lambda: prepare(sys.argv[2] if len(sys.argv) > 2 else "update", "--force" in sys.argv),
                "commit": lambda: commit(sys.argv[2] if len(sys.argv) > 2 else "Self-update"),
                "stage": lambda: stage("--no-eval" not in sys.argv), "switch": lambda: switch("--force" in sys.argv),
-               "rollback": lambda: rollback(sys.argv[2] if len(sys.argv) > 2 else "requested")}[cmd]()
+               "rollback": lambda: rollback(sys.argv[2] if len(sys.argv) > 2 else "requested"),
+               "claim": lambda: claim(sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] != "--force" else "working on it", "--force" in sys.argv),
+               "release": release}[cmd]()
     except KeyError:
         out = {"error": f"unknown command {cmd}"}
     except Exception as e:

@@ -62,7 +62,7 @@ def get(pid):
 def dismiss(pid):
     import inbox
     with _db() as c:
-        c.execute("UPDATE proposals SET status='dismissed' WHERE id=? AND status='pending'", (pid,))
+        c.execute("UPDATE proposals SET status='dismissed' WHERE id=? AND status IN ('pending', 'approving')", (pid,))
     inbox.mark_read_key(f"prop:{pid}")                  # its "Approve? ..." Inbox entry doesn't pile up (audit P4 N3)
 
 
@@ -71,6 +71,18 @@ def approve(pid):
     p = get(pid)
     if not p or p["status"] != "pending":
         return {"error": "That proposal is no longer waiting."}
+    with _db() as c:                                          # one tap only: a double tap can't add it twice (audit 2026-10-20)
+        if c.execute("UPDATE proposals SET status='approving' WHERE id=? AND status='pending'", (pid,)).rowcount != 1:
+            return {"error": "That proposal is no longer waiting."}
+    try:
+        return _approve(pid, p)
+    except Exception:                                         # it failed part way: it waits again instead of being stuck
+        with _db() as c:
+            c.execute("UPDATE proposals SET status='pending' WHERE id=? AND status='approving'", (pid,))
+        raise
+
+
+def _approve(pid, p):
     import actions
     import tasks
     import workflows
@@ -82,10 +94,16 @@ def approve(pid):
         result = {"task": t["title"], "due": t["due"]}
     elif p["kind"] == "event":
         result = actions.add_event(pl["title"], pl["start"], pl["end"])
+        if isinstance(result, dict) and result.get("status") in actions.NOT_DONE:   # a clash: nothing was added, so it stays waiting
+            with _db() as c:
+                c.execute("UPDATE proposals SET status='pending' WHERE id=?", (pid,))
+            return {"error": str(result.get("message") or "It wasn't added.")}
     elif p["kind"] == "plan":
         import projects
         result = projects.apply_plan(pl)
     else:
+        with _db() as c:
+            c.execute("UPDATE proposals SET status='pending' WHERE id=?", (pid,))
         return {"error": "Unknown proposal type."}
     with _db() as c:
         c.execute("UPDATE proposals SET status='approved' WHERE id=?", (pid,))

@@ -5,12 +5,14 @@ python-multipart>=0.0.32
 pydantic>=2.13.5
 requests>=2.34.2
 httpx>=0.28.1
+scrapling[fetchers]>=0.5
 tzlocal>=5.4.4
 numpy>=2.5.3
 soundfile>=0.14.0
 faster-whisper>=1.2.1
 kokoro-onnx>=0.6.1
-python-xlib>=0.33
+python-xlib>=0.33; sys_platform == "linux"
+tzdata; sys_platform == "win32"           # Windows has no time zone database of its own
 google-api-python-client>=2.201.0
 google-auth-oauthlib>=1.5.0
 google-auth-httplib2>=0.4.4
@@ -19,3 +21,7 @@ mcp>=2.3.0
 # virus scanner, apt install clamav) no picture is saved at all.
 pillow>=10.2
 # the desktop overlay also needs the system packages python3-gi, python3-gi-cairo, gir1.2-gtk-3.0 (apt)
+# Vector robot (Settings > Vector): his voice, settings and SDK ports are gRPC; the generated code in app/vector_pb needs these versions or newer.
+# His Ogg Opus audio is decoded with the system libopus (apt install libopus0).
+grpcio>=1.84.0
+protobuf>=7.35.1

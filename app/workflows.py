@@ -6,6 +6,7 @@ Nothing is deleted: processed scratch notes are archived into the daily note fir
 import datetime as dt
 import json
 import re
+import threading
 from pathlib import Path
 
 import httpx
@@ -113,11 +114,16 @@ def resolve_due(phrase: str, base: dt.date | None = None) -> str:
     return base.isoformat()
 
 
+LLM_JSON_PREDICT = 4096             # no cap meant a runaway answer held the GPU until the 300 s timeout (audit 2026-10-23)
+
+
 def llm_json(system: str, user: str, schema: dict, timeout=300):
-    r = httpx.post(OLLAMA, timeout=timeout, json={
+    resp = httpx.post(OLLAMA, timeout=timeout, json={
         "model": MODEL, "stream": False, "think": False, "format": schema, "keep_alive": "30m",
-        "options": {**ctxsize.options(MODEL), "temperature": 0.1},
-        "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}).json()
+        "options": {**ctxsize.options(MODEL), "temperature": 0.1, "num_predict": LLM_JSON_PREDICT},
+        "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]})
+    resp.raise_for_status()                                   # a crashed runner (HTTP 500) is "the model is down", not a bad answer
+    r = resp.json()
     return json.loads(r["message"]["content"])
 
 
@@ -187,9 +193,12 @@ def add_to_memfile(section: str, items: list[str]):
 
 
 # ---------- capture ----------
+_pad = threading.Lock()                                        # a capture and the sync's clear never interleave
+
+
 def capture(text: str):
     init_vault()
-    with SCRATCH.open("a") as f:
+    with _pad, SCRATCH.open("a") as f:
         f.write(f"- [{now():%H:%M}] {text.strip()}\n")
     return {"status": "saved to scratch pad", "tip": "Run /sync to sort it into tasks and notes."}
 
@@ -251,7 +260,10 @@ def _sync_scratch(report: list[str]):
     append_daily("Captured (raw)", body.splitlines())
     append_daily("Decisions", d["decisions"])
     append_daily("Notes", d["notes"] + [f"Idea: {i}" for i in d["ideas"]])
-    SCRATCH.write_text(SCRATCH_HEADER)
+    with _pad:                                                 # keep what was jotted down while the model was sorting (audit 2026-10-20)
+        later = _scratch_body()
+        rest = later[len(body):].strip() if later.startswith(body) else later.replace(body, "", 1).strip()
+        SCRATCH.write_text(SCRATCH_HEADER + (rest + "\n" if rest else ""))
     report.append(f"Scratch pad sorted: {len(added)} task(s) added" + (": " + "; ".join(added) if added else "")
                   + f"; {len(d['ideas'])} idea(s) saved; {len(d['decisions'])} decision(s); {len(d['followups'])} waiting-on.")
 
@@ -326,7 +338,7 @@ def _sync_meetings(report: list[str], via_proposals: bool = False):
         for a in mine:
             if via_proposals:   # recorded meetings: tasks wait for the user's approval
                 import proposals
-                proposals.add("task", a["title"].strip(), {"title": a["title"].strip(), "due": a.get("when", "")}, detail=f"From meeting: {title}", source=f"meeting:{new.stem}",
+                proposals.add("task", a["title"].strip(), {"title": a["title"].strip(), "due": resolve_due(a["when"]) if a.get("when") else ""}, detail=f"From meeting: {title}", source=f"meeting:{new.stem}",
                               key=f"mtask:{new.stem}:{a['title'].strip()[:40]}")
             else:
                 tasks.add(a["title"].strip(), resolve_due(a.get("when", "")))

@@ -33,11 +33,44 @@ def _private_host(url: str) -> bool:
 def fetch_url(url: str, max_chars: int = 3500):
     if _private_host(url):
         return {"error": "That address is on this computer or the local network, so I will not open it."}
-    try:
-        r = httpx.get(url, headers=UA, timeout=20, follow_redirects=True)
-        return {"url": str(r.url), "status": r.status_code, "text": _text(r.text)[:min(int(max_chars), 6000)]}
-    except Exception as e:
-        return {"error": f"{type(e).__name__}: {e}"}
+    r = scrape(url)
+    if "error" in r:
+        return {"error": r["error"]}
+    return {"url": r["url"], "status": r["status"], "text": _text(r["html"])[:min(int(max_chars), 6000)]}
+
+
+# ---------- Scrapling: the owner's web scraper for every agent (owner 2026-10-22: "switch rosie to scrapling too") ----------
+_scrapling_get = None                          # tests put a fake here: (url, **kw) -> an object with status, body, headers, encoding
+
+
+def _fetcher():
+    if _scrapling_get is not None:
+        return _scrapling_get
+    import logging
+    from scrapling.fetchers import Fetcher
+    logging.getLogger("scrapling").setLevel(logging.WARNING)       # it logs every page it fetches
+    return Fetcher.get
+
+
+def scrape(url: str, timeout: float = 20, max_hops: int = 5) -> dict:
+    """GET one public web page with Scrapling's fast fetcher (no browser). Redirects are followed one hop at a time and every hop is
+    checked with public_url_problem, so a page can't send the request on to this PC or the LAN. Returns {url, status, html} or {error}."""
+    cur = str(url)
+    for _ in range(max_hops + 1):
+        prob = public_url_problem(cur)
+        if prob:
+            return {"error": prob, "url": cur}
+        try:
+            r = _fetcher()(cur, follow_redirects=False, timeout=timeout, retries=1)
+        except Exception as e:
+            return {"error": f"{type(e).__name__}: {e}"}
+        loc = {str(k).lower(): v for k, v in dict(r.headers or {}).items()}.get("location")
+        if r.status in (301, 302, 303, 307, 308) and loc:
+            cur = urllib.parse.urljoin(cur, loc)
+            continue
+        body = r.body if isinstance(r.body, bytes) else str(r.body or "").encode()
+        return {"url": cur, "status": r.status, "html": body.decode(r.encoding or "utf-8", "replace")}
+    return {"error": "That page sent me through too many redirects.", "url": cur}
 
 
 # ---------- stricter read-only GET for Rosie's corner (corner_browse.py): every redirect hop is checked again ----------
@@ -99,15 +132,49 @@ def _pinned(url: str, ip: str) -> tuple[str, str, str]:
     return urllib.parse.urlunsplit((p.scheme, netloc, p.path or "/", p.query, "")), host, p.hostname
 
 
+_browser_session = None                        # tests put a fake curl_cffi Session class here; None = the real one
+
+
+class _BrowserHop:
+    """One GET through Scrapling's engine (curl_cffi with a real browser's TLS fingerprint and headers, so sites that turn away plain
+    Python clients answer), pinned to the checked IP with curl's RESOLVE: the TLS name and certificate check stay the site's own name.
+    Never follows a redirect and keeps no cookie. Shaped like the httpx stream get_public reads."""
+
+    def __init__(self, url: str, ip: str, timeout: float):
+        from curl_cffi import CurlOpt
+        from curl_cffi.requests import Session
+        p = urllib.parse.urlsplit(url)
+        pin = f"{p.hostname}:{p.port or (443 if p.scheme == 'https' else 80)}:{f'[{ip}]' if ':' in ip else ip}"
+        self.s = (_browser_session or Session)(impersonate="chrome", curl_options={CurlOpt.RESOLVE: [pin]}, trust_env=False,
+                                               allow_redirects=False, discard_cookies=True)
+        self.url, self.timeout, self.r = url, timeout, None
+
+    def __enter__(self):
+        self.r = self.s.get(self.url, stream=True, timeout=self.timeout)
+        self.status_code, self.headers = self.r.status_code, self.r.headers
+        m = re.search(r"charset=([\w.-]+)", self.headers.get("content-type") or "", re.I)
+        self.encoding = m.group(1) if m else None
+        return self
+
+    def iter_bytes(self):
+        return self.r.iter_content()
+
+    def __exit__(self, *exc):
+        if self.r is not None:
+            self.r.close()
+        self.s.close()
+
+
 def get_public(url: str, *, max_bytes: int, accept: tuple = ("text/html", "application/xhtml+xml"), timeout: float = 15,
-               headers: dict | None = None, stop=None, max_hops: int = 5, check=None) -> dict:
+               headers: dict | None = None, stop=None, max_hops: int = 5, check=None, browser: bool = False) -> dict:
     """One read-only GET of a public web address. No cookies are kept or sent (not even between redirect hops), no forms, no other
     methods. Every hop is checked with _check_public (and `check`, the caller's own rule, which returns a reason or None), and the
     request goes to exactly the address that was checked (DNS pinning: the name is looked up once per hop, the connection is made to
     that IP with the Host header and the TLS name (SNI, certificate check) set to the site name), so a name that changes its answer
     between the check and the request can't reach this PC or the LAN. The answer is refused when its type doesn't start with one of
-    `accept` (empty = any) or it is bigger than `max_bytes`. `stop` (a threading.Event) cuts a download short.
-    Returns {url, status, content_type, body} or {error}."""
+    `accept` (empty = any) or it is bigger than `max_bytes`. `stop` (a threading.Event) cuts a download short. `browser` reads through
+    Scrapling's engine (_BrowserHop: a browser's own headers, `headers` is not used) with the same checks and pinning; with a test
+    transport set, both ways go through it. Returns {url, status, content_type, body} or {error}."""
     import http.cookiejar
     cur = str(url)
     deadline = time.monotonic() + max(timeout * 4, 30)              # a whole read, all hops: a slow-drip server can't hold a cycle for minutes
@@ -120,8 +187,10 @@ def get_public(url: str, *, max_bytes: int, accept: tuple = ("text/html", "appli
                 return {"error": prob, "url": cur, "blocked": True}
             target, host, sni = _pinned(cur, ips[0])
             c.cookies.clear()
+            real_browser = browser and _public_transport is None
             try:
-                with c.stream("GET", target, headers={"Host": host}, extensions={"sni_hostname": sni}) as r:
+                with (_BrowserHop(cur, ips[0], timeout) if real_browser else
+                      c.stream("GET", target, headers={"Host": host}, extensions={"sni_hostname": sni})) as r:
                     if r.status_code in (301, 302, 303, 307, 308) and r.headers.get("location"):
                         cur = urllib.parse.urljoin(cur, r.headers["location"])
                         continue
@@ -144,6 +213,10 @@ def get_public(url: str, *, max_bytes: int, accept: tuple = ("text/html", "appli
                             return {"error": "Too big.", "url": cur, "status": r.status_code, "content_type": ctype}
                     return {"url": cur, "status": r.status_code, "content_type": ctype, "body": bytes(buf), "encoding": r.encoding or "utf-8"}
             except httpx.HTTPError as e:
+                return {"error": f"{type(e).__name__}: {e}"[:200], "url": cur}
+            except Exception as e:                                    # curl_cffi's own errors (timeouts, TLS, connection)
+                if not real_browser:
+                    raise
                 return {"error": f"{type(e).__name__}: {e}"[:200], "url": cur}
         return {"error": "Too many redirects.", "url": cur}
 
@@ -257,9 +330,9 @@ def find_recipe(query: str):
     urls = [x["url"] for x in res if not any(s in x["url"] for s in skip)][:6]
 
     def one(u):
+        r = scrape(u, timeout=15)
         try:
-            r = httpx.get(u, headers=UA, timeout=15, follow_redirects=True)
-            return parse_recipe(r.text, str(r.url))
+            return parse_recipe(r["html"], r["url"]) if "html" in r else None
         except Exception:
             return None
     with ThreadPoolExecutor(4) as ex:

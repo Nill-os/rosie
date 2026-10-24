@@ -201,6 +201,26 @@ def running() -> bool:
     return bool(status["running"])
 
 
+LIVE_FILE = config.PATH.with_name("live_model.json")   # models._publish: the chat model the running server uses
+
+
+def live_model() -> str:
+    """The chat model to ask: this process's pick once models.load_saved ran (the server); in a helper process (rosie-mind's MCP server,
+    the paper's morning build) the owner's saved pick, not the built-in default: asking Ollama for another model swapped the live one
+    off the 8 GB GPU (audit 2026-10-23)."""
+    import corner_browse
+    if corner_browse.LIVE["set"]:
+        return corner_browse.MODEL
+    try:                                                          # what the server really uses (models._publish): the default when the
+        import json                                               # saved pick couldn't be used (audit pass 3)
+        name = json.loads(LIVE_FILE.read_text()).get("model")
+        if name:
+            return name
+    except (OSError, ValueError, AttributeError):
+        pass
+    return config.load().get("chat_model") or corner_browse.MODEL
+
+
 def push(model=None):
     """Hand the current values to the corner's browsing code, which may not import this module (it can run docker)."""
     import corner_browse

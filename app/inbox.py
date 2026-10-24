@@ -36,6 +36,9 @@ def _in_quiet(now: dt.datetime, cfg) -> bool:
 
 
 def notify_desktop(title: str, body: str = "") -> bool:
+    if os.name == "nt":                                    # a Windows toast
+        import plat
+        return plat.notify(title, body)
     env = pc_tools.gui_env()
     if not env:
         return False

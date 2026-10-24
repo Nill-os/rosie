@@ -26,8 +26,21 @@ def current() -> str:
     return agent.MODEL
 
 
+def _publish():
+    """Write the model this server really uses where helper processes read it (ctxsize.live_model): when the saved pick couldn't be
+    used, the server stays on the default and the helpers must too (audit pass 3)."""
+    import json
+    import atomic
+    try:
+        atomic.write_text(testguard.check(ctxsize.LIVE_FILE), json.dumps({"model": current(), "at": time.time()}))
+    except (OSError, RuntimeError):
+        pass
+
+
 def _apply(name: str):
     agent.MODEL = workflows.MODEL = corner_browse.MODEL = name     # corner_graph reads corner_browse.MODEL at call time
+    corner_browse.LIVE["set"] = True
+    _publish()
     ctxsize.push(name)                                            # and the corner gets that model's context window
 
 
@@ -103,7 +116,9 @@ def switch(name: str) -> dict:
 def load_saved():
     """At start: use the saved pick if it is still installed and usable; otherwise stay on the default and say why."""
     global last_problem
+    corner_browse.LIVE["set"] = True                              # from here this process's MODEL is the live one, whichever it is
     name = config.load().get("chat_model") or DEFAULT
+    _publish()                                                    # the default until the pick is applied below (_apply publishes it)
     if name == current():
         return
     try:
@@ -113,5 +128,6 @@ def load_saved():
         return
     if pick and pick["usable"]:
         _apply(name)
+        last_problem = ""
     else:
         last_problem = f"{name} is {'not installed' if not pick else pick['why_not']}; using {current()}."

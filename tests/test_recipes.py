@@ -34,8 +34,9 @@ def test_find_recipe_picks_the_best_and_never_invents(monkeypatch):
     pages = {"https://a.test": recipe_page("Few", 5.0, 3), "https://b.test": recipe_page("Many", 4.8, 1220), "https://c.test": "<html>nothing</html>"}
     monkeypatch.setattr(web, "web_search", lambda q: [{"title": k, "url": k, "snippet": ""} for k in pages])
     class R:
-        def __init__(self, u): self.text, self.url = pages[u], u
-    monkeypatch.setattr(web.httpx, "get", lambda u, **k: R(u))
+        def __init__(self, u): self.status, self.body, self.headers, self.encoding = 200, pages[u].encode(), {}, "utf-8"
+    monkeypatch.setattr(web, "public_url_problem", lambda u: None)
+    monkeypatch.setattr(web, "_scrapling_get", lambda u, **k: R(u))
     out = web.find_recipe("thin crust pizza dough")
     assert out["best"]["name"] == "Many" and out["others"][0]["name"] == "Few" and "source URL" in out["note"]
     monkeypatch.setattr(web, "web_search", lambda q: [{"title": "c", "url": "https://c.test", "snippet": ""}])

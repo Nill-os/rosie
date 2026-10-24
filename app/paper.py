@@ -14,6 +14,7 @@ import hashlib
 import html
 import json
 import re
+import os
 import shutil
 import sqlite3
 import subprocess
@@ -27,9 +28,11 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 import httpx
 
 import config
+import ctxsize
 import gcal
 import gmail
 import web
+import timefmt
 
 ROOT = Path(__file__).resolve().parent.parent
 DB = ROOT / "data" / "paper.db"
@@ -675,8 +678,7 @@ class Model:
     tries this paper (everything falls back)."""
 
     def __init__(self, post=None, budget_s=MODEL_PAPER_S, max_calls=MODEL_MAX_CALLS):
-        import agent
-        self.model, self.post = agent.MODEL, post or httpx.post
+        self.model, self.post = ctxsize.live_model(), post or httpx.post   # the owner's pick also in the morning build's own process
         self.deadline, self.left, self.down, self.used = time.monotonic() + budget_s, max_calls, False, 0
 
     def ask(self, system, user, max_tokens=120, schema=None) -> str | None:
@@ -687,7 +689,8 @@ class Model:
         self.used += 1
         try:
             body = {"model": self.model, "stream": False, "think": False, "keep_alive": "10m",
-                    "options": {"num_ctx": 4096, "temperature": 0.1, "num_predict": max_tokens},
+                    "options": {**ctxsize.options(self.model), "temperature": 0.1, "num_predict": max_tokens},   # her live num_ctx: a different one
+                    # made Ollama reload the chat model for every paper call between her other callers' (audit 2026-10-23)
                     "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
             if schema:
                 body["format"] = schema
@@ -804,7 +807,7 @@ def read_delivery(meta: dict, today: dt.date) -> dict | None:
     win = WINDOW_RE.search(text)
     return {"what": what[:90] or f"{store} order", "generic": not what, "store": store, "carrier": carrier, "status": status, "sent": sent.isoformat(),
             "expected": exp, "expected_words": exp_words, "window": f"{win.group(1)}–{win.group(2)}" if win and status != "delivered" else "",
-            "subject": subj[:160], "thread": meta.get("thread_id") or meta.get("id"), "id": meta.get("id"),
+            "subject": subj[:160], "sender": frm[:200], "thread": meta.get("thread_id") or meta.get("id"), "id": meta.get("id"),
             "problem": (ST_PROBLEM.search(subj) or ST_PROBLEM.search(snip)).group(0).lower() if status == "problem" else ""} | \
         ({"_fake": True} if meta.get("_fake") else {})
 
@@ -930,12 +933,12 @@ def has_time(title: str) -> bool:
 
 def _clock(iso: str) -> str:
     t = dt.datetime.fromisoformat(iso)
-    return t.strftime("%-I:%M %p").replace(":00 ", " ") if t.minute == 0 else t.strftime("%-I:%M %p")
+    return t.strftime(timefmt.nopad("%-I:%M %p")).replace(":00 ", " ") if t.minute == 0 else t.strftime(timefmt.nopad("%-I:%M %p"))
 
 
 def _short_clock(iso: str) -> str:
     t = dt.datetime.fromisoformat(iso)
-    return f"{t:%-I}" if t.minute == 0 else f"{t:%-I:%M}"
+    return f"{(t).strftime(timefmt.nopad('%-I'))}" if t.minute == 0 else f"{(t).strftime(timefmt.nopad('%-I:%M'))}"
 
 
 def private_out(deliv: dict | None) -> dict | None:
@@ -1360,19 +1363,32 @@ def _quiet(fn, **kw):
 
 # ---------------------------------------------------------------- PDF (headless Chrome with its OWN throwaway profile)
 def chrome_path() -> str | None:
-    for n in ("google-chrome-stable", "google-chrome", "chromium", "chromium-browser"):
+    for n in ("google-chrome-stable", "google-chrome", "chromium", "chromium-browser", "chrome", "msedge"):
         p = shutil.which(n)
         if p:
             return p
+    if os.name == "nt":                                   # Windows: Chrome where its installer puts it, else Edge (always there; same engine)
+        for base in (os.environ.get("ProgramFiles", r"C:\Program Files"), os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
+                     os.environ.get("LOCALAPPDATA", "")):
+            for rel in (r"Google\Chrome\Application\chrome.exe", r"Microsoft\Edge\Application\msedge.exe"):
+                if base and Path(base, rel).exists():
+                    return str(Path(base, rel))
     return None
+
+
+def _kill_tree(p):
+    """Stop this Chrome and only the processes it started (its own session on Linux; its process tree on Windows)."""
+    import signal
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(p.pid)], capture_output=True, timeout=20)
+    else:
+        os.killpg(p.pid, signal.SIGKILL)
 
 
 def chrome(html_path: Path, pdf_path: Path | None = None, timeout=120) -> str:
     """Run headless Chrome on one local HTML file: print it to `pdf_path`, or (no pdf_path) return the page as it stands after its
     scripts ran (--dump-dom). Its own temp profile (never the owner's Chrome), no background network, and only THIS process group
     is stopped if it hangs."""
-    import os
-    import signal
     import tempfile
     exe = chrome_path()
     if not exe:
@@ -1392,12 +1408,12 @@ def chrome(html_path: Path, pdf_path: Path | None = None, timeout=120) -> str:
         try:
             p.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
-            os.killpg(p.pid, signal.SIGKILL)                       # its own session: only the processes this call started
+            _kill_tree(p)                                          # its own session: only the processes this call started
             p.wait(5)
             raise RuntimeError("Chrome took too long with the paper.")
         finally:
             if p.poll() is None:
-                os.killpg(p.pid, signal.SIGKILL)
+                _kill_tree(p)
         out.seek(0)
         dom = out.read().decode("utf-8", "replace")
     if pdf_path and (not pdf_path.exists() or pdf_path.stat().st_size < 500):

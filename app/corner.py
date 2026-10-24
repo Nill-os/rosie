@@ -18,6 +18,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 import config
+import pchealth
 import testguard
 
 DIR = Path(__file__).resolve().parent.parent / "data" / "corner"
@@ -37,16 +38,23 @@ DEFAULTS = {
     "corner_looks_day": 12,           # picture looks with the vision model (it pushes the chat model off the GPU, so few)
     "corner_storage_mb": 2048,
     "corner_changes_day": 20,         # changes Rosie may make to her corner's layout per day
+    "corner_github_pct": 60,          # share of her searches made on GitHub (repositories, read from their READMEs); the web the rest
+    "corner_graph_wait": 100,         # reading pauses while more than this many of the last day's pieces wait for her memory graph; 0 = never
     "corner_max_load": 0.6,           # the PC counts as busy above this load per CPU core
+    "corner_pc_free_gb": 4,           # while the owner uses the PC, she keeps this much memory free for them (pauses, lets go of her models); 0 = off
+    "corner_pc_away_min": 5,          # minutes with no key press or mouse move before the owner counts as away from the PC
+    "corner_max_temp": 90,            # she pauses while the CPU is this hot (°C) and goes on 10 °C cooler; 0 = never
+    "corner_on_battery": False,       # read while a laptop runs on its battery
     "corner_block_domains": [],       # the owner's own additions to the built-in block list
     "corner_nonstop": False,          # nonstop mode: the owner pressed Start; she reads until they press Stop (survives a restart)
     "corner_nonstop_since": "",
     "corner_nonstop_quiet": False,    # quiet hours also pause nonstop mode (off by default; the paper window always pauses)
     "corner_interests": ["science", "technology", "making things", "nature", "history", "local news"],
 }
-INT_LIMITS = {"corner_idle_min": (1, 240), "corner_rest_min": (1, 720), "corner_pages_session": (1, 20), "corner_pages_hour": (1, 60),
-              "corner_pages_day": (1, 400), "corner_site_gap_s": (5, 600), "corner_images_day": (0, 100), "corner_looks_day": (0, 50),
-              "corner_storage_mb": (50, 10240), "corner_changes_day": (0, 100)}
+INT_LIMITS = {"corner_idle_min": (1, 240), "corner_rest_min": (1, 720), "corner_pages_session": (1, 100), "corner_pages_hour": (1, 1000),
+              "corner_pages_day": (1, 10000), "corner_site_gap_s": (5, 600), "corner_images_day": (0, 100), "corner_looks_day": (0, 50),
+              "corner_storage_mb": (50, 10240), "corner_changes_day": (0, 100), "corner_github_pct": (0, 100),
+              "corner_graph_wait": (0, 5000), "corner_pc_free_gb": (0, 64), "corner_pc_away_min": (1, 120), "corner_max_temp": (0, 105)}
 TIME_RE = re.compile(r"([01]\d|2[0-3]):[0-5]\d")
 DOMAIN_RE = re.compile(r"(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}")
 
@@ -64,7 +72,7 @@ def save_settings(body: dict) -> dict:
             raise ValueError(f"Unknown setting: {k}")
         if k == "corner_nonstop_since":
             raise ValueError("Use Start / Stop for nonstop browsing")
-        if k in ("corner_on", "corner_pictures", "corner_nonstop", "corner_nonstop_quiet"):
+        if k in ("corner_on", "corner_pictures", "corner_nonstop", "corner_nonstop_quiet", "corner_on_battery"):
             if not isinstance(v, bool):
                 raise ValueError(f"{k} must be on or off")
         elif k in ("corner_quiet_from", "corner_quiet_to"):
@@ -114,7 +122,7 @@ def set_nonstop(on: bool) -> dict:
     return settings()
 
 
-DISK_MIN_FREE = 5 * 1024 ** 3          # nonstop mode keeps no picture storage budget; it stops saving pictures below this much free disk
+DISK_MIN_FREE = 5 * 1024 ** 3          # pictures stop being saved below this much free disk (on top of the storage budget)
 
 
 def disk_free() -> int:
@@ -122,8 +130,7 @@ def disk_free() -> int:
     while not p.exists() and p != p.parent:
         p = p.parent
     try:
-        st = os.statvfs(p)
-        return st.f_bavail * st.f_frsize
+        return pchealth.disk_free(p)
     except OSError:
         return 0
 
@@ -494,7 +501,8 @@ _paper = {"t": 0.0, "w": ("06:15", "06:45")}
 
 def paper_window() -> tuple[str, str]:
     """When the morning paper is built: its time in Settings > Newspaper (15 minutes before to 30 after: the build takes up to 15
-    minutes of model work), else its old user timer (OnCalendar time ± 15 minutes), else 06:15–06:45."""
+    minutes of model work), else its old user timer (OnCalendar time ± 15 minutes), else 06:15–06:45. ("", "") when no paper is made:
+    the Newspaper setting is off and the timer is disabled (owner 2026-10-22 paused the printing and wants her browsing all night)."""
     if time.time() - _paper["t"] > 300:
         w = ("06:15", "06:45")
         paper = config.load().get("paper")
@@ -505,6 +513,8 @@ def paper_window() -> tuple[str, str]:
         else:
             try:
                 m = re.search(r"(?m)^OnCalendar=.*?\b([01]?\d|2[0-3]):([0-5]\d)", PAPER_TIMER.read_text())
+                if not (PAPER_TIMER.parent / "timers.target.wants" / PAPER_TIMER.name).exists():
+                    w, m = ("", ""), None                                  # the timer is there but disabled: no paper is made
                 if m:
                     at = dt.datetime(2000, 1, 2, int(m.group(1)), int(m.group(2)))
                     w = ((at - dt.timedelta(minutes=15)).strftime("%H:%M"), (at + dt.timedelta(minutes=15)).strftime("%H:%M"))
@@ -515,6 +525,8 @@ def paper_window() -> tuple[str, str]:
 
 
 def _in_window(t: dt.time, a: str, b: str) -> bool:
+    if not (a and b):
+        return False
     a, b = _hm(a), _hm(b)
     if a == b:
         return False
@@ -532,7 +544,7 @@ def _load_probe(now, s) -> str | None:
         pass
     try:
         load = os.getloadavg()[0] / max(1, os.cpu_count() or 1)
-    except OSError:
+    except (OSError, AttributeError):                       # Windows has no load average: the heat and memory rules still apply
         load = 0.0
     if load > s["corner_max_load"]:
         return "The PC is busy."
@@ -551,6 +563,8 @@ def nonstop() -> bool:
     return bool(s["corner_on"] and s["corner_nonstop"])
 
 
+GRAPH_BACKLOG = 0     # set by corner_graph each round: the last day's finds, pictures and notes not in her memory graph yet
+_catching = {"up": False}
 GPU_HOLD = ""          # set by ctxsize while it tunes the context window (a reason to wait); corner code never imports ctxsize
 
 
@@ -560,7 +574,8 @@ def owner_name() -> str:
 
 
 def pause_reason(now: dt.datetime | None = None, s: dict | None = None) -> str | None:
-    """Nonstop mode: why she waits right now (she carries on when it passes). No budgets, idle wait or rest apply here."""
+    """Nonstop mode: why she waits right now (she carries on when it passes). Only the day's page budget applies here (owner 2026-10-22:
+    "i want the pages around 5000 a day"); no hour budget, idle wait or rest."""
     now = now or _now()
     s = s or settings()
     a, b = paper_window()
@@ -572,7 +587,99 @@ def pause_reason(now: dt.datetime | None = None, s: dict | None = None) -> str |
         return f"Quiet hours ({s['corner_quiet_from']}–{s['corner_quiet_to']})."
     if owner_recent(OWNER_GRACE_S):
         return "Paused while you use Rosie."
+    why = health_reason(s)
+    if why:
+        return why
+    if pages_today() >= s["corner_pages_day"]:
+        return f"Today's {s['corner_pages_day']} pages are read; she carries on after midnight."
+    if graph_behind(s):
+        return f"Letting her memory graph catch up ({GRAPH_BACKLOG} pieces waiting)."
     return _load_probe(now, s)
+
+
+# ---------------------------------------------------------------- the PC's health (owner 2026-10-23: "cap rosies browsing ram when i am using
+# the pc so i can run other stuff while she is browsing also keep in mind my pc health throughout all of this. this is on a laptop")
+GB = 1024 ** 3
+MEM_FLOOR_AWAY = 1 * GB        # with the owner away she still leaves this much free, so the PC never thrashes its swap
+COOL_BY = 10                   # after a heat pause she goes on this many °C below corner_max_temp
+_health = {"hot": False, "ram_held": False, "freed": 0, "unload": False}
+
+
+def at_pc(s: dict) -> bool:
+    """The owner is using the PC: a request to Rosie just now, or a key press or mouse move within corner_pc_away_min."""
+    if owner_recent(OWNER_GRACE_S):
+        return True
+    idle = pchealth.input_idle_s()
+    return idle is not None and idle < s["corner_pc_away_min"] * 60
+
+
+def health_reason(s: dict) -> str | None:
+    """Why the PC can't take her reading right now: on battery, too hot, or too little memory left. Each rule has a gap between pause
+    and carry on, so she doesn't flip back and forth on the edge."""
+    if not s["corner_on_battery"] and pchealth.on_battery():
+        return "The laptop is on battery. She goes on when it's plugged in."
+    lim, t = s["corner_max_temp"], pchealth.cpu_temp()
+    if not lim or t is None:
+        _health["hot"] = False
+    elif t >= lim:
+        _health["hot"] = True
+    elif t <= lim - COOL_BY:
+        _health["hot"] = False
+    if _health["hot"]:
+        return f"Letting the PC cool down (CPU {t:.0f} °C; she goes on below {lim - COOL_BY} °C)."
+    free = pchealth.mem_available()
+    if free is None:
+        return None
+    you = bool(s["corner_pc_free_gb"]) and at_pc(s)
+    floor = s["corner_pc_free_gb"] * GB if you else MEM_FLOOR_AWAY
+    if not _health["ram_held"] and free < floor:
+        _health.update(ram_held=True, freed=0, unload=True)     # corner_browse lets go of her models once, then says how much that freed
+    if _health["ram_held"]:
+        if free >= floor + _health["freed"]:                     # room for her models again, and still the floor left over
+            _health.update(ram_held=False, freed=0, unload=False)
+        else:
+            gb = f"{floor / GB:g} GB"
+            return (f"Keeping {gb} of memory free while you use the PC ({free / GB:.1f} GB free now)." if you
+                    else f"Keeping {gb} of memory free so the PC doesn't slow down ({free / GB:.1f} GB free now).")
+    return None
+
+
+def mem_free() -> int | None:
+    """Memory free right now (not the few-second cache): corner_browse measures what letting go of her models gave back."""
+    return pchealth.mem_available(fresh=True)
+
+
+def lower_priority():
+    """Her session thread's fetching and parsing yield the CPU to the owner's programs (Linux sets niceness per thread; elsewhere no-op)."""
+    with contextlib.suppress(AttributeError, OSError):
+        os.setpriority(os.PRIO_PROCESS, threading.get_native_id(), 10)
+
+
+def take_unload() -> bool:
+    """corner_browse asks once per memory pause: should she let go of her models now?"""
+    if _health["unload"]:
+        _health["unload"] = False
+        return True
+    return False
+
+
+def ram_freed(n: int):
+    """How many bytes letting go of her models gave back: she waits for that much on top of the floor before loading them again."""
+    _health["freed"] = max(0, min(int(n), 16 * GB))
+
+
+def graph_behind(s: dict) -> bool:
+    """The memory graph has fallen behind (owner 2026-10-22: "make the graph faster so it keeps up"): it shares the one GPU with her
+    reading, so reading pauses while more than corner_graph_wait of the last day's pieces wait, until they are nearly all in (a tenth
+    left; owner 2026-10-23: "when she gets 100 behind on the memory then have her pause and process those then continue")."""
+    n = s["corner_graph_wait"]
+    if not n:
+        _catching["up"] = False
+    elif GRAPH_BACKLOG > n:
+        _catching["up"] = True
+    elif GRAPH_BACKLOG <= n // 10:
+        _catching["up"] = False
+    return _catching["up"]
 
 
 def busy_reason(now: dt.datetime | None = None, s: dict | None = None, check_rest: bool = False) -> str | None:
@@ -597,6 +704,11 @@ def busy_reason(now: dt.datetime | None = None, s: dict | None = None, check_res
         return "Today's page budget is used up."
     if pages_since(3600) >= s["corner_pages_hour"]:
         return "This hour's page budget is used up."
+    why = health_reason(s)
+    if why:
+        return why
+    if graph_behind(s):
+        return f"Letting her memory graph catch up ({GRAPH_BACKLOG} pieces waiting)."
     r = _load_probe(now, s)
     if r:
         return r
@@ -636,8 +748,9 @@ def status() -> dict:
     return {"on": s["corner_on"], "running": state["running"], "doing": state["doing"], "waiting": reason, "last_stop": state["last_stop"],
             "pages_today": pages_today(), "pages_hour": pages_since(3600), "images_today": images_today(), "looks_today": looks_today(),
             "pictures_on": pics_ok, "pictures_why": pics_why, "settings": s, "nonstop": ns, "nonstop_since": s["corner_nonstop_since"][11:16],
-            "paused": state.get("paused", "") if ns else "", "paper_window": "–".join(paper_window()),
-            "disk_low": disk_low(), "disk_free_gb": round(disk_free() / 1024 ** 3, 1), "graph": _graph_status()}
+            "paused": state.get("paused", "") if ns else "", "paper_window": "–".join(paper_window()).strip("–"),
+            "disk_low": disk_low(), "disk_free_gb": round(disk_free() / 1024 ** 3, 1), "graph": _graph_status(),
+            "pc": {**pchealth.snapshot(), "at_pc": at_pc(s)}}
 
 
 def _graph_status() -> dict:

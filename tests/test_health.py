@@ -2,9 +2,21 @@ import datetime as dt
 import json
 import time
 
+import sys
+
+import pytest
+
 import backup
 import health
 import phone
+
+
+_REAL_UNIT_RESULT = health._unit_result
+
+
+@pytest.fixture(autouse=True)
+def _no_real_units(monkeypatch):
+    monkeypatch.setattr(health, "_unit_result", lambda unit: "")           # never this PC's real backup / sync results
 
 
 def test_summary_levels():
@@ -68,3 +80,81 @@ def test_disk_levels(monkeypatch):
     for gb, level in ((2, "bad"), (10, "warn"), (200, "ok")):
         monkeypatch.setattr(shutil, "disk_usage", lambda p, g=gb: type("U", (), {"free": g * 1e9})())
         assert health.check_disk()["level"] == level
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Linux-only: the user bus, systemd timers or Unix sockets")
+def test_a_wayland_desktop_is_found_through_the_users_systemd(monkeypatch):
+    """gnome-shell on Wayland has no DISPLAY or WAYLAND_DISPLAY of its own: the session's environment comes from systemd --user."""
+    import subprocess
+    import pc_tools
+    seen = []
+
+    def run(cmd, **kw):
+        seen.append((cmd, kw.get("env", {})))
+        if cmd[0] == "pgrep":
+            return subprocess.CompletedProcess(cmd, 1, "", "")
+        return subprocess.CompletedProcess(cmd, 0, "LANG=en_US.UTF-8\nDISPLAY=:0\nWAYLAND_DISPLAY=wayland-0\nXDG_SESSION_TYPE=wayland\nSECRET=x\n", "")
+    monkeypatch.setattr(pc_tools.subprocess, "run", run)
+    env = pc_tools.gui_env()
+    assert env["WAYLAND_DISPLAY"] == "wayland-0" and env["DISPLAY"] == ":0" and env["XDG_RUNTIME_DIR"].startswith("/run/user/")
+    assert "SECRET" not in env and "LANG" not in env                         # only the desktop's own variables
+    cmd, e = seen[-1]
+    assert cmd == ["systemctl", "--user", "show-environment"] and e["DBUS_SESSION_BUS_ADDRESS"].endswith("/bus")
+    monkeypatch.setattr(pc_tools.subprocess, "run", lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, "", ""))
+    assert pc_tools.gui_env() == {}                                         # no desktop session at all
+
+
+def test_status_shows_her_chat_model_not_the_embedder(monkeypatch):
+    import agent
+    import hub
+    ps = {"models": [{"name": "nomic-embed-text:latest", "model": "nomic-embed-text:latest", "size": 300, "size_vram": 0},
+                     {"name": agent.MODEL, "model": agent.MODEL, "size": 100, "size_vram": 100}]}
+    monkeypatch.setattr(hub.httpx, "get", lambda *a, **k: type("R", (), {"json": lambda self: ps})())
+    assert hub._model_info() == {"model": agent.MODEL, "loaded": True, "where": "GPU"}
+    ps["models"] = ps["models"][:1]
+    assert hub._model_info()["loaded"] is False
+
+
+def test_containers_and_agent_zeros_line_are_checked(monkeypatch):
+    import subprocess
+    states = {"agent-zero": (0, "running\n", ""), "rosie-graph": (1, "", "Error: No such object: rosie-graph")}
+    monkeypatch.setattr(health.subprocess, "run", lambda cmd, **k: subprocess.CompletedProcess(cmd, *states[cmd[-1]]))
+
+    def refuse(*a, **k):
+        raise ConnectionRefusedError()
+    import socket
+    monkeypatch.setattr(socket, "create_connection", refuse)
+    rows = {r["name"]: r for r in health.check_containers()}
+    assert rows["Agent Zero (her brain)"]["level"] == "ok"
+    assert rows["Memory graph database"]["level"] == "bad" and rows["Memory graph database"]["detail"] == "not found"
+    assert rows["Agent Zero's line to Rosie"]["level"] == "bad"
+
+
+def test_code_backup_and_backup_rows_follow_their_jobs_results(monkeypatch):
+    import subprocess
+    results = {"rosie-sync.service": "exit-code", "rosie-backup.service": "exit-code"}
+
+    def run(cmd, **k):
+        if cmd[:2] == ["systemctl", "--user"]:
+            return subprocess.CompletedProcess(cmd, 0, results[cmd[-1]] + "\n", "")
+        return subprocess.CompletedProcess(cmd, 0, str(int(time.time())) + "\n" if "-1" in cmd else "", "")
+    monkeypatch.setattr(health.subprocess, "run", run)
+    monkeypatch.setattr(health, "_unit_result", _REAL_UNIT_RESULT)
+    r = health.check_repo()
+    assert r["level"] == "warn" and "last daily sync failed (exit-code)" in r["detail"]
+    b = health.check_backup()
+    assert b["level"] == "bad" and "off-PC copy" in b["detail"]
+    results["rosie-sync.service"] = "success"
+    assert health.check_repo()["level"] == "ok"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Linux-only: the user bus, systemd timers or Unix sockets")
+def test_power_status_reaches_the_users_units(monkeypatch, tmp_path):
+    import subprocess
+    import power
+    seen = {}
+    script = tmp_path / "power.sh"
+    script.write_text("#!/bin/sh\n")
+    monkeypatch.setattr(power, "SCRIPT", script)
+    monkeypatch.setattr(power.subprocess, "run", lambda cmd, **k: (seen.update(k), subprocess.CompletedProcess(cmd, 0, "rosie active\n", ""))[1])
+    assert power.status() == {"rosie": "active"} and seen["env"]["DBUS_SESSION_BUS_ADDRESS"]

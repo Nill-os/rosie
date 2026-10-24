@@ -1,11 +1,19 @@
 import json
+import threading
 from pathlib import Path
 
 PATH = Path(__file__).resolve().parent.parent / "data" / "config.json"
 DEFAULTS = {
     "chat_model": "qwen3.5:9b",      # the local Ollama model Rosie thinks with (Settings > AI model); see models.py
+    "model_scout": True,             # Rosie looks for new abliterated models, tests the best one at night and flags a better one (model_scout.py)
+    "security_watch": True,          # a nightly check for known and exploited security holes in Rosie, this PC and the home server (security_watch.py)
+    "security_autopatch": True,      # ...and she installs the safe fixes herself: her own packages (tested) and the containers' security updates
+    "proxmox_ssh": "",               # the Proxmox host the security watch checks, e.g. root@192.168.1.10 (key login); empty = this PC only
+    "proxmox_ssh_key": "",           # the SSH key for it, e.g. ~/.ssh/id_ed25519_proxmox
     "owner_name": "",               # what Rosie calls you in her own prompts (her corner); empty = "your owner"
+    "hidden_pages": [],             # pages left out of the menu (Settings > Menu), like ["vector"]
     "owner_notes": "",              # how you like help, added to her and Agent Zero's prompts (Settings > About you)
+    "claude_planning": False,        # planning requests go to Claude (your Claude Code login), then Rosie carries out the plan (Settings > Planning; claude_plan.py). Off unless you turn it on: it sends your week to Anthropic
     "brain": "rosie",                # who answers chat: "rosie" = her own tool loop, "agent_zero" = Agent Zero with her tools (Settings > Brain; a0.py)
     "write_target": "test",          # "test" = Assistant Test calendar, "primary" = your real calendar
     "test_calendar_id": None,
@@ -59,6 +67,25 @@ DEFAULTS = {
     "ai_sink": "default",             # speaker node name or "default"
     "ai_speak": True,                 # say the answer out loud
     "ai_use_selection": True,         # include text you have highlighted when you ask (read as data, never as instructions)
+    "vector_on": False,               # Rosie is the brain of a Vector robot on WireOS (Settings > Vector; vector_pod.py). Off until you set him up
+    "vector_host": "",                # the address Vector uses to reach this PC; empty = this PC's home-network address
+    "vector_port": 8084,              # Vector's voice, settings and token requests (gRPC over TLS)
+    "vector_check_port": 8085,        # his "am I online" check (http and https)
+    "vector_personality": "",         # how Vector talks when Rosie answers through him (added to her prompt for his turns)
+    "vector_commands": [],            # your own voice commands: [{"phrases": ["sit"], "action": "hold|release|say", "text": "", "reply": "Okay."}]
+    "vector_face_panels": ["clock", "system"],   # what his face shows while he sits, in turn (vector_face.PANELS)
+    "vector_face_seconds": 15,        # each screen on his face while he sits shows this long
+    "vector_face_size": "184x96",     # his screen in pixels (Vector 1.0 and 2.0 SDK size)
+    "vector_quiet_idle": False,       # no idle chirps: he is muted except from his wake word until he has answered (and when Rosie speaks through him)
+    "vector_talk_volume": "MEDIUM",   # his volume while he talks: LOW, MEDIUM_LOW, MEDIUM, MEDIUM_HIGH or HIGH
+    "vector_eyes": "rosie",           # WireOS: "rosie" = his eyes sweep cyan to purple (her theme); "own" = his own eye colour
+    "vector_stt_model": "base.en",    # speech to text for Vector: base.en is quick (about 0.5 s), small.en hears names better (about 1.5 s)
+    "vector_followup": True,          # after he answers, he listens again for a follow-up (no wake word); silence ends the talk
+    "vector_voice": "rosie",          # "rosie" = her own voice streamed to his speaker; "vector" = his built-in voice
+    "vector_backpack": "own",         # WireOS: "rosie" = his backpack light patterns in cyan and purple (vector_pod.set_backpack_theme)
+    "vector_wake_word": "hey vector",   # WireOS only: "hey rosie" puts Rosie's keyword file on him (vector_pod.set_wake_word)
+    "vector_escapepod": False,        # his firmware is DDL's escape pod build: Rosie answers as escapepod.local:443 (set by Connect)
+    "vector_robots": [],              # [{"esn": "00808493", "ip": "192.168.1.15"}]: only these robots may use the server
     "taint_guard": True,            # after reading untrusted text (web, email, files), risky tools need your confirmation
     "desktop_notify": True,
     "quiet_from": "22:00",
@@ -78,10 +105,17 @@ def load():
     return cfg
 
 
+_lock = threading.Lock()                                           # saves from several threads go one at a time
+
+
 def save(cfg):
-    import testguard
-    testguard.check(PATH)
-    PATH.parent.mkdir(exist_ok=True)
-    tmp = PATH.with_name(PATH.name + ".tmp")
-    tmp.write_text(json.dumps(cfg, indent=2))
-    tmp.replace(PATH)                                              # atomic: readers see the old file or the new one, never half
+    """Atomic (a private temp file of its own, then a rename), one at a time. A settings file that can't be read is kept aside as
+    config.json.broken first, so a load that fell back to the defaults never silently replaces the owner's settings (audit 2026-10-20)."""
+    import atomic
+    with _lock:
+        if PATH.exists():
+            try:
+                json.loads(PATH.read_text())
+            except ValueError:
+                atomic.write_text(PATH.with_name(PATH.name + ".broken"), PATH.read_text(errors="replace"))
+        atomic.write_text(PATH, json.dumps(cfg, indent=2), 0o600)

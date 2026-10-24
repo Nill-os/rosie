@@ -24,10 +24,10 @@ class Done:
 def client(tmp_path, monkeypatch):
     import server
     (tmp_path / "secrets").mkdir(exist_ok=True)
-    (tmp_path / "secrets" / "session_key").write_text("testkey")
+    (tmp_path / "secrets" / "session_key").write_text("testkey-0123456789abcdef0123456789abcdef")
     monkeypatch.setattr(server, "SECRETS", tmp_path / "secrets")
     c = TestClient(server.app)
-    c.cookies.set("assistant_session", hmac.new(b"testkey", b"assistant-ok", hashlib.sha256).hexdigest())
+    c.cookies.set("assistant_session", hmac.new(b"testkey-0123456789abcdef0123456789abcdef", b"assistant-ok", hashlib.sha256).hexdigest())
     return c
 
 

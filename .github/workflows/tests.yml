@@ -8,6 +8,30 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: sudo apt-get install -y -qq poppler-utils
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq poppler-utils libopus0
       - run: pip install -r requirements-test.txt
       - run: python -m pytest -q
+  # Windows copies update themselves only to commits where every check passed (tools/windows/launcher.py), so these two guard them
+  windows:
+    runs-on: windows-latest
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: tzutil /s "Pacific Standard Time"
+      - run: pip install -r requirements-test.txt
+      - run: python -m pytest -q -p no:cacheprovider
+  windows-start:
+    runs-on: windows-latest
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - run: python tools/windows/ci_start_check.py

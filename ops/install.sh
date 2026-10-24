@@ -31,7 +31,7 @@ cat > "$HOME/.config/systemd/user/rosie-audit.service" <<UNIT
 Description=Rosie autopilot audit
 [Service]
 Type=oneshot
-TimeoutStartSec=3600
+TimeoutStartSec=7200
 ExecStart=/usr/bin/python3 %h/rosie-ops/autopilot.py audit
 UNIT
 cat > "$HOME/.config/systemd/user/rosie-audit.timer" <<UNIT
@@ -48,7 +48,7 @@ cat > "$HOME/.config/systemd/user/rosie-midnight.service" <<UNIT
 Description=Rosie autopilot midnight switch
 [Service]
 Type=oneshot
-TimeoutStartSec=1500
+TimeoutStartSec=2400
 ExecStart=/usr/bin/python3 %h/rosie-ops/autopilot.py midnight
 UNIT
 cat > "$HOME/.config/systemd/user/rosie-midnight.timer" <<UNIT

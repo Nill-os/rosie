@@ -27,6 +27,7 @@ import numpy as np
 
 import config
 import testguard
+import timefmt
 
 ROOT = Path(__file__).resolve().parent.parent
 DB = ROOT / "data" / "mind.db"
@@ -110,8 +111,8 @@ def _ver(c) -> int:
 
 # ---------------------------------------------------------------- the model and embeddings
 def _model() -> str:
-    import corner_browse
-    return corner_browse.MODEL
+    import ctxsize
+    return ctxsize.live_model()
 
 
 def _client(timeout=120):
@@ -122,10 +123,14 @@ def embed(texts: list[str], query: bool = False) -> np.ndarray:
     """Unit-length vectors (nomic-embed-text on the CPU, with its search_query / search_document prefixes)."""
     pre = "search_query: " if query else "search_document: "
     body = {"model": EMBED_MODEL, "input": [pre + str(t)[:6000] for t in texts], "truncate": True, "keep_alive": "30m", "options": {"num_gpu": 0}}
-    with _client() as cl:
-        r = cl.post(OLLAMA + "/api/embed", json=body)
-        r.raise_for_status()
-        out = r.json().get("embeddings") or []
+    try:
+        with _client() as cl:
+            r = cl.post(OLLAMA + "/api/embed", json=body)
+            r.raise_for_status()
+            out = r.json().get("embeddings") or []
+    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.RemoteProtocolError, httpx.ReadError) as e:
+        # as in ask(): an outage is a wait (audit pass 2: consolidation embeds first, so facts were still marked failed for good)
+        raise Busy(f"Waiting for the AI model: Ollama isn't answering ({type(e).__name__}).") from None
     if len(out) != len(texts):
         raise RuntimeError("the embedding model gave a wrong number of answers")
     m = np.asarray(out, dtype=np.float32)
@@ -152,20 +157,24 @@ def ask(system: str, user: str, schema: dict, predict: int = MAX_PREDICT, backgr
             "options": {**ctxsize.options(model), "temperature": 0.1, "num_predict": predict},
             "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
     asked, text = time.time(), ""
-    with _client(600) as cl:
-        with cl.stream("POST", OLLAMA + "/api/chat", json=body) as r:
-            r.raise_for_status()
-            for line in r.iter_lines():
-                if background and (corner._activity["in_flight"] > 0 or corner._activity["last"] > asked):
-                    raise Busy("You started using Rosie.")
-                if not line.strip():
-                    continue
-                d = json.loads(line)
-                if d.get("error"):
-                    raise RuntimeError("the model said: " + str(d["error"])[:200])
-                text += (d.get("message") or {}).get("content", "")
-                if d.get("done"):
-                    break
+    try:
+        with _client(600) as cl:
+            with cl.stream("POST", OLLAMA + "/api/chat", json=body) as r:
+                r.raise_for_status()
+                for line in r.iter_lines():
+                    if background and (corner._activity["in_flight"] > 0 or corner._activity["last"] > asked):
+                        raise Busy("You started using Rosie.")
+                    if not line.strip():
+                        continue
+                    d = json.loads(line)
+                    if d.get("error"):
+                        raise RuntimeError("the model said: " + str(d["error"])[:200])
+                    text += (d.get("message") or {}).get("content", "")
+                    if d.get("done"):
+                        break
+    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.RemoteProtocolError, httpx.ReadError) as e:
+        # Ollama is restarting or down: wait, not a failure (audit 2026-10-23: a short outage marked every queued chat and fact failed)
+        raise Busy(f"Waiting for the AI model: Ollama isn't answering ({type(e).__name__}).") from None
     return _loose_json(text)
 
 
@@ -373,7 +382,7 @@ def extract(doc: dict, background: bool = True) -> list[dict]:
     facts = []
     pieces = chunks(doc["text"])
     for i, piece in enumerate(pieces, 1):
-        user = (f"Chunk: {i}/{len(pieces)}\nEvent Date: {when:%A, %B %-d, %Y} ({when.date().isoformat()})\n"
+        user = (f"Chunk: {i}/{len(pieces)}\nEvent Date: {(when).strftime(timefmt.nopad('%A, %B %-d, %Y'))} ({when.date().isoformat()})\n"
                 f"Context: {doc.get('context') or 'none'}\n\nContent:\n{piece}")
         got = ask(EXTRACT_SYSTEM.format(owner=owner), user, EXTRACT_SCHEMA, background=background)
         for f in got.get("facts") or []:
@@ -421,9 +430,15 @@ def add_units(facts: list[dict], source: str, mentioned_at: str, doc_id: int | N
     """Store extracted facts: embeddings, words for BM25, names, and links to similar and same-day facts."""
     if not facts:
         return []
+    if doc_id is not None:
+        with _db() as c:
+            if not c.execute("SELECT 1 FROM docs WHERE id=?", (doc_id,)).fetchone():
+                return []                                     # its chat was deleted while she was reading it
     vecs = embed([_embed_text(f) for f in facts])
     ids = []
     with _lock, _db() as c:
+        if doc_id is not None and not c.execute("SELECT 1 FROM docs WHERE id=?", (doc_id,)).fetchone():
+            return []                                         # its chat was deleted while she was reading it (audit 2026-10-20)
         old_ids, old_mat = _matrix(c, kinds=("world", "experience"))
         seen_ids, seen_mat = old_ids, old_mat
         for f, v in zip(facts, vecs):
@@ -692,7 +707,8 @@ def consolidate_next(background: bool = True) -> bool:
                 + "\n\nEXISTING OBSERVATIONS:\n" + (json.dumps([{"id": o["id"], "text": o["text"], "proof_count": o["proof_count"],
                                                                   "mentioned_at": o["mentioned_at"][:10]} for o in obs.values()]) if obs else "[]"))
         got = ask(CONSOLIDATE_SYSTEM, user, CONSOLIDATE_SCHEMA, background=background)
-        _apply(got, {f["id"] for f in facts}, obs)
+        if not _apply(got, {f["id"] for f in facts}, obs):
+            return True                                       # something it was shown was forgotten meanwhile: those facts are thought over again later
         with _db() as c:
             c.executemany("UPDATE units SET consolidated_at=? WHERE id=?", [(_iso(), f["id"]) for f in facts])
         state["consolidated"] += len(facts)
@@ -712,8 +728,16 @@ def _apply(got: dict, fact_ids: set, obs: dict):
     """Write the model's creates/updates/deletes, only for ids it was shown; proof = the number of distinct facts behind a belief."""
     now = _iso()
     with _lock, _db() as c:
+        live = {r[0] for r in c.execute("SELECT id FROM units WHERE invalidated_at IS NULL AND id IN (%s)" % ",".join("?" * len(fact_ids)),
+                                        sorted(fact_ids))} if fact_ids else set()
+        shown = [int(i) for i in obs]
+        gone_obs = c.execute("SELECT COUNT(*) FROM units WHERE invalidated_at IS NOT NULL AND id IN (%s)" % ",".join("?" * len(shown)),
+                             shown).fetchone()[0] if shown else 0
+        if live != set(fact_ids) or gone_obs:                 # forgotten while the model thought: none of its answer is used (audit 2026-10-20)
+            return False
+
         def srcs(lst):
-            return sorted({int(x) for x in (lst or []) if isinstance(x, (int, float)) and int(x) in fact_ids})
+            return sorted({int(x) for x in (lst or []) if isinstance(x, (int, float)) and int(x) in live})
 
         def when_of(ids_):
             r = c.execute("SELECT MIN(COALESCE(occurred_start, substr(mentioned_at,1,10))) a, MAX(COALESCE(occurred_end, occurred_start, substr(mentioned_at,1,10))) b, "
@@ -768,6 +792,7 @@ def _apply(got: dict, fact_ids: set, obs: dict):
             c.execute("INSERT INTO units_fts(rowid, text, signals) VALUES(?,?,?)", (oid, text, ""))
             ids = np.append(ids, oid)
             mat = v[None, :] if mat is None else np.vstack([mat, v])
+    return True
 
 
 # ---------------------------------------------------------------- reflect and standing summaries
@@ -803,7 +828,7 @@ def reflect(question: str, background: bool = False, broad: bool = False) -> dic
         return {"answer": "I don't remember anything about that.", "found": False, "used": []}
     lines = [f"[{m['id']}] ({'observation, ' + str(m['proof']) + ' facts' if m['kind'] == 'observation' else m['kind']}; "
              f"when={m['when']}; mentioned_at={m['said']}) {m['text']}" for m in obs + facts]
-    got = ask(REFLECT_SYSTEM, f"Today: {_now():%A, %B %-d, %Y}\nQUESTION: {question}\n\nMEMORIES:\n" + "\n".join(lines), REFLECT_SCHEMA,
+    got = ask(REFLECT_SYSTEM, f"Today: {(_now()).strftime(timefmt.nopad('%A, %B %-d, %Y'))}\nQUESTION: {question}\n\nMEMORIES:\n" + "\n".join(lines), REFLECT_SCHEMA,
               predict=1200, background=background)
     shown = {m["id"]: m for m in obs + facts}
     used = [i for i in (got.get("used") or []) if isinstance(i, int) and i in shown]
@@ -1117,16 +1142,63 @@ def forget(unit_id: int, reason: str = "the owner asked") -> dict:
     return {"status": "forgotten", "id": r["id"], "text": r["text"]}
 
 
+def scrub(unit_ids: list, why: str):
+    """Gone means gone (audit 2026-10-20): these facts and every belief built on them lose their words, embedding, search entry, names,
+    links and history; names no other memory uses are dropped too. The rows stay (retired) so ids are never reused."""
+    with _lock, _db() as c:
+        ids, todo = set(), list(unit_ids)
+        while todo:
+            uid = todo.pop()
+            if uid in ids:
+                continue
+            ids.add(uid)
+            for o in c.execute("SELECT id, source_ids FROM units WHERE kind='observation'").fetchall():
+                if uid in json.loads(o["source_ids"] or "[]"):
+                    todo.append(o["id"])
+        for uid in ids:
+            c.execute("UPDATE units SET text=?, context='', emb=NULL, invalidated_at=COALESCE(invalidated_at, ?), invalid_reason=? WHERE id=?",
+                      (f"[forgotten: {why}]", _iso(), why[:200], uid))
+            c.execute("DELETE FROM units_fts WHERE rowid=?", (uid,))
+            c.execute("DELETE FROM unit_entities WHERE unit_id=?", (uid,))
+            c.execute("DELETE FROM links WHERE src=? OR dst=?", (uid, uid))
+            c.execute("DELETE FROM obs_history WHERE obs_id=?", (uid,))
+        c.execute("DELETE FROM entities WHERE id NOT IN (SELECT entity_id FROM unit_entities)")
+        if ids:                                               # the standing summary of the owner is rebuilt without them
+            c.execute("UPDATE models SET content='', refreshed_at=NULL, seen_upto=0")
+    _bump()
+    return len(ids)
+
+
 def forget_chat(chat_id) -> int:
-    """The owner deleted a chat: what she hadn't read yet is dropped, and what she learned from it is retired. Returns facts retired."""
-    with _db() as c:
-        refs = (f"chat:{chat_id}:%", f"backfill:chat:{chat_id}:%", f"backfill2:chat:{chat_id}:%")
-        docs = [r["id"] for r in c.execute("SELECT id FROM docs WHERE ref LIKE ? OR ref LIKE ? OR ref LIKE ?", refs)]
-        units = [r["id"] for r in c.execute("SELECT id FROM units WHERE invalidated_at IS NULL AND doc_id IN (%s)" % ",".join("?" * len(docs)), docs)] if docs else []
-        c.execute("DELETE FROM docs WHERE done_at IS NULL AND (ref LIKE ? OR ref LIKE ? OR ref LIKE ?)", refs)
-    for u in units:
-        forget(u, "its chat was deleted")
+    """The owner deleted a chat: what she hadn't read yet is dropped, and what she learned from it is retired and scrubbed. Returns facts retired."""
+    with _lock:                                                # a reading in progress can't add facts from it afterwards (add_units checks the doc)
+        with _db() as c:
+            refs = (f"chat:{chat_id}:%", f"backfill:chat:{chat_id}:%", f"backfill2:chat:{chat_id}:%")
+            docs = [r["id"] for r in c.execute("SELECT id FROM docs WHERE ref LIKE ? OR ref LIKE ? OR ref LIKE ?", refs)]
+            units = [r["id"] for r in c.execute("SELECT id FROM units WHERE invalidated_at IS NULL AND doc_id IN (%s)" % ",".join("?" * len(docs)), docs)] if docs else []
+            gone = [r["id"] for r in c.execute("SELECT id FROM units WHERE doc_id IN (%s)" % ",".join("?" * len(docs)), docs)] if docs else []
+        for u in units:
+            forget(u, "its chat was deleted")
+        scrub(gone, "its chat was deleted")
+        with _db() as c:                                       # last, so a failure above can be retried (the lock keeps new facts out)
+            c.execute("DELETE FROM docs WHERE ref LIKE ? OR ref LIKE ? OR ref LIKE ?", refs)
     return len(units)
+
+
+def forget_note(note_id: int, text: str = "") -> int:
+    """A memory note the owner deleted (memory.forget): the facts made from it go too, scrubbed."""
+    with _lock:
+        with _db() as c:
+            docs = [r["id"] for r in c.execute("SELECT id FROM docs WHERE ref=?", (f"backfill:note:{note_id}",))]
+            units = [r["id"] for r in c.execute("SELECT id FROM units WHERE source=?", (f"remember:{note_id}",))]
+            if text:                                          # notes saved before the id was kept with them
+                units += [r["id"] for r in c.execute("SELECT id FROM units WHERE source='remember' AND text=?", (" ".join(text.split())[:1000],))]
+            if docs:
+                units += [r["id"] for r in c.execute("SELECT id FROM units WHERE doc_id IN (%s)" % ",".join("?" * len(docs)), docs)]
+            c.execute("DELETE FROM docs WHERE ref=?", (f"backfill:note:{note_id}",))
+        for u in set(units):
+            forget(u, "the owner deleted the note")
+        return scrub(sorted(set(units)), "the owner deleted the note") if units else 0
 
 
 def recent(limit: int = 40) -> list[dict]:

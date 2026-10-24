@@ -85,7 +85,7 @@ const DOWN = 'Can\'t reach the assistant. Is the PC on?';
 // ---------- state ----------
 let chatId = store.get('chat_id', null), chatSpace = null, chatTitle = 'New chat';
 let meetTimer = null;
-let dirty = false, prevHash = location.hash, sideData = { chats: [], spaces: [] }, overdueCount = 0, unreadCount = 0;
+let dirty = false, prevHash = location.hash, sideData = { chats: [], spaces: [] }, overdueCount = 0, unreadCount = 0, pagesOff = [], pagesHidden = [];
 const log = $('#log'), t = $('#t');
 // the message box grows as you write (up to ~45% of the screen, then scrolls), so everything you typed stays visible
 const fit = () => { if (!t.value) { t.style.height = ''; return; } t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight + 2, innerHeight * 0.45) + 'px'; };
@@ -97,10 +97,76 @@ t.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !
 // ---------- header + routing ----------
 function setHeader(title, actions) { $('#ttl').textContent = title; $('#actions').replaceChildren(...(actions || [])); }
 function show(...nodes) { $('#view').replaceChildren(h('div', { class: 'page' }, ...nodes)); $('#view').scrollTop = 0; }
-const NAV = [['home', '⌂', 'Home'], ['inbox', '🔔', 'Inbox'], ['mail', '📧', 'Mail'], ['brief', '☀', 'Daily Brief'], ['paper', '📰', 'Morning Paper'], ['tasks', '✓', 'Tasks'], ['projects', '🧭', 'Projects'], ['calendar', '▦', 'Calendar'], ['meetings', '🎙', 'Meetings'],
-  ['terminal', '⌨', 'Terminal'], ['notes', '✎', 'Notes'], ['memory', '◈', 'Memory'], ['skills', '✦', 'Skills'], ['corner', '❀', "Rosie's corner"], ['agentzero', '🧠', 'Agent Zero'], ['settings', '⚙', 'Settings']];
+// In the order of a day (owner 2026-10-20: "reorder rosies side tab to make more sense for daily use"): what needs you and today's plan
+// first, then the work you come back to, then Rosie's own pages. ['-', label] starts a group.
+const NAV = [['-', 'Today'], ['home', '⌂', 'Home'], ['inbox', '🔔', 'Inbox'], ['brief', '☀', 'Daily Brief'], ['calendar', '▦', 'Calendar'], ['tasks', '✓', 'Tasks'],
+  ['mail', '📧', 'Mail'], ['paper', '📰', 'Morning Paper'],
+  ['-', 'Work'], ['projects', '🧭', 'Projects'], ['meetings', '🎙', 'Meetings'], ['notes', '✎', 'Notes'], ['servers', '🖧', 'Servers'], ['terminal', '⌨', 'Terminal'],
+  ['-', 'Rosie'], ['memory', '◈', 'Memory'], ['skills', '✦', 'Skills'], ['corner', '❀', "Rosie's corner"], ['graph', '⌬', 'Memory graph'], ['agentzero', '🧠', 'Agent Zero'], ['deck', '◫', 'Agent Deck'], ['vector', '🤖', 'Vector'], ['settings', '⚙', 'Settings']];
+// Display (owner 2026-10-21: "add a setting for ui scale"; 2026-10-23: the Agent Deck's display settings "to the main settings and make it
+// control the whole ui"): zoom, text size, spacing and background light for every page, the Agent Deck frame included (it reads the same
+// rosie.look). This device only, so the phone and the PC each keep their own.
+const GLOW = { off: 0, low: 0.45, medium: 1, high: 1.6 };
+function look() {
+  const v = store.get('rosie.look', null);
+  if (v && typeof v === 'object') return { zoom: 1, text: 100, density: 'normal', glow: 'medium', ...v };
+  const d = store.get('deck.settings', {});                  // first visit: carry over the old UI scale and the Deck's own choices
+  return { zoom: Number(store.get('rosie.uiScale', 1)) || 1, text: d.text ? Math.round(d.text / 13 * 20) * 5 : 100,
+    density: ['compact', 'normal', 'big'].includes(d.density) ? d.density : 'normal', glow: d.glow in GLOW ? d.glow : 'medium' };
+}
+function applyLook(v, save) {
+  v.zoom = Math.min(2, Math.max(0.5, Math.round(v.zoom * 100) / 100));
+  v.text = Math.min(150, Math.max(70, Math.round(v.text)));
+  const r = document.documentElement;
+  r.style.zoom = v.zoom === 1 ? '' : String(v.zoom);
+  r.style.setProperty('--ts', String(v.text / 100));
+  r.style.setProperty('--glow', String(GLOW[v.glow] ?? 1));
+  document.body.classList.toggle('look-compact', v.density === 'compact');
+  document.body.classList.toggle('look-roomy', v.density === 'big');
+  if (save) store.set('rosie.look', v);
+  return v;
+}
+const setLook = (patch) => applyLook({ ...look(), ...patch }, true);
+applyLook(look(), true);
+window.addEventListener('storage', (e) => { if (e.key === 'rosie.look') applyLook(look(), false); });   // changed in the Agent Deck frame
+document.addEventListener('keydown', (e) => {
+  if (!e.ctrlKey || e.altKey || e.shiftKey && e.key !== '+') return;
+  const z = look().zoom;
+  if (e.key === '=' || e.key === '+') { e.preventDefault(); setLook({ zoom: z + 0.05 }); }
+  else if (e.key === '-') { e.preventDefault(); setLook({ zoom: z - 0.05 }); }
+  else if (e.key === '0') { e.preventDefault(); setLook({ zoom: 1 }); }
+});
+// Settings > Menu: leave pages you don't use out of the menu (owner 2026-10-23: the partner's copy without Vector). Pages this PC can't
+// run are not offered.
+function menuBox(again) {
+  const save = async (k, on) => {
+    const hidden = on ? pagesHidden.filter((x) => x !== k) : [...pagesHidden, k];
+    try { const r = await post('/api/settings', { hidden_pages: hidden }); if (r.error) throw new Error(r.error); pagesHidden = r.hidden_pages || hidden; renderNav('settings'); } catch (e) { toast(e.message, 1); }
+  };
+  return h('div', {}, h('div', { class: 'menu-pick' }, NAV.filter(([k]) => k !== '-' && k !== 'settings' && !pagesOff.includes(k)).map(([k, ic, label]) =>
+    h('label', {}, h('input', { type: 'checkbox', checked: !pagesHidden.includes(k), onchange: (e) => save(k, e.target.checked) }), ' ' + ic + ' ' + label))),
+    h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1));margin-top:4px' }, 'Untick a page to leave it out of the menu. Its features keep working; tick it again to get it back.'));
+}
+function lookBox(again) {
+  const v = look(), set = (p) => { setLook(p); again(); };
+  const step = (val, minus, plus, reset) => h('div', { class: 'form', style: 'gap:6px;align-items:center' }, btn('−', 'dim', minus), h('b', { style: 'min-width:52px;text-align:center' }, val),
+    btn('+', 'dim', plus), btn('Reset', 'dim', reset));
+  const seg = (key, opts) => h('div', { class: 'seg' }, opts.map(([k, label]) => h('button', { class: v[key] === k ? 'on' : '', onclick: () => set({ [key]: k }) }, label)));
+  return h('div', {}, h('dl', { class: 'kv' },
+    h('dt', {}, 'Zoom'), h('dd', {}, step(Math.round(v.zoom * 100) + '%', () => set({ zoom: v.zoom - 0.05 }), () => set({ zoom: v.zoom + 0.05 }), () => set({ zoom: 1 }))),
+    h('dt', {}, 'Text size'), h('dd', {}, step(v.text + '%', () => set({ text: v.text - 5 }), () => set({ text: v.text + 5 }), () => set({ text: 100 }))),
+    h('dt', {}, 'Spacing'), h('dd', {}, seg('density', [['compact', 'Compact'], ['normal', 'Normal'], ['big', 'Roomy']])),
+    h('dt', {}, 'Background light'), h('dd', {}, seg('glow', [['off', 'Off'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High']]))),
+    h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1));margin-top:4px' }, 'For every page, the Agent Deck too. Each device keeps its own (your phone and this PC can differ). Shortcuts: Ctrl and + or − zoom, Ctrl and 0 resets.'));
+}
+// pages this PC can't run and pages the owner left out (Settings > Menu) stay out of the menu; a section head with nothing under it goes too
+function navShown() {
+  const out = new Set([...pagesOff, ...pagesHidden]);
+  const items = NAV.filter(([k]) => k === '-' || !out.has(k));
+  return items.filter(([k], i) => k !== '-' || (items[i + 1] && items[i + 1][0] !== '-'));
+}
 function renderNav(active) {
-  $('#nav').replaceChildren(...NAV.map(([k, ic, label]) => h('button', { class: 'nav' + (k === active ? ' on' : ''), onclick: () => go('#/' + k) },
+  $('#nav').replaceChildren(...navShown().map(([k, ic, label]) => k === '-' ? h('div', { class: 'navhead', role: 'presentation' }, ic) : h('button', { class: 'nav' + (k === active ? ' on' : ''), title: label, 'aria-label': label, onclick: () => go('#/' + k) },
     h('span', { class: 'ic' }, ic), label, k === 'tasks' && overdueCount ? h('span', { class: 'cnt', title: 'Overdue tasks' }, overdueCount) : null,
     k === 'inbox' && unreadCount ? h('span', { class: 'cnt', style: 'background:var(--pur);color:#fff', title: 'Unread' }, unreadCount) : null)));
 }
@@ -132,7 +198,7 @@ async function route() {
 async function refreshSide() {
   try { sideData = await J('/api/chats'); } catch (e) { $('#dot').className = 'off'; return; }
   $('#dot').className = '';
-  try { const b = await J('/api/badges'); overdueCount = b.overdue; unreadCount = b.inbox; } catch (e) { /* badges only */ }
+  try { const b = await J('/api/badges'); overdueCount = b.overdue; unreadCount = b.inbox; pagesOff = b.pages_off || []; pagesHidden = b.pages_hidden || []; } catch (e) { /* badges only */ }
   renderNav((location.hash.replace(/^#\/?/, '') || 'home').split('/')[0].replace('chat', ''));
   drawChats();
 }
@@ -222,7 +288,7 @@ window.startTraining = () => {
   const box = h('div', { style: 'position:fixed;inset:0;z-index:80;background:#000d;display:flex;align-items:center;justify-content:center;padding:24px' });
   const card = h('div', { class: 'card', style: 'max-width:420px;width:100%;text-align:center' }); box.append(card); document.body.append(box);
   const close = () => { box.remove(); window.onTrain = null; if (location.hash.startsWith('#/settings')) VIEWS.settings(); };
-  const say = (title, line, extra) => { card.replaceChildren(h('h3', {}, title), h('div', { style: 'font-size:20px;margin:14px 0;min-height:56px' }, line), extra || h('span')); };
+  const say = (title, line, extra) => { card.replaceChildren(h('h3', {}, title), h('div', { style: 'font-size:calc(20px*var(--ts,1));margin:14px 0;min-height:56px' }, line), extra || h('span')); };
   say('Train my voice', 'Get ready. Say "Hey Rosie" clearly each time you hear the tone.');
   window.onTrain = (m) => {
     if (m.state === 'ready') say('Attempt ' + m.step + ' of ' + m.of, 'Get ready…');
@@ -263,7 +329,7 @@ VIEWS.home = async () => {
   const again = () => keepScroll(() => VIEWS.home());
   const ask = h('input', { placeholder: 'Ask me anything…', 'aria-label': 'Ask anything', id: 'homeask' });
   const hero = h('div', { class: 'card wide' },
-    h('div', { style: 'font-size:18px;color:#fff;margin-bottom:4px' }, d.date.pretty),
+    h('div', { style: 'font-size:calc(18px*var(--ts,1));color:#fff;margin-bottom:4px' }, d.date.pretty),
     h('div', { class: 'muted', style: 'margin-bottom:12px' }, `Day ${d.date.day_of_year} · Week ${d.date.week} · ${d.date.time}`),
     h('form', { class: 'form', onsubmit: (e) => { e.preventDefault(); const v = ask.value.trim(); if (!v) return; newChat(); send(v); } }, ask, btn('Ask', 'pur', null, 'submit')),
     h('div', { class: 'form', style: 'margin-top:10px' },
@@ -333,7 +399,7 @@ VIEWS.inbox = async () => {
     pr.proposals.length ? h('div', { class: 'card', style: 'border-color:var(--warn);margin-bottom:14px' }, h('h3', { style: 'color:var(--warn)' }, 'Needs your OK · ' + pr.proposals.length),
       h('div', { class: 'muted', style: 'margin-bottom:8px' }, 'Suggestions from me or from your mail. Nothing is added until you approve.'),
       h('div', { class: 'list' }, pr.proposals.map((p) => h('div', { class: 'item', style: 'align-items:flex-start' }, h('span', { style: 'width:24px' }, p.kind === 'event' ? '▦' : p.kind === 'plan' ? '🧭' : '✓'),
-        h('div', { class: 'tx' }, h('div', { style: 'color:#fff' }, p.title), p.detail ? h('div', { class: 'muted md', style: 'font-size:13px' }, p.detail) : null, p.source.startsWith('email:') ? h('span', { class: 'chip' }, 'from email') : null),
+        h('div', { class: 'tx' }, h('div', { style: 'color:#fff' }, p.title), p.detail ? h('div', { class: 'muted md', style: 'font-size:calc(13px*var(--ts,1))' }, p.detail) : null, p.source.startsWith('email:') ? h('span', { class: 'chip' }, 'from email') : null),
         btn('Approve', 'sm ok', async () => { try { await post(`/api/proposals/${p.id}/approve`); toast('Done'); again(); } catch (e) { toast(e.message, 1); } }),
         btn('Dismiss', 'sm dim', async () => { await post(`/api/proposals/${p.id}/dismiss`); again(); }))))) : null,
     h('div', { class: 'card' }, h('h3', {}, 'Reminders'), remindForm(again),
@@ -342,7 +408,7 @@ VIEWS.inbox = async () => {
     h('div', { style: 'margin-top:14px' }, d.items.length ? h('div', { class: 'list' }, d.items.map((i) => h('div', { class: 'item', style: 'align-items:flex-start;cursor:pointer;' + (i.read ? 'opacity:.6' : 'border-left:3px solid var(--pur)'),
       onclick: async () => { if (!i.read) { await post(`/api/inbox/${i.id}/read`); refreshSide(); } if (i.link) go(i.link); else again(); } },
       h('span', { style: 'width:24px' }, ICON[i.kind] || '•'), h('div', { class: 'tx' }, h('div', { style: 'color:#fff' }, i.title), i.body ? h('div', { class: 'muted md' }, i.body) : null),
-      h('span', { class: 'muted', style: 'font-size:12px;white-space:nowrap' }, ago(i.created)),
+      h('span', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1));white-space:nowrap' }, ago(i.created)),
       h('button', { class: 'x', 'aria-label': 'Delete', onclick: async (e) => { e.stopPropagation(); await del('/api/inbox/' + i.id); again(); } }, '✕')))) : h('div', { class: 'empty' }, 'Nothing here yet. I\'ll post your daily brief, meeting reminders and nudges here.')));
 };
 
@@ -362,7 +428,7 @@ function mailRow(m, again) {
   return h('div', { class: 'item', style: 'align-items:flex-start;' + (m.suspicious ? 'border-left:3px solid var(--bad)' : need ? 'border-left:3px solid var(--warn)' : '') },
     h('div', { class: 'tx' },
       h('div', {}, h('b', {}, m.sender_name), '  ', h('span', { class: 'muted' }, m.subject)),
-      m.suspicious ? h('div', { style: 'color:var(--bad)' }, '⚠ Possible phishing: ' + m.reason) : [h('div', { class: 'muted' }, m.summary), m.reason ? h('div', { class: 'muted', style: 'font-size:12px' }, m.reason + (m.needs_reply ? ' · needs a reply' : '')) : null],
+      m.suspicious ? h('div', { style: 'color:var(--bad)' }, '⚠ Possible phishing: ' + m.reason) : [h('div', { class: 'muted' }, m.summary), m.reason ? h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1))' }, m.reason + (m.needs_reply ? ' · needs a reply' : '')) : null],
       h('div', { class: 'form', style: 'margin-top:8px' },
         h('a', { class: 'btn sm dim', href: m.link, target: '_blank', rel: 'noopener noreferrer', style: 'display:inline-flex;align-items:center;text-decoration:none' }, 'Open in Gmail'),
         m.suspicious ? null : btn('Draft reply', 'sm', () => draftFlow(m)),
@@ -404,7 +470,7 @@ VIEWS.meetings = async () => {
   const d = await J('/api/meetings');
   const again = () => keepScroll(() => VIEWS.meetings());
   const recent = h('div', { style: 'margin-top:16px' }, h('div', { class: 'dayhead' }, 'Recent · ' + d.recent.length),
-    d.recent.length ? h('div', { class: 'list' }, d.recent.map((m) => h('div', { class: 'item' }, h('div', { class: 'tx' }, h('div', {}, h('b', {}, m.title)), h('div', { class: 'muted', style: 'font-size:12px' }, (m.started || '').replace('T', ' ').slice(0, 16) + (m.participants ? ' · ' + m.participants : ''))),
+    d.recent.length ? h('div', { class: 'list' }, d.recent.map((m) => h('div', { class: 'item' }, h('div', { class: 'tx' }, h('div', {}, h('b', {}, m.title)), h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1))' }, (m.started || '').replace('T', ' ').slice(0, 16) + (m.participants ? ' · ' + m.participants : ''))),
       h('span', { class: 'chip' + (m.consent === 'own_voice_only' ? '' : ' ok') }, m.consent === 'own_voice_only' ? 'my voice only' : m.consent ? 'everyone agreed' : ''), h('span', { class: 'chip' + (m.status === 'done' ? ' ok' : m.status.startsWith('failed') ? ' bad' : '') }, m.status),
       m.transcript ? h('a', { class: 'btn sm dim', href: '#/notes/' + encodeURIComponent(m.transcript), style: 'text-decoration:none;display:inline-flex;align-items:center' }, 'Open') : null))) : h('div', { class: 'empty' }, 'No recordings yet.'));
   if (d.active) {
@@ -412,8 +478,8 @@ VIEWS.meetings = async () => {
     meetTimer = setInterval(async () => { try { const x = await J('/api/meetings'); if (!x.active) { clearInterval(meetTimer); again(); } else el.textContent = x.active.elapsed_min + ' min'; } catch (e) { /* offline */ } }, 10000);
     show(h('div', { class: 'pagehead' }, h('h2', {}, 'Meetings')),
       h('div', { class: 'card', style: 'border:2px solid var(--bad)' }, h('h3', { style: 'color:var(--bad)' }, '● Recording now'),
-        h('div', { style: 'font-size:18px;color:#fff' }, a.title), h('div', { class: 'muted', style: 'margin:6px 0' }, 'Running for ', el, ' · ' + (a.tracks.includes('them') ? 'your microphone + the call audio' : 'your microphone only')),
-        h('div', { class: 'muted', style: 'font-size:13px' }, 'Consent confirmed: ' + a.consent.text + (a.consent.note ? ' "' + a.consent.note + '"' : '')),
+        h('div', { style: 'font-size:calc(18px*var(--ts,1));color:#fff' }, a.title), h('div', { class: 'muted', style: 'margin:6px 0' }, 'Running for ', el, ' · ' + (a.tracks.includes('them') ? 'your microphone + the call audio' : 'your microphone only')),
+        h('div', { class: 'muted', style: 'font-size:calc(13px*var(--ts,1))' }, 'Consent confirmed: ' + a.consent.text + (a.consent.note ? ' "' + a.consent.note + '"' : '')),
         h('div', { class: 'form', style: 'margin-top:12px' }, btn('■ Stop and transcribe', 'bad', async () => { try { await post('/api/meetings/stop'); toast('Stopped. Transcribing on this PC (about 1 minute per 6 minutes of meeting).'); again(); } catch (e) { toast(e.message, 1); } }))), recent);
     return;
   }
@@ -430,7 +496,7 @@ VIEWS.meetings = async () => {
     h('form', { class: 'card', onsubmit: async (e) => { e.preventDefault(); try { await post('/api/meetings/start', { title: title.value || 'Meeting', participants: who.value, consent_kind: kind(), consent_note: note.value, confirmed: true }); toast('Recording started'); again(); } catch (er) { toast(er.message, 1); } } },
       h('h3', {}, 'Start a recording'), h('div', { class: 'form', style: 'flex-direction:column;align-items:stretch' }, title, who,
         h('div', { class: 'list' }, radios), note, h('label', { class: 'item', style: 'cursor:pointer;align-items:flex-start;border-color:var(--warn)' }, sure, sureLbl), startBtn),
-      h('div', { class: 'muted', style: 'font-size:12px;margin-top:10px' }, 'Your mic: ' + (d.devices.mic_label || d.devices.mic || 'not found') + ' · Call sound from: ' + (d.devices.call_label || d.devices.call || 'not found') + '. Wearing a headset? Select it in your system sound settings BEFORE you start.',
+      h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1));margin-top:10px' }, 'Your mic: ' + (d.devices.mic_label || d.devices.mic || 'not found') + ' · Call sound from: ' + (d.devices.call_label || d.devices.call || 'not found') + '. Wearing a headset? Select it in your system sound settings BEFORE you start.',
         h('br'), 'Two tracks are kept apart so lines are labelled Me and Them. Audio is deleted after the transcript is made. Other sounds playing on this PC (music, notifications) are recorded as part of "Them", so mute them first. The assistant can never start a recording; only you can, here.')), recent);
   refresh();
 };
@@ -491,7 +557,7 @@ async function projectDetail(pid) {
   const open = p.tasks.filter((t) => !t.done), done = p.tasks.filter((t) => t.done);
   show(h('div', { class: 'pagehead' }, h('h2', {}, p.name), status, area, h('div', { class: 'sp' }), p.stats.stalled ? h('span', { class: 'chip bad' }, 'quiet ' + p.stats.quiet_days + ' days') : null),
     h('div', { class: 'grid' },
-      h('div', { class: 'card wide' }, h('h3', {}, 'Next action'), nxt, h('div', { class: 'muted', style: 'font-size:12px;margin-top:6px' }, 'Just one. When you finish it, write the next one. This is what shows on Home and in your morning brief.')),
+      h('div', { class: 'card wide' }, h('h3', {}, 'Next action'), nxt, h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1));margin-top:6px' }, 'Just one. When you finish it, write the next one. This is what shows on Home and in your morning brief.')),
       h('div', { class: 'card' }, h('h3', {}, 'Goal & finish line'), goal, h('div', { style: 'margin-top:8px' }, fin)),
       h('div', { class: 'card' }, h('h3', {}, 'Plan with AI'), h('div', { class: 'muted', style: 'margin-bottom:8px' }, 'Drafts milestones and small tasks from your goal, honest about risks. It goes to your Inbox; nothing is created until you approve it.'),
         h('div', { class: 'form' }, guide, btn('Draft a plan', 'pur', async () => { toast('Drafting a plan… (about 15 seconds)'); try { const r = await post(`/api/projects/${pid}/plan`, { guidance: guide.value });
@@ -511,7 +577,7 @@ async function projectDetail(pid) {
         p.folder ? h('div', { style: 'margin-top:10px' }, h('div', { class: 'muted', style: 'margin-bottom:6px' }, 'Launch an AI agent in this folder (it asks its own permissions; you answer them in the Terminal):'),
           h('div', { class: 'form' }, agentSel, agentTask, btn('Launch', 'ok', async () => { try { const r = await post('/api/terminals', { kind: 'agent', agent: agentSel.value, folder: p.folder, task: agentTask.value }); go('#/terminal/' + r.name); } catch (e) { toast(e.message, 1); } }))) : null,
         p.sessions.length ? h('div', { style: 'margin-top:10px' }, h('div', { class: 'muted' }, 'RUNNING HERE'), p.sessions.map((s) => h('div', {}, h('a', { href: '#/terminal/' + s.name, style: 'color:var(--acc)' }, s.name), ' ', h('span', { class: 'muted' }, s.agent || 'shell')))) : null),
-      h('div', { class: 'card' }, h('h3', {}, 'Notes'), p.notes_path ? h('div', {}, h('a', { href: '#/notes/' + encodeURIComponent(p.notes_path), style: 'color:var(--acc)' }, 'Open the project notes file →'), h('div', { class: 'muted', style: 'font-size:12px;margin-top:6px' }, 'Plain text in your vault. The assistant can read and add to it.')) : h('div', { class: 'empty' }, 'No notes file yet.'),
+      h('div', { class: 'card' }, h('h3', {}, 'Notes'), p.notes_path ? h('div', {}, h('a', { href: '#/notes/' + encodeURIComponent(p.notes_path), style: 'color:var(--acc)' }, 'Open the project notes file →'), h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1));margin-top:6px' }, 'Plain text in your vault. The assistant can read and add to it.')) : h('div', { class: 'empty' }, 'No notes file yet.'),
         h('div', { style: 'margin-top:14px' }, btn('Delete project', 'sm bad', async () => { if (!confirm('Delete "' + p.name + '"? Its tasks stay in your task list; the notes file and folder are not touched.')) return; await del('/api/projects/' + pid); go('#/projects'); })))));
 }
 
@@ -541,9 +607,9 @@ async function openTerminal(name, pane) {
     host,
     h('div', { class: 'quick' }, QUICK.map(([l, seq]) => h('button', { class: 'btn sm dim', type: 'button', onmousedown: (e) => e.preventDefault(), onclick: () => send(seq) }, l)),
       h('button', { class: 'btn sm dim', type: 'button', onclick: async () => { try { send(await navigator.clipboard.readText()); } catch (e) { toast('Allow clipboard access to paste.', 1); } } }, 'Paste')),
-    h('div', { class: 'muted', style: 'font-size:12px;margin-top:6px' }, 'This session keeps running when you leave this page. If an agent asks for permission, answer it here.'));
+    h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1));margin-top:6px' }, 'This session keeps running when you leave this page. If an agent asks for permission, answer it here.'));
   try { await loadXterm(); } catch (e) { status.textContent = 'failed to load terminal'; return; }
-  term = new window.Terminal({ cursorBlink: true, fontSize: 14, scrollback: 5000, fontFamily: 'ui-monospace, "DejaVu Sans Mono", Menlo, Consolas, monospace',
+  term = new window.Terminal({ cursorBlink: true, fontSize: Math.round(14 * look().text / 100), scrollback: 5000, fontFamily: 'ui-monospace, "DejaVu Sans Mono", Menlo, Consolas, monospace',
     theme: { background: '#000000', foreground: '#E8E8F0', cursor: '#00F0FF', selectionBackground: '#9D00FF66', black: '#000000', brightBlack: '#4A607A' } });
   termFit = new window.FitAddon.FitAddon(); term.loadAddon(termFit); term.open(host); termFit.fit();
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -570,10 +636,10 @@ VIEWS.terminal = async (arg) => {
     const r = await post('/api/terminals', kind.value === 'shell' ? { kind: 'shell', folder: folder.value, command: cmd.value } : { kind: 'agent', agent: kind.value, folder: folder.value, task: task.value });
     go('#/terminal/' + r.name); } catch (er) { toast(er.message, 1); } } },
     h('h3', {}, 'New session'), h('div', { class: 'form', style: 'flex-direction:column;align-items:stretch' }, kind, folder, h('datalist', { id: 'folders' }, d.folders.map((f) => h('option', { value: f }))), task, cmd,
-      btn('Start', 'ok', null, 'submit')), h('div', { class: 'muted', style: 'font-size:12px;margin-top:8px' }, 'Agents ask their own permission questions inside the session; you answer them here. I never start an agent in "skip permissions" mode.'));
+      btn('Start', 'ok', null, 'submit')), h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1));margin-top:8px' }, 'Agents ask their own permission questions inside the session; you answer them here. I never start an agent in "skip permissions" mode.'));
   sync();
   const list = h('div', { class: 'list' }, d.sessions.length ? d.sessions.map((s) => h('div', { class: 'item', style: 'cursor:pointer' + (s.name === arg ? ';border-color:var(--acc)' : ''), onclick: () => go('#/terminal/' + s.name) },
-    h('div', { class: 'tx' }, h('div', {}, h('b', {}, s.name), ' ', s.kind === 'agent' ? h('span', { class: 'chip', style: 'color:var(--pur);border-color:var(--pur)' }, s.agent) : null), h('div', { class: 'muted', style: 'font-size:12px' }, s.folder.replace(/^\/home\/[^/]+/, '~') + ' · ' + (s.idle ? 'idle' : 'running ' + s.running))),
+    h('div', { class: 'tx' }, h('div', {}, h('b', {}, s.name), ' ', s.kind === 'agent' ? h('span', { class: 'chip', style: 'color:var(--pur);border-color:var(--pur)' }, s.agent) : null), h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1))' }, s.folder.replace(/^\/home\/[^/]+/, '~') + ' · ' + (s.idle ? 'idle' : 'running ' + s.running))),
     h('button', { class: 'x', 'aria-label': 'Stop ' + s.name, onclick: async (e) => { e.stopPropagation(); if (!confirm('Stop ' + s.name + '?')) return; await del('/api/terminals/' + s.name); if (s.name === arg) go('#/terminal'); else again(); } }, '✕'))) : h('div', { class: 'empty' }, 'No sessions yet.'));
   const pane = h('div', { class: 'tpane' }, arg ? null : h('div', { class: 'card' }, h('div', { class: 'empty' }, 'Start a session on the left, or open one. Sessions keep running when you leave this page, and I can start agents for you too ("launch claude in my android project to fix …").')));
   show(h('div', { class: 'termpage' + (arg ? ' open' : '') }, h('div', { class: 'tl' }, newForm, h('div', { style: 'margin-top:14px' }, h('div', { class: 'dayhead' }, 'Sessions · ' + d.sessions.length), list)), pane));
@@ -632,7 +698,7 @@ VIEWS.notes = async (arg) => {
   const files = h('div', { class: 'files' });
   const found = h('div', { class: 'list' }), q = h('input', { placeholder: 'Search all notes…', 'aria-label': 'Search notes' });
   files.append(h('form', { class: 'form', style: 'margin-bottom:8px', onsubmit: async (e) => { e.preventDefault(); found.replaceChildren(); if (!q.value.trim()) return; try { const r = await J('/api/search?q=' + encodeURIComponent(q.value));
-    found.replaceChildren(...(r.results.length ? r.results.map((x) => h('button', { class: 'item', style: 'text-align:left;cursor:pointer;background:var(--bg);flex-direction:column;align-items:flex-start', onclick: () => go('#/notes/' + encodeURIComponent(x.path)) }, h('b', {}, x.title), h('span', { class: 'muted md', style: 'font-size:12px', html: fmt(x.snippet).replace(/\[/g, '<b style="color:var(--acc)">').replace(/\]/g, '</b>') }))) : [h('div', { class: 'empty' }, 'Nothing found.')])); } catch (er) { toast(er.message, 1); } } }, q, btn('Find', 'sm', null, 'submit')), found);
+    found.replaceChildren(...(r.results.length ? r.results.map((x) => h('button', { class: 'item', style: 'text-align:left;cursor:pointer;background:var(--bg);flex-direction:column;align-items:flex-start', onclick: () => go('#/notes/' + encodeURIComponent(x.path)) }, h('b', {}, x.title), h('span', { class: 'muted md', style: 'font-size:calc(12px*var(--ts,1))', html: fmt(x.snippet).replace(/\[/g, '<b style="color:var(--acc)">').replace(/\]/g, '</b>') }))) : [h('div', { class: 'empty' }, 'Nothing found.')])); } catch (er) { toast(er.message, 1); } } }, q, btn('Find', 'sm', null, 'submit')), found);
   tree.groups.forEach((g) => {
     files.append(h('div', { class: 'fgrp' }, g.name, g.can_create ? btn('＋', 'sm', async () => { const n = prompt('Name for the new ' + (g.name === 'Skills' ? 'skill' : 'note') + ':'); if (!n) return; try { const r = await post('/api/vault/new', { group: g.name, name: n }); go('#/notes/' + encodeURIComponent(r.path)); } catch (e) { toast(e.message, 1); } }) : null));
     if (!g.files.length) files.append(h('div', { class: 'empty', style: 'padding:4px 10px' }, 'empty'));
@@ -690,14 +756,14 @@ const onOff = (v, fn) => { const w = h('div', { class: 'seg' }); const draw = (c
 const modeSel = (v, fn) => { const w = h('div', { class: 'seg' }); const draw = (cur) => w.replaceChildren(...['off', 'nudge', 'auto'].map((m) => h('button', { class: cur === m ? 'on' : '', onclick: () => { draw(m); fn(m); } }, m))); draw(v); return w; };
 const timeIn = (v, fn) => h('input', { type: 'time', value: v, 'aria-label': 'Time', style: 'flex:none;width:150px', onchange: (e) => e.target.value && fn(e.target.value) });
 const numSel = (v, opts, fn, suffix) => h('select', { 'aria-label': 'Minutes', onchange: (e) => fn(+e.target.value) }, opts.map((o) => h('option', { value: o, selected: o === v }, o + (suffix || ''))));
-const autoRow = (label, a, b, hint) => [h('dt', {}, label), h('dd', {}, h('div', { class: 'form' }, a, b), h('div', { class: 'muted', style: 'font-size:12px;margin-top:4px' }, hint))];
+const autoRow = (label, a, b, hint) => [h('dt', {}, label), h('dd', {}, h('div', { class: 'form' }, a, b), h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1));margin-top:4px' }, hint))];
 const healthRow = (r) => h('div', { class: 'item' },
   h('span', { class: 'chip ' + (r.level === 'ok' ? 'ok' : r.level === 'off' ? '' : 'bad') }, r.level === 'ok' ? 'ok' : r.level === 'off' ? 'off' : r.level === 'warn' ? 'soon' : 'fix'),
   h('span', { class: 'tx' }, h('b', {}, r.name + '  '), h('span', { class: 'muted' }, r.detail + (r.fix ? '  →  ' + r.fix : ''))));
 // Pick the local model Rosie thinks with. The server tests it with one answer before switching, so a bad pick never breaks her.
 function modelPicker(md, live, again) {
   const where = live.model ? (live.loaded ? `loaded: ${live.model} · ${live.where}` : live.where) : (live.error || '');
-  if (!md || md.error || !md.models) return h('div', {}, h('div', {}, live.model || 'unknown'), h('div', { class: 'muted', style: 'font-size:12px' }, (md && md.error) || 'Model list unavailable.'));
+  if (!md || md.error || !md.models) return h('div', {}, h('div', {}, live.model || 'unknown'), h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1))' }, (md && md.error) || 'Model list unavailable.'));
   const label = (m) => `${m.name} · ${m.size_gb} GB` + (!m.usable ? ` (${m.why_not})` : m.fits_gpu ? '' : ' (too big for the GPU: slow)') + (m.name === md.default ? ' · default' : '');
   const sel = h('select', { 'aria-label': 'AI model', style: 'max-width:100%' }, md.models.map((m) => h('option', { value: m.name, selected: m.name === md.current, disabled: !m.usable }, label(m))));
   let note;
@@ -710,28 +776,74 @@ function modelPicker(md, live, again) {
   };
   return h('div', {},
     h('div', { class: 'form' }, sel, btn('Use this model', 'sm pur', () => use(sel.value)), md.current !== md.default ? btn('Back to ' + md.default, 'sm', () => use(md.default)) : null),
-    note = h('div', { class: 'muted', style: 'font-size:12px;margin-top:4px' }, `Now: ${md.current}` + (where ? ' · ' + where : '') + '. Used for chat, her corner and her memory. Applies right away; no restart.'),
-    md.problem ? h('div', { style: 'font-size:12px;color:var(--bad)' }, md.problem) : null);
+    note = h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1));margin-top:4px' }, `Now: ${md.current}` + (where ? ' · ' + where : '') + '. Used for chat, her corner and her memory. Applies right away; no restart.'),
+    md.problem ? h('div', { style: 'font-size:calc(12px*var(--ts,1));color:var(--bad)' }, md.problem) : null,
+    md.scout ? scoutLine(md.scout) : null);
+}
+// The model scout (model_scout.py): new abliterated models, the best tested at night, a better one flagged in the Inbox.
+function scoutLine(sc) {
+  const t = sc.last_test;
+  const last = !t ? 'nothing tested yet' : `last tested ${t.id} (${t.tested.slice(0, 10)}): ` + (t.status === 'flagged' ? `better, ${t.score} vs ${t.current_score}; see the Inbox`
+    : t.score ? `${t.score} vs ${t.current_score}, not better` : t.why);
+  return h('div', { style: 'margin-top:8px' }, h('div', { class: 'form' }, h('b', { style: 'font-size:calc(13px*var(--ts,1))' }, 'Model scout'), onOff(sc.on, (v) => autoSet({ model_scout: v }))),
+    h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1));margin-top:4px' }, sc.doing ? sc.doing + '…' :
+      `Looks for new abliterated models twice a day and tests the best one at night (0:30 to 1:45, while you're away) on her own everyday tasks. A better one is flagged in the Inbox; she never switches by herself. ` +
+      `Looked at ${sc.looked_at} models, ${sc.candidates} waiting to be tested; ${last}.` + (sc.last_error ? ' Last problem: ' + sc.last_error : '')));
+}
+// Settings > Security (security_watch.py): the nightly check for known and exploited holes, what she patched, and the owner's patch buttons.
+function secBox(sw, again) {
+  if (!sw || sw.error) return h('div', { class: 'muted' }, (sw && sw.error) || 'unknown');
+  const small = (t, st) => h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1));margin-top:4px' + (st || '') }, t);
+  const run = async (url, body) => { try { const r = await post(url, body || {}); toast(r.message || (r.started ? 'Started' : 'Already running')); setTimeout(again, 1500); } catch (e) { toast(e.message, 1); } };
+  const last = !sw.ran_at ? 'Not checked yet.' : `Last checked ${sw.ran_at.slice(0, 16).replace('T', ' ')}: ${sw.counted.machines || 0} machines, ${sw.counted.packages || 0} packages, ${sw.counted.apps || 0} apps. ` +
+    (sw.holes ? `${sw.holes} known holes (${sw.serious} high or critical)` + (sw.apps.length ? ': ' + sw.apps.join(', ') : '') + '; details in the Inbox.' : 'No known holes.');
+  const waiting = Object.entries(sw.waiting).map(([k, n]) => `${k}: ${n}`).join(', ');
+  const p = sw.patched.length ? sw.patched[sw.patched.length - 1] : null;
+  const sp = sw.self_patch;
+  const ssh = h('input', { value: sw.ssh || '', placeholder: 'root@192.168.1.10', 'aria-label': 'Home server SSH address' });
+  const key = h('input', { value: sw.ssh_key || '', placeholder: '~/.ssh/id_ed25519', 'aria-label': 'SSH key file' });
+  return h('div', {},
+    h('div', { class: 'form' }, h('b', { style: 'font-size:calc(13px*var(--ts,1))' }, 'Nightly check'), onOff(sw.on, (v) => autoSet({ security_watch: v })),
+      h('b', { style: 'font-size:calc(13px*var(--ts,1));margin-left:10px' }, 'Patch by herself'), onOff(sw.autopatch, (v) => autoSet({ security_autopatch: v }))),
+    small(sw.doing ? sw.doing + '…' : last),
+    sw.found.length ? small('Apps she found: ' + sw.found.join(', ') + '.') : null,
+    waiting ? small('Security updates waiting: ' + waiting + '.') : null,
+    p ? small(`Last patch (${p.at.slice(0, 16).replace('T', ' ')}): ${p.where}, ${p.what || ''} ${p.message || ''}`) : null,
+    sp && sp.done_at ? small('Her own packages: ' + (sp.ok ? 'patched and tested.' : sp.why), sp.ok ? '' : ';color:var(--bad)') : sp && sp.started ? small('Patching her own packages…') : null,
+    sw.last_error ? small('Last problem: ' + sw.last_error, ';color:var(--bad)') : null,
+    sw.problems.length ? small("Couldn't check: " + sw.problems.join('; ')) : null,
+    h('div', { class: 'form', style: 'margin-top:6px' }, btn('Check now', 'sm', () => run('/api/security/run')),
+      sw.server ? sw.patches.map((x) => btn(x.label, 'sm', () => confirm(x.label + ' now? It runs on your home server and can take several minutes.') && run('/api/security/patch', { target: x.target }))) : null),
+    h('div', { class: 'form', style: 'margin-top:8px' }, h('span', { style: 'font-size:calc(12px*var(--ts,1))' }, 'Home server'), ssh, key, btn('Save', 'sm', () => run('/api/security/server', { ssh: ssh.value, key: key.value }))),
+    small('Optional: a Debian or Ubuntu server she can reach with an SSH key (no password). On a Proxmox host she also checks every running container. Leave it empty to check only this PC.'),
+    small('Every night (3:00 to 6:00, while you\'re away) she checks her own packages, this PC, your home server and the apps she finds there against OSV, GitHub advisories, new CVEs and CISA\'s list of holes being exploited now. ' +
+      'With Patch by herself on, she installs the containers\' security updates and fixes her own packages (tested, put back if anything fails). The server itself, app updates and this PC wait for you.'));
 }
 // Settings > Context window: how much text the model can hold at once, measured per model so it stays fully on the graphics card.
+let a0Draft = { text: '', to: 'all' };                         // the Agent Zero page's half-written board note
+let ctxPollT = null;                                           // the context-window tune poll (Settings)
 function ctxBox(cx, again) {
   if (!cx || cx.error) return h('div', { class: 'muted' }, (cx && cx.error) || 'unknown');
   const c = cx.current || {}, st = cx.status || {};
   const how = !cx.tuned ? 'default, not tuned yet' : c.num_gpu ? 'every layer on the graphics card' : c.fits === false ? 'too big for the graphics card: part runs on the CPU' : 'Ollama decides where it runs';
   const line = h('div', {}, `${(c.num_ctx || 0).toLocaleString()} tokens`, h('span', { class: 'muted' }, ` · ${how}` + (c.tuned_at ? ` · tuned ${c.tuned_at.replace('T', ' ')}` : '')));
-  const note = h('div', { class: 'muted', style: 'font-size:12px;margin-top:4px' }, st.running ? st.step : st.error ? 'Last tune failed: ' + st.error
+  const note = h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1));margin-top:4px' }, st.running ? st.step : st.error ? 'Last tune failed: ' + st.error
     : `Finds the biggest window that keeps ${cx.model} fully on the graphics card. Takes 2 to 5 minutes; answers wait meanwhile. Agent Zero follows.`);
   const b = btn(st.running ? 'Tuning…' : 'Auto-tune', 'sm pur', async () => {
-    try { await post('/api/ctx/tune', {}); toast('Tuning the context window. This takes a few minutes…'); b.disabled = true; poll(); } catch (e) { toast(e.message, 1); }
+    try { await post('/api/ctx/tune', {}); toast('Tuning the context window. This takes a few minutes…'); b.disabled = true; clearTimeout(ctxPollT); poll(); } catch (e) { toast(e.message, 1); }
   });
   b.disabled = !!st.running;
-  const poll = async () => {
+  const here = () => /^#\/settings\/?$/.test(location.hash);   // the General tab only (not Settings > Newspaper)
+  const poll = async () => {                                    // one chain at a time, and only while Settings is open (audit 2026-10-20)
+    if (!here()) return;
     const r = await J('/api/ctx').catch(() => null);
-    if (!r) return setTimeout(poll, 3000);
-    if (r.status.running) { note.textContent = r.status.step; b.textContent = 'Tuning…'; return setTimeout(poll, 2000); }
+    if (!here()) return;
+    if (!r) { ctxPollT = setTimeout(poll, 3000); return; }
+    if (r.status.running) { note.textContent = r.status.step; b.textContent = 'Tuning…'; ctxPollT = setTimeout(poll, 2000); return; }
     toast(r.status.error ? 'Tune failed: ' + r.status.error : `Context window: ${r.current.num_ctx.toLocaleString()} tokens`, !!r.status.error); again();
   };
-  if (st.running) setTimeout(poll, 2000);
+  clearTimeout(ctxPollT);
+  if (st.running) ctxPollT = setTimeout(poll, 2000);
   return h('div', {}, line, h('div', { class: 'form', style: 'margin-top:6px' }, b), note);
 }
 // Settings tabs: General, plus Newspaper when the Morning Paper is installed (paper.js); #/settings/paper opens it directly.
@@ -755,7 +867,7 @@ VIEWS.settings = async (arg) => {
   setHeader('Settings', []);
   show(h('div', { class: 'muted' }, 'Loading…'));
   const KEYS_AI = [['Alt_R', 'Right Alt'], ['Control_R', 'Right Ctrl'], ['Super_R', 'Super_R'], ['Pause', 'Pause'], ['Scroll_Lock', 'Scroll Lock'], ['Menu', 'Menu key'], ['F8', 'F8'], ['F9', 'F9'], ['F10', 'F10'], ['Shift_L+Super_L+keycode:201', 'Copilot / Cortana key']];
-  const [s, au, dc, mc, hl, md, cx] = await Promise.all([J('/api/status'), J('/api/automations'), J('/api/dictation'), J('/api/mcp'), J('/api/health'), J('/api/models').catch((e) => ({ error: e.message })), J('/api/ctx').catch((e) => ({ error: e.message }))]);
+  const [s, au, dc, mc, hl, md, cx, sw] = await Promise.all([J('/api/status'), J('/api/automations'), J('/api/dictation'), J('/api/mcp'), J('/api/health'), J('/api/models').catch((e) => ({ error: e.message })), J('/api/ctx').catch((e) => ({ error: e.message })), J('/api/security').catch((e) => ({ error: e.message }))]);
   const A = au.settings;
   const again = () => keepScroll(() => VIEWS.settings());
   const gpuPct = s.gpu && s.gpu.total_mb ? Math.round(100 * s.gpu.used_mb / s.gpu.total_mb) : 0;
@@ -772,14 +884,27 @@ VIEWS.settings = async (arg) => {
     if (v === s.brain) return;
     try { await post('/api/settings', { brain: v }); toast(v === 'agent_zero' ? 'Agent Zero now answers chat, with Rosie\'s tools' : 'Rosie\'s own model answers chat again'); again(); } catch (e) { toast(e.message, 1); }
   };
+  const setPlanning = async (v) => {
+    if (v === s.planning.on) return;
+    try { await post('/api/settings', { claude_planning: v }); toast(v ? 'Planning requests now go to Claude' : 'Rosie plans with her own model again'); again(); } catch (e) { toast(e.message, 1); }
+  };
+  const setOrch = async (v) => {
+    if (v === s.orchestrator) return;
+    try { const r = await post('/api/settings', { orchestrator: v }); if (r.error) throw new Error(r.error); toast(v ? 'Claude now orchestrates: Rosie and Agent Zero do the work' : 'Claude works on its own again'); again(); } catch (e) { toast(e.message, 1); }
+  };
   const saveSpaces = async (list) => { try { await put('/api/spaces', { spaces: list }); await refreshSide(); again(); } catch (e) { toast(e.message, 1); } };
   const row = (k, v) => [h('dt', {}, k), h('dd', {}, v)];
   show(h('div', { class: 'pagehead' }, h('h2', {}, 'Settings')), settingsTabs('general'),
     h('div', { class: 'grid' },
       h('div', { class: 'card' }, h('h3', {}, 'System'), h('dl', { class: 'kv' },
+        row('Display', lookBox(again)),
+        row('Menu', menuBox(again)),
         row('AI model', modelPicker(md, s.model, again)),
         row('Context window', ctxBox(cx, again)),
-        row('Brain', h('div', {}, h('div', { class: 'seg' }, h('button', { class: s.brain !== 'agent_zero' ? 'on' : '', onclick: () => setBrain('rosie') }, 'Rosie'), h('button', { class: s.brain === 'agent_zero' ? 'on' : '', onclick: () => setBrain('agent_zero') }, 'Agent Zero')), h('div', { class: 'muted', style: 'font-size:12px;margin-top:4px' }, 'Who answers chat, voice and the phone app. Agent Zero is better at big tasks but slower; it uses Rosie\'s tools, and texts, calls, deletes and PC commands still wait for your Yes. If it is down, Rosie answers.'))),
+        row('Security', secBox(sw, again)),
+        row('Brain', h('div', {}, h('div', { class: 'seg' }, h('button', { class: s.brain !== 'agent_zero' ? 'on' : '', onclick: () => setBrain('rosie') }, 'Rosie'), h('button', { class: s.brain === 'agent_zero' ? 'on' : '', onclick: () => setBrain('agent_zero') }, 'Agent Zero')), h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1));margin-top:4px' }, 'Who answers chat, voice and the phone app. Agent Zero is better at big tasks but slower; it uses Rosie\'s tools, and texts, calls, deletes and PC commands still wait for your Yes. If it is down, Rosie answers.'))),
+        row('Planning', h('div', {}, h('div', { class: 'seg' }, h('button', { class: s.planning.on ? 'on' : '', onclick: () => setPlanning(true) }, 'Claude'), h('button', { class: s.planning.on ? '' : 'on', onclick: () => setPlanning(false) }, 'Rosie\'s own model')), h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1));margin-top:4px' }, s.planning.line + ' Claude only plans (it gets your calendar, tasks and projects for the week, never mail or notes); Rosie does the work, with her usual Yes cards. Spoken requests skip it.'))),
+        s.orchestrator === null ? null : row('Orchestrator', h('div', {}, h('div', { class: 'seg' }, h('button', { class: s.orchestrator ? 'on' : '', onclick: () => setOrch(true) }, 'On'), h('button', { class: s.orchestrator ? '' : 'on', onclick: () => setOrch(false) }, 'Off')), h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1));margin-top:4px' }, 'On: your Claude Code sessions plan and check, and Rosie and Agent Zero do the work until Claude is satisfied. Same switch as "delegate on" and "delegate off".'))),
         row('GPU', s.gpu.name ? [s.gpu.name, h('div', { class: 'bar' }, h('i', { style: 'width:' + gpuPct + '%' })), h('span', { class: 'muted' }, `${s.gpu.used_mb} / ${s.gpu.total_mb} MB`)] : (s.gpu.error || 'not found')),
         row('Google Calendar', s.google.ok ? 'connected' : h('span', { style: 'color:var(--bad)' }, (s.google.error || 'login needed') + ' · run ~/assistant/login.sh')),
         row('Phone address', s.tailscale.name ? s.tailscale.name : (s.tailscale.error || 'Tailscale not running')),
@@ -847,13 +972,13 @@ VIEWS.settings = async (arg) => {
             p.on && !(p.contacts && p.sms && p.readsms && p.call) ? btn('Allow contacts, texts and calls', 'sm pur', () => AndroidBridge.askPhonePermissions()) : null),
           p.on ? h('div', { style: 'margin-top:12px' },
             h('div', { class: 'form' }, p.notif_access ? null : btn('Allow notification access', 'sm pur', () => AndroidBridge.openNotificationAccess()), p.screen_control ? null : btn('Turn on screen control', 'sm pur', () => AndroidBridge.openScreenControl())),
-            h('div', { class: 'muted', style: 'font-size:12px;margin-top:6px' }, 'Notification access lets her read your notifications and answer messages with their reply box. Screen control lets her look at the screen and tap, type and scroll for you (find "Rosie screen control" under Android Settings > Accessibility; Android may ask you to allow restricted settings first). Banking, payment, password and security screens are blocked, she never types passwords, Send / Pay / Delete / Buy buttons always ask you, a "Rosie is controlling your screen" notice with a Stop button shows the whole time, and she gives up after 12 steps.')) : null,
+            h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1));margin-top:6px' }, 'Notification access lets her read your notifications and answer messages with their reply box. Screen control lets her look at the screen and tap, type and scroll for you (find "Rosie screen control" under Android Settings > Accessibility; Android may ask you to allow restricted settings first). Banking, payment, password and security screens are blocked, she never types passwords, Send / Pay / Delete / Buy buttons always ask you, a "Rosie is controlling your screen" notice with a Stop button shows the whole time, and she gives up after 12 steps.')) : null,
           h('div', { class: 'muted', style: 'margin:14px 0 4px;font-weight:700' }, 'How she confirms (like Siri and Gemini)'),
           h('dl', { class: 'kv' },
             ...autoRow('Texts', h('select', { 'aria-label': 'Texts', onchange: (e) => autoSet({ sms_confirm: e.target.value }) }, [['ask', 'Read it back, wait for send / change / cancel'], ['headphones', 'Auto-send when headphones are on'], ['always', 'Always auto-send']].map(([k, t]) => h('option', { value: k, selected: k === A.sms_confirm }, t))), null, 'Auto-send says what it is sending, then waits 3 seconds for you to say "cancel" before sending.'),
             ...autoRow('Calls', h('select', { 'aria-label': 'Calls', onchange: (e) => autoSet({ call_confirm: e.target.value }) }, [['announce', 'Say who, call after 3 seconds (cancel any time)'], ['ask', 'Ask first'], ['now', 'Call right away']].map(([k, t]) => h('option', { value: k, selected: k === A.call_confirm }, t))), null, 'If a name matches more than one person she asks which one.'),
             ...autoRow('When I pause', h('select', { 'aria-label': 'Pause length', onchange: (e) => { AndroidBridge.setIntPref('endpoint_ms', parseInt(e.target.value, 10)); } }, [[800, 'Quick: answer after a short pause'], [1200, 'Normal'], [2000, 'Patient: wait while I think']].map(([k, t]) => h('option', { value: k, selected: k === AndroidBridge.getIntPref('endpoint_ms', 1200) }, t))), null, 'How long she waits after you stop talking before she starts answering.')),
-          h('div', { class: 'muted', style: 'font-size:12px;margin-top:6px' }, 'Notes, alarms, timers, music, navigation and searches are just done and she tells you what she did. Deleting things, mail cleanup and anything that spends money always asks first.'));
+          h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1));margin-top:6px' }, 'Notes, alarms, timers, music, navigation and searches are just done and she tells you what she did. Deleting things, mail cleanup and anything that spends money always asks first.'));
       })() : null,
       window.AndroidBridge ? (() => {
         const w = JSON.parse(AndroidBridge.wakeStatus() || '{}');
@@ -865,7 +990,7 @@ VIEWS.settings = async (arg) => {
           h('div', { class: 'muted', style: 'margin:12px 0 6px' }, (() => { const ti = JSON.parse(AndroidBridge.trainInfo() || '{}'); return ti.trained ? 'Trained on your voice (' + ti.trained + ' of 6 clear). Also accepts: ' + (ti.aliases.split('|').filter(Boolean).join(', ') || 'the standard phrase') + '.' : 'Not trained yet. Say "Hey Rosie" six times so she learns your voice and how loudly you speak; this makes her much less likely to wake by mistake.'; })()),
           h('div', { class: 'form' }, btn('Train my voice', 'sm pur', () => window.startTraining()), JSON.parse(AndroidBridge.trainInfo() || '{}').trained ? btn('Reset training', 'sm', () => { AndroidBridge.trainReset(); again(); }) : null),
           (() => {
-            const flag = (name, label, hint) => { const on = AndroidBridge.getFlag(name); return h('div', { style: 'margin-top:12px' }, h('div', { class: 'form' }, btn(label + ': ' + (on ? 'ON' : 'OFF'), on ? 'ok' : 'sm', () => { AndroidBridge.setFlag(name, !on); setTimeout(again, 600); })), h('div', { class: 'muted', style: 'font-size:12px;margin-top:4px' }, hint)); };
+            const flag = (name, label, hint) => { const on = AndroidBridge.getFlag(name); return h('div', { style: 'margin-top:12px' }, h('div', { class: 'form' }, btn(label + ': ' + (on ? 'ON' : 'OFF'), on ? 'ok' : 'sm', () => { AndroidBridge.setFlag(name, !on); setTimeout(again, 600); })), h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1));margin-top:4px' }, hint)); };
             const asst = AndroidBridge.isAssistant();
             return h('div', {}, h('div', { class: 'muted', style: 'margin-top:12px' }, 'Microphone in use: ' + AndroidBridge.micInfo()),
               h('div', { class: 'muted', style: 'margin-top:14px;font-weight:700' }, 'Sounds'),
@@ -875,14 +1000,14 @@ VIEWS.settings = async (arg) => {
                 const prev = (kind, label) => btn(label, 'sm', () => AndroidBridge.previewSound(kind, AndroidBridge.getPref('sound_style', 'game')));
                 return h('div', {}, h('div', { class: 'form', style: 'margin-top:8px' }, sel('sound_style', style, [['game', 'Video game'], ['soft', 'Soft chime'], ['off', 'No sounds']], 'Sound style'), sel('sound_vol', vol, [['low', 'Quiet'], ['medium', 'Medium'], ['high', 'Loud']], 'Sound volume')),
                   h('div', { class: 'form', style: 'margin-top:8px' }, prev('on', '▶ Turned on'), prev('wake', '▶ Listening'), prev('thinking', '▶ Thinking'), prev('done', '▶ Done')),
-                  h('div', { class: 'muted', style: 'font-size:12px;margin-top:4px' }, 'Listening: she heard you and is ready. Thinking: she stopped listening and is working. Done: the conversation ended. Tap a button to hear it.'));
+                  h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1));margin-top:4px' }, 'Listening: she heard you and is ready. Thinking: she stopped listening and is working. Done: the conversation ended. Tap a button to hear it.'));
               })(),
               (() => { const off = AndroidBridge.getFlag('novibe'); return h('div', { class: 'form', style: 'margin-top:10px' }, btn('Vibration: ' + (off ? 'OFF' : 'ON'), off ? 'sm' : 'ok', () => { AndroidBridge.setFlag('novibe', !off); setTimeout(again, 400); })); })(),
-              (() => { const on = AndroidBridge.getFlagD('pocketrule', true); return h('div', { style: 'margin-top:12px' }, h('div', { class: 'form' }, btn('In a pocket, only use headphones: ' + (on ? 'ON' : 'OFF'), on ? 'ok' : 'sm', () => { AndroidBridge.setFlag('pocketrule', !on); setTimeout(again, 500); })), h('div', { class: 'muted', style: 'font-size:12px;margin-top:4px' }, 'When the phone is covered (a pocket or bag) with the screen off, Rosie only listens through a Bluetooth or wired headset microphone. With no headset she stays off. Out of a pocket she works as normal.')); })(),
+              (() => { const on = AndroidBridge.getFlagD('pocketrule', true); return h('div', { style: 'margin-top:12px' }, h('div', { class: 'form' }, btn('In a pocket, only use headphones: ' + (on ? 'ON' : 'OFF'), on ? 'ok' : 'sm', () => { AndroidBridge.setFlag('pocketrule', !on); setTimeout(again, 500); })), h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1));margin-top:4px' }, 'When the phone is covered (a pocket or bag) with the screen off, Rosie only listens through a Bluetooth or wired headset microphone. With no headset she stays off. Out of a pocket she works as normal.')); })(),
               flag('btmic', 'Listen through my Bluetooth headset', 'Hears you through the headset microphone even with the phone in a pocket. While on, music through the headset sounds like a phone call. A wired or USB headset is used automatically.'),
-              h('div', { style: 'margin-top:12px' }, h('div', { class: 'form' }, asst ? h('span', { class: 'chip ok' }, 'headphone button opens Rosie') : btn('Use my headphone button for Rosie', 'sm pur', () => AndroidBridge.setAssistant())), h('div', { class: 'muted', style: 'font-size:12px;margin-top:4px' }, asst ? 'Press and hold the button on your headphones (or the power-button assistant gesture) and Rosie starts listening. This replaces Google Assistant for those buttons, so "Hey Google" stops working.' : 'Makes Rosie your phone\'s assistant, so holding the headphone button starts her instead of Google. Android asks you to confirm.')));
+              h('div', { style: 'margin-top:12px' }, h('div', { class: 'form' }, asst ? h('span', { class: 'chip ok' }, 'headphone button opens Rosie') : btn('Use my headphone button for Rosie', 'sm pur', () => AndroidBridge.setAssistant())), h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1));margin-top:4px' }, asst ? 'Press and hold the button on your headphones (or the power-button assistant gesture) and Rosie starts listening. This replaces Google Assistant for those buttons, so "Hey Google" stops working.' : 'Makes Rosie your phone\'s assistant, so holding the headphone button starts her instead of Google. Android asks you to confirm.')));
           })(),
-          w.battery === false ? h('div', { style: 'margin-top:10px' }, h('div', { class: 'form' }, btn('Let Rosie run in the background', 'sm pur', () => AndroidBridge.askBatteryUnrestricted())), h('div', { class: 'muted', style: 'font-size:12px;margin-top:4px' }, 'Without this Android may stop her to save battery, so "Hey Rosie" and phone control would quietly stop working.')) : null,
+          w.battery === false ? h('div', { style: 'margin-top:10px' }, h('div', { class: 'form' }, btn('Let Rosie run in the background', 'sm pur', () => AndroidBridge.askBatteryUnrestricted())), h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1));margin-top:4px' }, 'Without this Android may stop her to save battery, so "Hey Rosie" and phone control would quietly stop working.')) : null,
           w.on && !w.overlay ? h('div', { class: 'muted', style: 'margin-top:8px' }, 'Tip: allow "Display over other apps" for Rosie to show the octopus popup over other apps. Without it she still listens and talks, just without the popup.') : null);
       })() : null,
       h('div', { class: 'card' }, h('h3', {}, 'Android app'),
@@ -897,9 +1022,9 @@ VIEWS.settings = async (arg) => {
         h('div', { class: 'form', style: 'margin-bottom:8px' }, h('span', { class: 'chip ' + (mc.registered ? 'ok' : 'bad') }, mc.registered ? 'connected to Claude Code' : 'not registered with Claude Code'), h('span', { class: 'chip' }, 'read-only'), h('span', { class: 'chip' }, 'shares: ' + mc.root.replace(/^\/home\/[^/]+/, '~') + ' (all folders)')),
         h('div', { style: 'margin-bottom:8px', class: 'err' }, 'Heads-up: when an AI agent such as Claude Code reads a note or file through this, that text is sent to the cloud AI. It is NOT private any more. Keys, passwords, logins and app data are blocked and token-like text is hidden, but personal documents and meeting transcripts are readable.'),
         h('div', { class: 'muted' }, 'Tools: ' + mc.tools.join(', ')),
-        h('details', { style: 'margin-top:8px' }, h('summary', { class: 'muted' }, 'Always blocked (' + mc.blocked.length + ')'), h('div', { class: 'muted', style: 'font-size:12px;margin-top:6px' }, mc.blocked.join('  ·  ') + '  ·  your .ssh keys, .env files, password/token/credential files, the assistant\'s secrets and databases')),
-        h('details', { style: 'margin-top:8px' }, h('summary', { class: 'muted' }, 'Recent requests from agents (' + mc.audit.length + ')'), h('pre', { style: 'font-size:12px;white-space:pre-wrap;color:var(--mute)' }, mc.audit.join('\n') || 'none yet')),
-        h('details', { style: 'margin-top:8px' }, h('summary', { class: 'muted' }, 'Add to another agent (Cursor, VS Code…)'), h('pre', { style: 'font-size:12px;white-space:pre-wrap' }, JSON.stringify({ mcpServers: { 'assistant-notes': { command: mc.command.split(' ')[0], args: [mc.command.split(' ')[1]] } } }, null, 2)))),
+        h('details', { style: 'margin-top:8px' }, h('summary', { class: 'muted' }, 'Always blocked (' + mc.blocked.length + ')'), h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1));margin-top:6px' }, mc.blocked.join('  ·  ') + '  ·  your .ssh keys, .env files, password/token/credential files, the assistant\'s secrets and databases')),
+        h('details', { style: 'margin-top:8px' }, h('summary', { class: 'muted' }, 'Recent requests from agents (' + mc.audit.length + ')'), h('pre', { style: 'font-size:calc(12px*var(--ts,1));white-space:pre-wrap;color:var(--mute)' }, mc.audit.join('\n') || 'none yet')),
+        h('details', { style: 'margin-top:8px' }, h('summary', { class: 'muted' }, 'Add to another agent (Cursor, VS Code…)'), h('pre', { style: 'font-size:calc(12px*var(--ts,1));white-space:pre-wrap' }, JSON.stringify({ mcpServers: { 'assistant-notes': { command: mc.command.split(' ')[0], args: [mc.command.split(' ')[1]] } } }, null, 2)))),
       h('div', { class: 'card' }, h('h3', {}, 'About you'), h('div', { class: 'muted', style: 'margin-bottom:10px' }, 'What Rosie calls you, and how you like help. Both go into her prompts and Agent Zero\'s. They stay on this PC.'),
         h('form', { class: 'form col', onsubmit: async (e) => { e.preventDefault(); try { await post('/api/settings', { owner_name: on.value, owner_notes: nn.value }); toast('Saved'); } catch (er) { toast(er.message, 1); } } }, on, nn, btn('Save', 'pur', null, 'submit'))),
       h('div', { class: 'card' }, h('h3', {}, 'Memory'), h('div', { class: 'muted', style: 'margin-bottom:10px' }, 'What Rosie learns from your chats: facts, and beliefs that grow as she hears more. She reads chats while you aren\'t using her, and it all stays on this PC. Ask her "what do you remember about…", or tell her to forget something.'),
@@ -1181,6 +1306,55 @@ $('#foot').append(h('button', { class: 'btn sm bad shut', type: 'button', title:
 
 // ---------- the Agent Zero page: is it running, what is it doing now, which of Rosie's tools it used, its recent activity ----------
 let a0Timer = null;
+// ---------- Agent Deck (owner 2026-10-21: "add the agent deck into rosie"): the same page as the desktop window, in a frame ----------
+// Servers (servers.py): every machine and service on the home network, live up/down, one click to open; added ones and renames kept.
+let serversPollT = null;
+VIEWS.servers = async () => {
+  setHeader('Servers', []);
+  const here = () => /^#\/servers\/?$/.test(location.hash);
+  const copy = (t) => navigator.clipboard.writeText(t).then(() => toast('Copied ' + t), () => toast(t));
+  const dot = (up) => h('span', { title: up ? 'Answering' : 'Not answering from this PC', style: `display:inline-block;width:9px;height:9px;border-radius:50%;flex:none;background:${up ? 'var(--ok,#3fdc8a)' : 'var(--bad)'};box-shadow:0 0 8px ${up ? '#3fdc8a90' : '#ff4d6d80'}` });
+  const draw = async (first) => {
+    if (!here()) return;
+    let d;
+    try { d = await J('/api/servers'); } catch (e) { if (first) show(h('div', { class: 'muted' }, e.message)); return; }
+    if (!here()) return;
+    const card = (m) => h('div', { class: 'card' },
+      h('h3', {}, dot(m.up), m.name, h('a', { href: '#', onclick: (e) => { e.preventDefault(); copy(m.ip); } }, m.ip || 'no address')),
+      h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1));margin:-4px 0 8px' }, m.kind + (m.running ? '' : ' · stopped') + (m.note ? ' · ' + m.note : '')),
+      m.services.length ? m.services.map((s) => h('div', { class: 'form', style: 'gap:8px;margin:4px 0;flex-wrap:nowrap' }, dot(s.up),
+        h('span', { style: 'flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap', title: s.program || '' }, s.label),
+        h('a', { href: '#', class: 'muted', style: 'font-size:calc(12px*var(--ts,1));font-family:var(--mono,monospace)', title: 'Copy', onclick: (e) => { e.preventDefault(); copy(`${m.ip}:${s.port}`); } }, `${m.ip}:${s.port}`),
+        s.url ? h('a', { class: 'btn sm pur', href: s.url, target: '_blank', rel: 'noopener' }, 'Open') : s.hint ? btn('Copy', 'sm', () => copy(s.hint)) : null,
+        m.manual ? null : h('button', { class: 'btn sm dim', type: 'button', title: 'Rename', onclick: async () => {
+          const v = prompt('Name for ' + m.ip + ':' + s.port + ' (empty = the found name)', s.label);
+          if (v === null) return;
+          try { await post('/api/servers/label', { ip: m.ip, port: s.port, label: v }); draw(); } catch (e) { toast(e.message, 1); } } }, '✎'))) : h('div', { class: 'muted' }, 'Nothing to open here.'),
+      m.manual ? h('div', { style: 'margin-top:6px' }, btn('Remove', 'sm dim', async () => { if (!confirm('Remove ' + m.name + '?')) return; try { await del('/api/servers/' + m.id); draw(); } catch (e) { toast(e.message, 1); } })) : null);
+    const nm = h('input', { placeholder: 'Name, like Router', 'aria-label': 'Name' });
+    const ad = h('input', { placeholder: '192.168.1.1', 'aria-label': 'Address' });
+    const pt = h('input', { type: 'number', min: 1, max: 65535, placeholder: 'Port', 'aria-label': 'Port', style: 'max-width:110px' });
+    const nt = h('input', { placeholder: 'Note (optional)', 'aria-label': 'Note' });
+    const add = async () => { try { await post('/api/servers', { name: nm.value, address: ad.value, port: pt.value ? +pt.value : null, note: nt.value }); toast('Added'); draw(); } catch (e) { toast(e.message, 1); } };
+    const up = d.machines.filter((m) => m.up).length;
+    show(h('div', { class: 'pagehead' }, h('h2', {}, 'Servers'), h('span', { class: 'muted' }, `${up} of ${d.machines.length} answering`), h('span', { class: 'sp' }),
+        d.server ? btn(d.looking ? 'Looking…' : 'Look again', 'sm', async () => { try { await post('/api/servers/refresh'); toast('Looking at your server…'); setTimeout(draw, 8000); } catch (e) { toast(e.message, 1); } }) : null),
+      h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1));margin-bottom:10px' }, (d.server ? 'Found on your home server' + (d.found_at ? ' at ' + d.found_at.slice(0, 16).replace('T', ' ') : '') + '. ' : 'Set up your home server in Settings > Security and Rosie finds its machines and apps by herself. ') +
+        'Green answers from this PC, red doesn\'t (stopped, or a firewall). Click an address to copy it. Ask Rosie "what\'s the IP of …" in chat too.' + (d.last_error ? ' Last problem: ' + d.last_error : '')),
+      h('div', { class: 'grid' }, d.machines.map(card)),
+      h('div', { class: 'card', style: 'margin-top:12px' }, h('h3', {}, 'Add one by hand'), h('div', { class: 'form' }, nm, ad, pt, nt, btn('Add', 'sm pur', add)),
+        h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1));margin-top:4px' }, 'For things Rosie can\'t find on her own: the router, a NAS, a printer, another PC.')));
+    clearTimeout(serversPollT);
+    serversPollT = setTimeout(() => draw(), d.looking ? 5000 : 30000);
+  };
+  show(h('div', { class: 'muted' }, 'Checking your servers…'));
+  draw(true);
+};
+VIEWS.deck = async () => {
+  setHeader('Agent Deck', []);
+  show(h('iframe', { class: 'deckframe', src: '/deck/index.html', title: 'Agent Deck: what every agent is doing, with controls' }));
+};
+
 const a0Here = () => location.hash.replace(/^#\/?/, '').startsWith('agentzero');
 function a0Ago(sec) { const m = Math.floor(sec / 60); return m ? `${m} min ${sec % 60} s` : `${sec} s`; }
 VIEWS.agentzero = async () => {
@@ -1192,10 +1366,18 @@ VIEWS.agentzero = async () => {
     try { const r = await post('/api/a0/' + what, {}); if (!r.ok) throw new Error(r.error || 'It did not work.'); toast(label + ': done'); } catch (e) { toast(e.message, 1); }
     draw();
   };
+  let busy = false;
+  const typingNote = () => {                                   // only a half-written note holds the redraw (an empty, focused box must not freeze the page)
+    const el = document.activeElement;
+    return !!(el && el.tagName === 'INPUT' && el.closest && el.closest('.a0-board-form') && (el.value || '').trim());   // keeps the caret where it is
+  };
   const draw = async () => {
     if (!a0Here()) { clearInterval(a0Timer); return; }
+    if (busy || document.hidden) return;                       // one request at a time, and none from a hidden tab
+    busy = true;
     let d;
-    try { d = await J('/api/a0/status'); } catch (e) { show(h('div', { class: 'err' }, 'Could not read Agent Zero\'s status: ' + e.message)); return; }
+    try { d = await J('/api/a0/status'); } catch (e) { busy = false; if (a0Here() && !typingNote()) show(h('div', { class: 'err' }, 'Could not read Agent Zero\'s status: ' + e.message)); return; }
+    busy = false;
     if (!a0Here()) return;
     const c = d.container || {}, up = c.state === 'running';
     const row = (k, v) => [h('dt', {}, k), h('dd', {}, v)];
@@ -1209,10 +1391,10 @@ VIEWS.agentzero = async () => {
         row('Saved chats', d.chats == null ? '–' : String(d.chats))),
       c.error ? h('div', { class: 'err', style: 'margin-top:8px' }, c.error) : null,
       h('div', { class: 'form', style: 'margin-top:10px' },
-        h('a', { class: 'btn sm pur', href: d.url, target: '_blank', rel: 'noopener', style: 'text-decoration:none;display:inline-flex;align-items:center' }, 'Open Agent Zero'),
+        btn('Talk to it in Rosie\'s chat', 'sm pur', () => go('#/chat')),
         up ? btn('Restart', 'sm', () => act('restart', 'Restarting Agent Zero', 'Restart Agent Zero? Anything it is working on stops.')) : null,
         up ? btn('Stop', 'sm bad', () => act('stop', 'Stopping Agent Zero', 'Stop Agent Zero? Rosie answers chat herself until it runs again.')) : btn('Start', 'sm ok', () => act('start', 'Starting Agent Zero'))),
-      h('div', { class: 'muted', style: 'font-size:12px;margin-top:6px' }, 'Open Agent Zero works on this PC (it only listens here). A turn stops by itself after 50 steps.'));
+      h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1));margin-top:6px' }, 'Rosie\'s chat is the one place to type: Agent Zero answers there, with all of Rosie\'s tools. A turn stops by itself after 50 steps.'));
     const t = d.turn;
     const now = h('div', { class: 'card' }, h('h3', {}, 'Working now'),
       t ? h('div', {},
@@ -1222,15 +1404,49 @@ VIEWS.agentzero = async () => {
         h('div', { class: 'form', style: 'margin-top:10px' }, btn('Stop this task', 'sm bad', () => act('restart', 'Stopping the task', 'Stop what Agent Zero is doing? This restarts it (about 20 seconds); the chat keeps what was said so far.'))))
         : h('div', { class: 'muted' }, up ? 'Nothing right now.' : 'Agent Zero is not running.'));
     const calls = h('div', { class: 'card' }, h('h3', {}, 'Rosie\'s tools it used'),
-      d.calls.length ? h('div', { class: 'list' }, d.calls.map((x) => h('div', { class: 'item' }, h('span', { class: 'tx' }, h('b', {}, x.tool + '  '), h('span', { class: 'muted', style: 'font-size:12px' }, x.at + (x.args ? ' · ' + x.args : ''))))))
+      d.calls.length ? h('div', { class: 'list' }, d.calls.map((x) => h('div', { class: 'item' }, h('span', { class: 'tx' }, h('b', {}, x.tool + '  '), h('span', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1))' }, x.at + (x.args ? ' · ' + x.args : ''))))))
         : h('div', { class: 'muted' }, 'None yet.'));
     const log = h('div', { class: 'card wide' }, h('h3', {}, 'Recent activity'),
       d.activity.length ? h('pre', { class: 'a0-log' }, d.activity.join('\n')) : h('div', { class: 'muted' }, up ? 'Nothing logged yet.' : '–'));
+    const b = d.board || {}, tm = (t) => new Date(t * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    const noteTo = h('select', { 'aria-label': 'Note to', onchange: (e) => { a0Draft.to = e.target.value; } },
+      ['all', 'claude', 'rosie'].map((v) => h('option', { value: v }, v === 'all' ? 'Everyone' : v === 'claude' ? 'Claude sessions' : 'Rosie / Agent Zero')));
+    noteTo.value = a0Draft.to;                                  // the draft and its recipient survive every redraw (audit 2026-10-20)
+    const noteText = h('input', { type: 'text', placeholder: 'Leave a note for the agents', 'aria-label': 'Note text', maxlength: 600,
+      oninput: (e) => { a0Draft.text = e.target.value; }, onkeydown: (e) => { if (e.key === 'Enter') sendNote(); } });
+    noteText.value = a0Draft.text;
+    const sendNote = async () => {
+      if (!noteText.value.trim()) return;
+      try { const r = await post('/api/board/note', { text: noteText.value, to: noteTo.value }); if (r.error) throw new Error(r.error); noteText.value = ''; a0Draft.text = ''; noteText.blur(); toast('Note posted'); } catch (e) { toast(e.message, 1); }
+      draw();
+    };
+    const endClaim = async (thing) => {
+      if (!confirm(`End the claim on ${thing}? The agent holding it may still be working on it.`)) return;
+      try { await post('/api/board/release', { thing }); toast('Claim ended'); } catch (e) { toast(e.message, 1); }
+      draw();
+    };
+    const board = h('div', { class: 'card wide' }, h('h3', {}, 'Agent board'),
+      h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1));margin-bottom:8px' }, 'What your Claude sessions, Rosie and Agent Zero are doing. Each one sees this board and claims a slot or repo before changing it.'),
+      b.error ? h('div', { class: 'err' }, b.error) : h('div', {},
+        b.slots ? h('div', { style: 'margin-bottom:6px' }, b.slots) : null,
+        h('b', {}, 'Around now'),
+        (b.around || []).length ? h('div', { class: 'list' }, b.around.map((x) => h('div', { class: 'item' }, h('span', { class: 'tx' }, h('b', {}, x.agent + (x.peer ? ` (${x.peer.name}, ${x.peer.status || '?'})` : '') + '  '), h('span', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1))' }, (x.cwd ? x.cwd + ' · ' : '') + (x.task || 'no task posted'))))))
+          : h('div', { class: 'muted' }, 'Nobody right now.'),
+        (b.claims || []).length ? h('div', { style: 'margin-top:8px' }, h('b', {}, 'Claims'), h('div', { class: 'list' }, b.claims.map((x) => h('div', { class: 'item' },
+          h('span', { class: 'tx' }, h('b', {}, x.thing + '  '), h('span', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1))' }, `${x.agent} since ${tm(x.t)}` + (x.why ? ' · ' + x.why : ''))),
+          btn('End', 'sm bad', () => endClaim(x.thing)))))) : null,
+        h('div', { style: 'margin-top:8px' }, h('b', {}, 'Recent posts')),
+        (b.posts || []).length ? h('div', { class: 'list' }, b.posts.slice(-12).reverse().map((x) => h('div', { class: 'item' }, h('span', { class: 'tx' },
+          h('span', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1))' }, `${tm(x.t)} ${x.agent}${x.to_agent ? ' → ' + x.to_agent : ''} · ${x.kind}  `), x.text))))
+          : h('div', { class: 'muted' }, 'No posts yet.'),
+        h('div', { class: 'form a0-board-form', style: 'margin-top:10px' }, noteTo, noteText, btn('Post', 'sm pur', sendNote))));
+    if (typingNote()) return;                                        // never redraw under the owner's half-written note
     const y = $('#view').scrollTop;
     show(h('div', { class: 'pagehead' }, h('h2', {}, 'Agent Zero'), h('span', { class: 'muted' }, 'Rosie\'s brain for chat, voice and the phone app. Updates every few seconds.')),
-      h('div', { class: 'grid' }, status, now, calls, log));
+      h('div', { class: 'grid' }, status, now, board, calls, log));
     $('#view').scrollTop = y;
   };
+  clearInterval(a0Timer);
+  a0Timer = setInterval(draw, 4000);                            // set before the first draw: entering twice never leaves two chains
   await draw();
-  a0Timer = setInterval(draw, 4000);
 };

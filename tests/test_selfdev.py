@@ -78,11 +78,13 @@ def test_switch_needs_a_passing_check_for_the_exact_code_and_then_asks(idle, mon
 
 def test_the_tools_are_registered_guarded_and_hidden_until_asked(idle):
     names = [n for n in agent.TOOLS if n.startswith("selfdev_")]
-    assert len(names) == 12 and all(agent.GROUPS[n] == "selfdev" for n in names)
+    assert len(names) == 14 and all(agent.GROUPS[n] == "selfdev" for n in names)
     assert {"selfdev_edit", "selfdev_write", "selfdev_switch", "selfdev_rollback", "selfdev_agent"} <= agent.GUARDED
     assert "selfdev" not in agent.select_groups("what's the weather", [], "", None)
     assert "selfdev" in agent.select_groups("can you improve your own code", [], "", None)
     assert "selfdev" in agent.select_groups("go back to the previous version", [], "", None)
+    assert "selfdev" in agent.select_groups("add a weather screen to Vector's face", [], "", None)
+    assert "selfdev" not in agent.select_groups("what does vector see", [], "", None)
 
 
 def test_a_javascript_change_without_node_is_refused_not_a_crash(idle, monkeypatch):

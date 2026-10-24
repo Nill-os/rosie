@@ -34,6 +34,7 @@ import httpx  # noqa: E402
 import corner  # noqa: E402
 import ctxsize  # noqa: E402
 import testguard  # noqa: E402
+import timefmt
 
 GROUP = "rosie-corner"
 ROOT = Path(__file__).resolve().parent.parent
@@ -43,12 +44,22 @@ PORT = int(os.environ.get("ROSIE_GRAPH_PORT", "6380"))
 OLLAMA = "http://127.0.0.1:11434"
 EMBED_MODEL = "nomic-embed-text"
 EMBED_DIM = 768
-MAX_PREDICT = 4096                   # per Graphiti call; her context is 32k, the prompts plus this fit
+MAX_PREDICT = 2048                   # per Graphiti call; the longest real answer seen is ~1000 tokens (a note about many finds)
+RUNAWAY_SPACES = 100                 # this many blanks in a row: the answer has turned into empty space (JSON never indents that deep)
+RETRY_TEMPERATURE = 0.4              # a runaway is asked once more at this temperature; at 0 the model repeats the same runaway
 BATCH = 4                            # episodes per round; the wait checks run again before each one
 ROUND_S = 60                         # between rounds
+BACKLOG_ROUND_S = 5                  # between rounds while a full batch went in (more is waiting): she learns faster overnight
 RETRY_S = 300                        # a missing database is tried again after this long
 FIND_SETTLE_S = 3600                 # a find waits (up to this long) for its topic group, so the episode can say which group it is in
 MAX_TRIES = 3
+# Each piece stands alone (one page, picture or note), so the model gets no earlier pieces as context (Graphiti's default is the last 10,
+# which made a 120-character piece a 15,000-character prompt). And every piece starts "Rosie found...": without this hint each one
+# added a "Rosie is exploring X" fact that the model then checked against all her others, one call per fact, and rewrote her summary.
+EXTRACT_HINT = ("Rosie is the one who found, saved or wrote this; she is not a subject of it. Do not extract Rosie as an entity or a "
+                "fact about Rosie. Extract the things the page, picture or note is about (projects, products, people, organizations, "
+                "places, ideas) and the facts between them.")
+SKIPPED = "skipped:"                 # error prefix of a piece the owner left out on purpose (skip()); not a failure
 ADD_TIMEOUT_S = 1800
 SEARCH_TIMEOUT_S = 25
 CONNECT_TIMEOUT_S = 10               # connecting (and building indexes) gives up after this; a hung database never holds things up longer
@@ -77,6 +88,17 @@ class Off(Exception):
 
 class OwnerBusy(Exception):
     """Something comes first (the owner, the paper, a scheduled job): drop this model call and try again later."""
+
+
+class Slow(Exception):
+    """A graph call ran past its own time limit. Only that call is given up: a slow answer (a cold embedding model, a busy GPU) is not
+    a lost database, so the graph isn't turned off for it (audit 2026-10-23: a 4 s chat recall turned it off for 5 minutes)."""
+
+
+class RanAway(Exception):
+    """The model's answer ran to its length cap or into empty space. On 2026-10-22, 258 answers a day ran to the old 4096-token cap
+    (half of all the tokens the model wrote, ~9 GPU hours), and Graphiti asked each one 4 times (a cut-off answer is a JSON error, which it
+    retries) at temperature 0, so the same runaway came back each time. Not a JSONDecodeError, so Graphiti doesn't retry it."""
 
 
 # ---------------------------------------------------------------- when the model may be used
@@ -109,16 +131,17 @@ def _one_at_a_time() -> asyncio.Semaphore:
     return s
 
 
-async def ollama_chat(messages: list[dict], fmt, predict: int = MAX_PREDICT) -> str:
+async def ollama_chat(messages: list[dict], fmt, predict: int = MAX_PREDICT, temperature: float = 0.0) -> str:
     """One Graphiti question to Rosie's chat model: her model and context size (same as agent.py, so Ollama never reloads it), no
-    thinking, one at a time, streamed so it is dropped (OwnerBusy) the moment the owner needs her."""
+    thinking, one at a time, streamed so it is dropped (OwnerBusy) the moment the owner needs her, and cut short (RanAway) the moment it
+    turns into empty space."""
     import corner_browse as cb
     async with _one_at_a_time():
         why = wait_reason()
         if why:
             raise OwnerBusy(why)
         body = {"model": cb.MODEL, "stream": True, "think": False, "format": fmt, "keep_alive": cb.KEEP_ALIVE,
-                "options": {**ctxsize.options(cb.MODEL), "temperature": 0.0, "num_predict": int(min(predict or MAX_PREDICT, MAX_PREDICT))},
+                "options": {**ctxsize.options(cb.MODEL), "temperature": temperature, "num_predict": int(min(predict or MAX_PREDICT, MAX_PREDICT))},
                 "messages": messages}
         asked, text = time.time(), ""
         async with httpx.AsyncClient(transport=_ollama_transport, timeout=httpx.Timeout(600, connect=5)) as c:
@@ -133,7 +156,11 @@ async def ollama_chat(messages: list[dict], fmt, predict: int = MAX_PREDICT) -> 
                     if d.get("error"):
                         raise RuntimeError("the model said: " + str(d["error"])[:200])
                     text += (d.get("message") or {}).get("content", "")
+                    if len(text) - len(text.rstrip()) >= RUNAWAY_SPACES:
+                        raise RanAway("the answer turned into empty space")
                     if d.get("done"):
+                        if d.get("done_reason") == "length":
+                            raise RanAway(f"the answer ran past {body['options']['num_predict']} tokens")
                         break
         return text
 
@@ -173,7 +200,10 @@ def adapters():
         async def _generate_response(self, messages, response_model=None, max_tokens=MAX_PREDICT, model_size=None, *, model=None):
             msgs = [{"role": m.role, "content": self._clean_input(m.content)} for m in messages if m.role in ("system", "user")]
             fmt = response_model.model_json_schema() if response_model is not None else "json"
-            text = await ollama_chat(msgs, fmt, max_tokens)
+            try:
+                text = await ollama_chat(msgs, fmt, max_tokens)
+            except RanAway:
+                text = await ollama_chat(msgs, fmt, max_tokens, RETRY_TEMPERATURE)     # once; a second runaway fails this piece
             if not text.strip():
                 raise EmptyResponseError("The model gave an empty answer")
             return json.loads(self._strip_code_fences(text))
@@ -214,7 +244,9 @@ def _run(coro, timeout: float):
     try:
         return fut.result(timeout)
     except TimeoutError:
-        fut.cancel()
+        if not fut.done():                                                  # our wait ran out (not a timeout raised inside the call)
+            fut.cancel()
+            raise Slow(f"took longer than {timeout:.0f} s") from None
         raise
 
 
@@ -281,8 +313,17 @@ def _drop(e: Exception):
 
 
 def _lost(e: Exception) -> bool:
+    """The graph DATABASE went away. Not a slow call (Slow) and not the model's server (httpx: see _model_down)."""
+    if isinstance(e, (Slow, httpx.HTTPError)):
+        return False
     n = type(e).__name__
     return isinstance(e, (ConnectionError, TimeoutError)) or "Connection" in n or "Timeout" in n
+
+
+def _model_down(e: Exception) -> bool:
+    """Ollama isn't answering (restarting, crashed, loading): wait, and don't count it against the piece (audit 2026-10-23: a short
+    Ollama outage used up every waiting piece's tries)."""
+    return isinstance(e, (httpx.ConnectError, httpx.ConnectTimeout, httpx.RemoteProtocolError, httpx.ReadError))
 
 
 # ---------------------------------------------------------------- what goes in
@@ -300,9 +341,14 @@ def _db():
 
 def _when(iso: str) -> str:
     try:
-        return dt.datetime.fromisoformat(iso).astimezone(dt.timezone.utc).strftime("%B %-d, %Y at %H:%M UTC")
+        return dt.datetime.fromisoformat(iso).astimezone(dt.timezone.utc).strftime(timefmt.nopad("%B %-d, %Y at %H:%M UTC"))
     except ValueError:
         return iso
+
+
+def _bare(url: str) -> str:
+    """An address without its query string: picture addresses often carry long signed tokens that only pad the model's prompt."""
+    return (url or "").split("?", 1)[0].split("#", 1)[0]
 
 
 def _clip(s, n: int) -> str:
@@ -362,7 +408,7 @@ def items(now: dt.datetime | None = None) -> list[dict]:
                     "name": f"corner note {n['id']}", "body": body, "source": "Rosie's corner: her own note"})
     for p in pics:
         body = (f"Rosie saved a picture on {_when(p['at'])} from the page \"{_clip(p['page_title'], 200)}\" ({p['page_url']}).\n"
-                f"Picture address: {p['src_url']}\n" + (f"The page's alt text for it: {_clip(p['alt'], 300)}\n" if p["alt"] else "")
+                f"Picture address: {_bare(p['src_url'])}\n" + (f"The page's alt text for it: {_clip(p['alt'], 300)}\n" if p["alt"] else "")
                 + (f"Rosie's own description of what the picture shows: {_clip(p['look'], 700)}\n" if p["look"] else ""))
         out.append({"key": f"pic:{p['id']}", "kind": "picture", "at": p["at"], "title": p["page_title"] or p["alt"] or "picture",
                     "urls": [u for u in (p["page_url"], p["src_url"]) if u], "grp": "", "name": f"corner picture {p['id']}", "body": body,
@@ -411,6 +457,24 @@ def pending(limit: int = BATCH, now: dt.datetime | None = None) -> list[dict]:
     return out
 
 
+def backlog(now: dt.datetime | None = None, hours: float = 24) -> int:
+    """How many of the last `hours` of finds, pictures and notes aren't in the graph yet (her reading waits when too many are: corner)."""
+    now = now or corner._now()
+    since = now - dt.timedelta(hours=hours)
+    return sum(1 for it in pending(10 ** 6, now) if it["kind"] in ("find", "picture", "note") and dt.datetime.fromisoformat(it["at"]) >= since)
+
+
+def skip(its: list[dict], why: str) -> int:
+    """Leave these pieces out of the graph on purpose (owner 2026-10-21: trim an old back-fill). Undo: delete their graph_items rows."""
+    with _db() as db:
+        for it in its:
+            db.execute("INSERT INTO graph_items(key, kind, at, title, urls, grp, tries, error) VALUES(?,?,?,?,?,?,?,?) "
+                       "ON CONFLICT(key) DO UPDATE SET tries=excluded.tries, error=excluded.error WHERE done_at IS NULL",
+                       (it["key"], it["kind"], it["at"], it["title"][:300], json.dumps(it["urls"][:5]), it["grp"], MAX_TRIES, f"{SKIPPED} {why}"[:300]))
+    _counts["t"] = 0.0
+    return len(its)
+
+
 def _record(it: dict, episode: str | None = None, error: str = ""):
     with _db() as db:
         db.execute("INSERT INTO graph_items(key, kind, at, title, urls, grp) VALUES(?,?,?,?,?,?) ON CONFLICT(key) DO NOTHING",
@@ -452,12 +516,19 @@ def step(now: dt.datetime | None = None) -> int:
         t0 = time.time()
         try:
             res = _run(_graph["g"].add_episode(name=it["name"], episode_body=it["body"], source_description=it["source"],
-                                               reference_time=_utc(it["at"]), group_id=GROUP, **_text_type()), ADD_TIMEOUT_S)
+                                               reference_time=_utc(it["at"]), group_id=GROUP, previous_episode_uuids=[],
+                                               custom_extraction_instructions=EXTRACT_HINT, **_text_type()), ADD_TIMEOUT_S)
         except OwnerBusy as e:
             state["waiting"] = str(e)
             break
         except Exception as e:
+            if _model_down(e):
+                state["waiting"] = f"Waiting for the AI model: Ollama isn't answering ({type(e).__name__})."
+                break
             if _lost(e):
+                # counts as one of the piece's tries: a query that crashes FalkorDB (a segfault, 14 in the week to 2026-10-22, in bursts 5
+                # minutes apart = RETRY_S) was asked again after every restart; now such a piece is left after MAX_TRIES
+                _record(it, error=f"the graph database stopped while adding this ({type(e).__name__})")
                 _drop(e)
                 break
             state["last_error"] = f"{it['key']}: {type(e).__name__}: {_clip(e, 200)}"
@@ -476,10 +547,17 @@ def _work_loop():
     time.sleep(90)                                                          # after the start-up model warm-up
     while True:
         try:
-            step()
+            import agentboard_graph
+            agentboard_graph.step()                                         # the agent board's few posts first (agentboard_graph.py)
+        except Exception as e:
+            state["last_error"] = f"agent board: {type(e).__name__}: {_clip(e, 200)}"
+        added = 0
+        try:
+            corner.GRAPH_BACKLOG = backlog() if ready() else 0             # a graph that is off never holds her reading up
+            added = step()
         except Exception as e:                                              # never let the thread die; the page shows the last error
             state["last_error"] = f"{type(e).__name__}: {_clip(e, 200)}"
-        time.sleep(ROUND_S)
+        time.sleep(BACKLOG_ROUND_S if added >= BATCH else ROUND_S)
 
 
 def start():
@@ -516,8 +594,9 @@ def status() -> dict:
         try:
             with _db() as db:
                 done = db.execute("SELECT COUNT(*) FROM graph_items WHERE done_at IS NOT NULL AND kind != 'move'").fetchone()[0]
-                failed = db.execute(f"SELECT COUNT(*) FROM graph_items WHERE done_at IS NULL AND tries >= {MAX_TRIES}").fetchone()[0]
-            total = sum(1 for _ in items())
+                failed = db.execute(f"SELECT COUNT(*) FROM graph_items WHERE done_at IS NULL AND tries >= {MAX_TRIES} AND error NOT LIKE '{SKIPPED}%'").fetchone()[0]
+                skipped = db.execute(f"SELECT COUNT(*) FROM graph_items WHERE done_at IS NULL AND error LIKE '{SKIPPED}%' AND kind != 'move'").fetchone()[0]
+            total = sum(1 for _ in items()) - skipped                      # pieces the owner chose to leave out are not "waiting"
         except Exception:
             done = failed = total = 0
         _counts.update(t=time.time(), v=(done, failed, total))

@@ -24,6 +24,7 @@ DOMAINS = (
     "molinahealthcare.com", "labcorp.com", "questdiagnostics.com",
     # government, legal, benefits
     "ssa.gov", "irs.gov", "treasury.gov", "uscourts.gov", "healthcare.gov", "medicare.gov", "medicaid.gov",
+    "mcmcg.com", "portfoliorecovery.com", "dave.com", "brigit.com", "earnin.com", "chime.com", "credit.com", "creditkarma.com",   # audit 2026-10-20
 )
 # words and phrases (case-insensitive), each matched on word boundaries
 WORDS = (
@@ -36,7 +37,19 @@ WORDS = (
     # health and medical
     "prescription", "prescriptions", "pharmacy", "refill", "rx", "diagnosis", "lab results", "test results", "medical", "patient",
     "mychart", "insurance", "claim", "claims", "explanation of benefits", "copay", "co-pay", "deductible", "therapy", "clinic", "hospital",
-    "health plan", "medication",
+    "health plan", "medication", "meds", "pharmacist", "therapist", "psych", "psychiatrist", "psychiatry", "psychologist", "counselor",
+    "counseling", "lab work", "bloodwork", "blood test",
+    # money words a task or calendar title uses (no sender to check there)
+    "pay", "payment", "payments", "paycheck", "venmo", "zelle", "cash app",
+    # banks, lenders and pharmacies by name (their mail domains are in DOMAINS; titles have no sender)
+    "chase", "capital one", "wells fargo", "bank of america", "navy federal", "mission lane", "synchrony", "citibank", "american express",
+    "amex", "walgreens", "cvs", "rite aid",
+    # more found in the audit (2026-10-20 pass 2): legal, benefits, money trouble, health, sign-ins
+    "results", "c&p", "compensation and pension", "custody", "divorce", "restraining order", "police", "arrest", "court date", "hearing",
+    "traffic ticket", "citation", "bankruptcy", "chapter 7", "chapter 13", "days late", "late notice", "final notice", "repayment",
+    "cash advance", "advance is due", "extracash", "overdraft", "insufficient funds", "nsf", "credit bureau", "fico", "credit karma",
+    "midland credit", "portfolio recovery", "rehab", "aa meeting", "na meeting", "mental health", "adhd", "adderall", "ozempic", "biopsy",
+    "mri", "hiv", "std", "pregnancy", "planned parenthood", "endocrinologist", "betterhelp", "hims", "signed in", "logged in", "apple id",
     # government, legal and benefits
     "disability", "social security", "tax", "taxes", "tax return",
     "court", "attorney", "lawyer", "legal", "lawsuit", "summons", "subpoena", "jury", "benefits", "unemployment", "child support",
@@ -48,7 +61,8 @@ WORDS = (
 ACRONYMS = ("SSA", "IRS", "EOB", "OTP", "2FA", "DMV", "SSN", "SSDI", "SSI", "HSA", "FSA", "ACH")   # case-sensitive
 MONEY = re.compile(r"\$\s?\d")               # an amount of money in a mail line: left out (bills, invoices, balances)
 
-_WORD_RE = re.compile(r"(?<![a-z0-9])(" + "|".join(re.escape(w) for w in sorted(WORDS, key=len, reverse=True)) + r")(?![a-z0-9])", re.I)
+_WORD_RE = re.compile(r"(?<![a-z0-9])(" + "|".join(re.escape(w) for w in sorted(WORDS, key=len, reverse=True)) + r")(?:s|es)?(?![a-z0-9])", re.I)   # plurals too
+CODE_RE = re.compile(r"\b(?:code|pin)\b\D{0,15}\d{4,8}\b|\b\d{4,8}\b.{0,25}\bcode\b", re.I)    # "Your code is 123456", "482913 is your code"
 _ACR_RE = re.compile(r"(?<![A-Za-z0-9])(" + "|".join(re.escape(a) for a in ACRONYMS) + r")(?![A-Za-z0-9])")
 
 
@@ -77,6 +91,8 @@ def why(*texts, sender: str = "", money: bool = True) -> str:
     m = _ACR_RE.search(blob)
     if m:
         return f"word {m.group(1)}"
+    if CODE_RE.search(blob):
+        return "a security code"
     if money and MONEY.search(" ".join(t for t in texts if t)):
         return "an amount of money"
     return ""

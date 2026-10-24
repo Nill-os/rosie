@@ -35,3 +35,27 @@ def test_mail_cleanup_protects_starred_and_needs_a_real_query():
 
 def test_mail_cleanup_actions_never_delete_permanently():
     assert set(mailclean.ACTIONS) == {"archive", "trash", "mark_read"}
+
+
+def test_windows_credential_places_are_blocked_too(monkeypatch, tmp_path):
+    """Windows keeps browser profiles, logins and app tokens under AppData, and writes paths with backslashes (owner 2026-10-23)."""
+    monkeypatch.setattr(fsguard, "HOME", tmp_path)
+    for p in ("AppData/Local/Google/Chrome/User Data/Default/Login Data", "AppData/Roaming/Microsoft/Credentials/x", ".config/gcloud/credentials.db"):
+        with pytest.raises(fsguard.Blocked):
+            fsguard.resolve(str(tmp_path / p))
+    assert usertools.FORBIDDEN.search(r"open(r'C:\Users\her\AppData\Roaming\Mozilla\key4.db')")
+    assert usertools.FORBIDDEN.search(r"open('C:\\rosie\\secrets\\access_code')")
+
+
+def test_rosies_own_shipped_skills_stay_readable_even_under_appdata(monkeypatch, tmp_path):
+    root = tmp_path / "AppData" / "Local" / "Rosie" / "slots" / "A"
+    (root / "skills" / "cad").mkdir(parents=True)
+    (root / "skills" / "cad" / "SKILL.md").write_text("x")
+    (root / "skills" / "cad" / "api_key.json").write_text("x")
+    monkeypatch.setattr(fsguard, "HOME", tmp_path)
+    monkeypatch.setattr(fsguard, "ROOT", root)
+    assert fsguard.resolve(str(root / "skills" / "cad" / "SKILL.md")).name == "SKILL.md"
+    with pytest.raises(fsguard.Blocked):
+        fsguard.resolve(str(root / "skills" / "cad" / "api_key.json"))         # a key-like name is still blocked
+    with pytest.raises(fsguard.Blocked):
+        fsguard.resolve(str(root / "app" / "server.py"))                          # the rest of AppData stays blocked

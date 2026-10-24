@@ -5,6 +5,7 @@ import re
 import secrets
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -17,6 +18,7 @@ import actions
 import agent
 import briefs
 import chats
+import claude_plan
 import config
 import ctxsize
 import gcal
@@ -24,6 +26,7 @@ import memory
 import models
 import skills
 import tasks
+import testguard
 import workflows
 
 router = APIRouter()
@@ -276,7 +279,7 @@ def vault_write(f: FileWrite):
     if len(f.content) > MAX_FILE:
         return err("Too large", 413)
     if p.exists():  # keep the previous version so a bad edit is recoverable
-        bak = ROOT / "data" / "vault_bak"
+        bak = testguard.check(ROOT / "data" / "vault_bak")
         bak.mkdir(parents=True, exist_ok=True)
         (bak / (f.path.replace("/", "__") + ".bak")).write_text(p.read_text(errors="replace"))
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -352,8 +355,17 @@ class Settings(BaseModel):
     write_target: str | None = None
     brief_time: str | None = None
     brain: str | None = None
+    claude_planning: bool | None = None
+    orchestrator: bool | None = None
     owner_name: str | None = None
     owner_notes: str | None = None
+    hidden_pages: list[str] | None = None
+
+
+def pages_off() -> list[str]:
+    """Pages this PC can't run (owner 2026-10-23, the Windows copy): the Agent Deck, live terminals and the meeting recorder read Linux's
+    own tools, and Agent Zero runs in Linux Docker. They leave the menu instead of failing."""
+    return [] if sys.platform.startswith("linux") else ["deck", "terminal", "meetings", "agentzero"]
 
 
 @router.get("/api/spaces")
@@ -376,6 +388,25 @@ def spaces_put(s: Spaces):
     return {"spaces": clean}
 
 
+ORCH = Path.home() / ".claude" / "skills" / "orchestrate" / "state.json"   # Claude Code's orchestrator mode (the orchestrate skill, `delegate on|off`)
+
+
+def orchestrator(on: bool | None = None) -> bool | None:
+    """Read, or turn on or off, Claude Code's orchestrator mode: Claude plans and checks, Rosie and Agent Zero do the work.
+    None when the orchestrate skill isn't installed on this PC (the switch is hidden then)."""
+    if not ORCH.parent.exists():
+        return None
+    try:
+        st = json.loads(ORCH.read_text())
+    except (OSError, ValueError):
+        st = {}
+    if on is not None:
+        import atomic
+        st.update(on=on, changed=time.strftime("%Y-%m-%d %H:%M"))
+        atomic.write_text(ORCH, json.dumps(st, indent=1))
+    return bool(st.get("on"))
+
+
 @router.post("/api/settings")
 def settings_set(s: Settings):
     cfg = config.load()
@@ -391,8 +422,16 @@ def settings_set(s: Settings):
         if s.brain not in ("rosie", "agent_zero"):
             return err("brain must be rosie or agent_zero")
         cfg["brain"] = s.brain
+    if s.claude_planning is not None:
+        cfg["claude_planning"] = bool(s.claude_planning)
+    if s.orchestrator is not None and orchestrator(bool(s.orchestrator)) is None:
+        return err("The orchestrate skill for Claude Code isn't installed on this PC.")
     if s.owner_name is not None:
         cfg["owner_name"] = s.owner_name.strip()[:40]
+    if s.hidden_pages is not None:
+        if len(s.hidden_pages) > 40 or not all(isinstance(k, str) and re.fullmatch(r"[a-z0-9]{1,20}", k) for k in s.hidden_pages):
+            return err("hidden_pages must be a list of page names")
+        cfg["hidden_pages"] = [k for k in dict.fromkeys(s.hidden_pages) if k != "settings"]     # Settings always stays reachable
     if s.owner_notes is not None:
         if len(s.owner_notes) > 600:
             return err("Keep the notes under 600 characters")
@@ -401,8 +440,8 @@ def settings_set(s: Settings):
     if s.owner_notes is not None:
         import a0
         a0.write_include()                                     # Agent Zero's copy of the rules picks up the notes
-    return {"write_target": cfg["write_target"], "brief_time": cfg["brief_time"], "brain": cfg["brain"],
-            "owner_name": cfg.get("owner_name", ""), "owner_notes": cfg.get("owner_notes", "")}
+    return {"write_target": cfg["write_target"], "brief_time": cfg["brief_time"], "brain": cfg["brain"], "planning": claude_plan.status(), "orchestrator": orchestrator(),
+            "owner_name": cfg.get("owner_name", ""), "owner_notes": cfg.get("owner_notes", ""), "hidden_pages": cfg.get("hidden_pages") or []}
 
 
 @router.get("/api/ctx")
@@ -430,7 +469,8 @@ def models_get():
         rows = models.installed()
     except Exception as e:
         return err(f"Couldn't list the models from Ollama ({type(e).__name__}). Is Ollama running?", 503)
-    return {"current": models.current(), "default": models.DEFAULT, "models": rows, "problem": models.last_problem}
+    import model_scout
+    return {"current": models.current(), "default": models.DEFAULT, "models": rows, "problem": models.last_problem, "scout": model_scout.status()}
 
 
 @router.post("/api/models")
@@ -439,6 +479,89 @@ def models_set(p: ModelPick):
         return models.switch(p.model)
     except ValueError as e:
         return err(str(e))
+
+
+class SecurityPatch(BaseModel):
+    target: str
+
+
+@router.get("/api/security")
+def security_get():
+    import security_watch
+    return security_watch.status()
+
+
+@router.post("/api/security/run")
+def security_run():
+    import security_watch
+    return {"started": security_watch.start()}
+
+
+class ServerEntry(BaseModel):
+    name: str
+    address: str
+    port: int | None = None
+    note: str = ""
+    url: str = ""
+
+
+class ServerLabel(BaseModel):
+    ip: str
+    port: int
+    label: str = ""
+
+
+@router.get("/api/servers")
+def servers_get():
+    import servers
+    return servers.listing()
+
+
+@router.post("/api/servers/refresh")
+def servers_refresh():
+    import servers
+    if not servers.security_watch._ssh_cmd():
+        return err("Set up your home server first (Settings > Security > Home server).")
+    return {"started": servers.refresh()}
+
+
+@router.post("/api/servers")
+def servers_add(p: ServerEntry):
+    import servers
+    r = servers.add(p.name, p.address, p.port, p.note, p.url)
+    return r if r["ok"] else err(r["message"])
+
+
+@router.delete("/api/servers/{entry_id}")
+def servers_remove(entry_id: str):
+    import servers
+    r = servers.remove(entry_id)
+    return r if r["ok"] else err(r["message"])
+
+
+@router.post("/api/servers/label")
+def servers_label(p: ServerLabel):
+    import servers
+    return servers.rename(p.ip, p.port, p.label)
+
+
+class SecurityServer(BaseModel):
+    ssh: str = ""
+    key: str = ""
+
+
+@router.post("/api/security/server")
+def security_server(p: SecurityServer):
+    import security_watch
+    r = security_watch.set_server(p.ssh, p.key)
+    return r if r["ok"] else err(r["message"])
+
+
+@router.post("/api/security/patch")
+def security_patch(p: SecurityPatch):
+    import security_watch
+    r = security_watch.patch(p.target)
+    return r if r["ok"] else err(r["message"])
 
 
 _cache: dict[str, tuple[float, object]] = {}
@@ -458,7 +581,7 @@ def _cached(key, ttl, fn):
 
 def _model_info():
     r = httpx.get("http://127.0.0.1:11434/api/ps", timeout=3).json()
-    ms = r.get("models", [])
+    ms = [m for m in r.get("models", []) if agent.MODEL in (m.get("name"), m.get("model"))]   # her chat model, not the embedder or vision model
     if not ms:
         return {"model": agent.MODEL, "loaded": False, "where": "not loaded (loads on first message)"}
     m = ms[0]
@@ -489,19 +612,18 @@ def status():
         google = _cached("google", 60, _google)
     except gcal.LoginExpired as e:
         google = {"error": str(e)}
-    free = shutil.disk_usage("/home").free // 2**30
+    free = shutil.disk_usage(Path.home()).free // 2**30
     return {"model": _cached("model", 10, _model_info), "gpu": _cached("gpu", 15, _gpu), "google": google,
             "tailscale": _cached("ts", 60, _tailscale), "disk_free_gb": free, "write_target": cfg["write_target"],
-            "brief_time": cfg["brief_time"], "spaces": cfg["spaces"], "brain": cfg["brain"],
-            "owner_name": cfg.get("owner_name", ""), "owner_notes": cfg.get("owner_notes", "")}
+            "brief_time": cfg["brief_time"], "spaces": cfg["spaces"], "brain": cfg["brain"], "planning": claude_plan.status(), "orchestrator": orchestrator(),
+            "owner_name": cfg.get("owner_name", ""), "owner_notes": cfg.get("owner_notes", ""), "hidden_pages": cfg.get("hidden_pages") or []}
 
 
 @router.post("/api/signout-all")
 def signout_all():
     """Rotate the session key: every signed-in device (including this one) must enter the access code again."""
-    p = ROOT / "secrets" / "session_key"
-    p.write_text(secrets.token_hex(32))
-    p.chmod(0o600)
+    import atomic
+    atomic.write_text(ROOT / "secrets" / "session_key", secrets.token_hex(32), 0o600)   # never empty or half-written, private from the start
     return {"ok": True}
 
 
@@ -551,7 +673,8 @@ class NewReminder(BaseModel):
 @router.get("/api/badges")
 def badges():
     import proposals as _pr
-    return {"overdue": len(tasks.overdue()), "inbox": inbox.unread_count(), "proposals": _pr.count_pending()}
+    return {"overdue": len(tasks.overdue()), "inbox": inbox.unread_count(), "proposals": _pr.count_pending(),
+            "pages_off": pages_off(), "pages_hidden": config.load().get("hidden_pages") or []}
 
 
 @router.get("/api/inbox")
@@ -598,7 +721,7 @@ def reminder_cancel(rid: int):
     return inbox.cancel_reminder(rid)
 
 
-AUTO_BOOL = ("brief_on", "remind_events", "nudge_overdue", "desktop_notify", "mail_on", "mail_flag", "mail_find_tasks", "mail_digest", "taint_guard", "agents_notify", "weekly_review_on", "dictation_on", "dictation_cleanup", "meeting_keep_audio", "ai_on", "ai_orb_on", "ai_speak", "ai_use_selection")
+AUTO_BOOL = ("model_scout", "security_watch", "security_autopatch", "brief_on", "remind_events", "nudge_overdue", "desktop_notify", "mail_on", "mail_flag", "mail_find_tasks", "mail_digest", "taint_guard", "agents_notify", "weekly_review_on", "dictation_on", "dictation_cleanup", "meeting_keep_audio", "ai_on", "ai_orb_on", "ai_speak", "ai_use_selection")
 AUTO_TIME = ("brief_time", "nudge_overdue_time", "wrapup_time", "quiet_from", "quiet_to", "weekly_review_time")
 AUTO_MODE = {"scratch_mode": ("off", "nudge", "auto"), "wrapup_mode": ("off", "nudge", "auto"), "dictation_hotkey": ("Control_R", "Alt_R", "Super_R", "Pause", "Scroll_Lock", "Menu", "F8", "F9", "F10", "Shift_L+Super_L+F23", "Shift_L+Super_L+keycode:201", "Shift_L+Super_L+F9"),
              "ai_hotkey": ("Alt_R", "Control_R", "Super_R", "Pause", "Scroll_Lock", "Menu", "F8", "F9", "F10", "Shift_L+Super_L+keycode:201"),

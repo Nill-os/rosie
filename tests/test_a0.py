@@ -66,10 +66,10 @@ def test_the_owners_own_notes_go_into_both_prompts_only_when_set(tmp_path, monke
     import server
     assert "ABOUT THE USER" not in agent.system_prompt() and "About the owner" not in a0.include_text()
     (tmp_path / "secrets").mkdir(exist_ok=True)
-    (tmp_path / "secrets" / "session_key").write_text("testkey")
+    (tmp_path / "secrets" / "session_key").write_text("testkey-0123456789abcdef0123456789abcdef")
     monkeypatch.setattr(server, "SECRETS", tmp_path / "secrets")
     c = TestClient(server.app)
-    c.cookies.set("assistant_session", hmac.new(b"testkey", b"assistant-ok", hashlib.sha256).hexdigest())
+    c.cookies.set("assistant_session", hmac.new(b"testkey-0123456789abcdef0123456789abcdef", b"assistant-ok", hashlib.sha256).hexdigest())
     r = c.post("/api/settings", json={"owner_name": "  Sam ", "owner_notes": "Short answers, please.\nOne step at a time."})
     assert r.status_code == 200 and r.json()["owner_name"] == "Sam"
     assert "ABOUT THE USER (their own words): Short answers, please. One step at a time.\n" in agent.system_prompt()
@@ -91,7 +91,7 @@ def test_a_turn_goes_to_agent_zero_with_one_agent_zero_chat_per_rosie_chat(a0z):
     path, body, key = calls[0]
     assert path == "/api/api_message" and key == "k" and "context_id" not in body and body["message"].endswith("hi")
     agent.chat(new, "again", chat_id=7)
-    assert calls[1][1]["context_id"] == "c1" and calls[1][1]["message"] == "again"      # same chat, no recap needed
+    assert calls[1][1]["context_id"] == "c1" and calls[1][1]["message"].split("\n\n", 1)[1] == "again"   # same chat, no recap
 
 
 def test_a_forgotten_agent_zero_chat_restarts_with_a_recap(a0z):
@@ -138,6 +138,28 @@ def test_a_slow_big_task_is_not_answered_twice(a0z):
     assert reply.startswith("Agent Zero is still working")
 
 
+def test_a_reprompt_after_a_slow_task_continues_the_same_agent_zero_chat(a0z):
+    calls, replies = a0z                                      # owner 2026-10-22: "why does it start a new chat ... i want it in the same chat"
+
+    def slow():
+        token = calls[-1][1]["message"].split("[Rosie turn ", 1)[1].split("]", 1)[0]
+        a0.TURNS.mkdir(parents=True, exist_ok=True)
+        (a0.TURNS / token).write_text("ctxA\n")              # what Agent Zero's hook writes while it works
+        raise httpx.ReadTimeout("slow")
+    replies.append(slow)
+    agent.chat([], "move my photos to immich", chat_id=11)
+    agent.chat([], "how is it going?", chat_id=11)
+    assert "context_id" not in calls[0][1] and calls[1][1]["context_id"] == "ctxA"
+    assert calls[1][1]["message"].startswith("[Rosie turn ") and calls[1][1]["message"].endswith("how is it going?")
+    assert calls[0][1]["message"].split("\n\n", 1)[1].endswith("move my photos to immich")   # the marker is its own paragraph
+
+
+def test_a_one_off_spoken_turn_is_not_marked(a0z):
+    calls, _ = a0z
+    a0.chat([], "what time is it", voice=True)
+    assert "[Rosie turn" not in calls[0][1]["message"]
+
+
 def test_a_held_action_comes_back_as_rosies_confirm_card(a0z, monkeypatch):
     _, replies = a0z
     fake_tool(monkeypatch, "run_command", lambda **k: pytest.fail("ran without the owner's Yes"))
@@ -151,9 +173,16 @@ def test_a_failed_turn_leaves_no_card_behind(a0z, monkeypatch):
     fake_tool(monkeypatch, "run_command", lambda **k: pytest.fail("ran without the owner's Yes"))
     before = set(actions._pending)
     replies.append(lambda: (a0_mcp.run("run_command", {"command": "ls"}), R(500, {"error": "boom"}))[1])
+    reply, pending, _ = a0.chat([], "list files", chat_id=5)              # it had already called a tool: Rosie must not redo the job
+    assert "stopped partway" in reply and "run_command" in reply and pending == []
+    assert set(actions._pending) == before
+
+
+def test_a_failed_turn_with_no_tools_falls_back(a0z):
+    _, replies = a0z
+    replies.append(lambda: R(500, {"error": "boom"}))
     with pytest.raises(a0.Unavailable):
         a0.chat([], "list files", chat_id=5)
-    assert set(actions._pending) == before
 
 
 # --- Rosie's tools for Agent Zero ----------------------------------------------------------------
@@ -258,10 +287,10 @@ def test_the_mcp_listener_needs_the_token():
 def test_settings_switch_the_brain(tmp_path, monkeypatch):
     import server
     (tmp_path / "secrets").mkdir(exist_ok=True)
-    (tmp_path / "secrets" / "session_key").write_text("testkey")
+    (tmp_path / "secrets" / "session_key").write_text("testkey-0123456789abcdef0123456789abcdef")
     monkeypatch.setattr(server, "SECRETS", tmp_path / "secrets")
     c = TestClient(server.app)
-    c.cookies.set("assistant_session", hmac.new(b"testkey", b"assistant-ok", hashlib.sha256).hexdigest())
+    c.cookies.set("assistant_session", hmac.new(b"testkey-0123456789abcdef0123456789abcdef", b"assistant-ok", hashlib.sha256).hexdigest())
     assert c.post("/api/settings", json={"brain": "agent_zero"}).json()["brain"] == "agent_zero" and a0.enabled()
     assert c.post("/api/settings", json={"brain": "skynet"}).status_code >= 400
     assert c.post("/api/settings", json={"brain": "rosie"}).json()["brain"] == "rosie" and not a0.enabled()

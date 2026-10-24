@@ -24,9 +24,12 @@ def remember(content: str, kind: str = "note", title: str = ""):
         nid = cur.lastrowid
     try:                                                     # her mind gets it too, as it is (no model call)
         import mind
-        mind.remember_now(f"{title.strip()}: {content.strip()}" if title.strip() else content.strip(), source="remember")
-    except Exception:
-        pass
+        mind.remember_now(f"{title.strip()}: {content.strip()}" if title.strip() else content.strip(), source=f"remember:{nid}")
+    except Exception:                                         # her model or embedder is down: she reads it later (forget_note knows this ref)
+        try:
+            mind.queue(f"The owner asked Rosie to remember ({kind}): {title.strip()} {content.strip()}", "remember", f"backfill:note:{nid}")
+        except Exception:
+            pass
     return {"status": "saved", "id": nid, "kind": kind}
 
 
@@ -42,7 +45,14 @@ def recall(query: str = "", kind: str = ""):
 
 def forget(note_id: int):
     with _db() as c:
+        r = c.execute("SELECT title, content FROM notes WHERE id=?", (note_id,)).fetchone()
         c.execute("DELETE FROM notes WHERE id=?", (note_id,))
+    try:                                                     # her mind's copy of it goes too (audit 2026-10-20)
+        import mind
+        if r:
+            mind.forget_note(note_id, f"{r['title'].strip()}: {r['content'].strip()}" if (r["title"] or "").strip() else (r["content"] or "").strip())
+    except Exception:
+        pass
     return {"status": "forgotten", "id": note_id}
 
 

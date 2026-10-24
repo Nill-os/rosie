@@ -21,18 +21,21 @@ from mcp.server.mcpserver import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 
 import a0
+import a0_host
 import actions
 import agent
 import testguard
 import workflows
 
-HOST, PORT = "172.17.0.1", 8766                                # docker0: only containers on this PC can reach it
+BIND_RETRY_S = 30
+HOST, PORT = a0_host.MCP_BIND, 8766                              # Linux: docker0, only containers reach it; Docker Desktop: this PC's loopback
 AUDIT = Path(__file__).resolve().parent.parent / "data" / "mcp_audit.log"
 LIMIT_PER_MIN = 120
 MAX_RESULT = 20000                                             # characters returned to Agent Zero per call
 HIDDEN = {"phone_screen_tap"}                                  # runs only after the owner confirms a risky tap; never offered
 RISKY = ((agent.GUARDED - {"lessons", "remember"}) | agent.CHANGE_TOOLS | {"mail_cleanup", "mail_undo", "selfdev_prepare", "selfdev_commit", "selfdev_stage"})
-SELF_CARD = agent.OWN_CARD | {"phone_reply_notification", "delete_event", "shift_day", "mail_cleanup", "selfdev_switch", "selfdev_rollback", "terminal_send"}   # these always hold themselves with a fuller card
+ASK_FIRST = {"move_event", "shift_day"}                        # always held, with their own card (title, times, overlaps, every event moved)
+SELF_CARD = agent.OWN_CARD | ASK_FIRST | {"phone_reply_notification", "delete_event", "mail_cleanup", "selfdev_switch", "selfdev_rollback"}   # not terminal_send or shift_day: those held only sometimes (audit 2026-10-20)   # these always hold themselves with a fuller card
 DATE_ARGS = ("day", "date")                                  # these tools want YYYY-MM-DD; small models send "today" or "friday"
 _calls: collections.deque = collections.deque()
 
@@ -112,14 +115,30 @@ def run(name: str, args) -> str:
         return json.dumps({"error": "Too many Rosie tool calls this minute. Wait a moment."})
     _audit(name, args)
     a0.note_call(name)
+    if name in ASK_FIRST:
+        args = {**args, "ask_first": True}
+    if name == "remember" and args.get("kind") in ("profile", "food"):   # what Agent Zero saves never becomes a standing rule in Rosie's prompt
+        args = {**args, "kind": "note"}
+    if name == "lessons" and args.get("action") == "add":     # a lesson Agent Zero writes is not the owner's rule (it may come from a web page)
+        import lessons
+        return json.dumps(lessons.add(str(args.get("trigger", "")), str(args.get("lesson", "")), source="agent-zero"))
     if name in RISKY and name not in SELF_CARD:
         result = actions.queue_tool(name, args, agent.describe_call(name, args))
     else:
-        result = agent.guard(name, args, a0.tainted()) or _execute(name, args)
+        import phone
+        phone._here.ask = True                                 # Agent Zero reads the web with its own tools, which Rosie can't see:
+        try:                                                   # its texts and calls always wait for a tap (audit 2026-10-20)
+            held = agent.guard(name, args, True) if name in agent.HOLD_WHEN_TAINTED else None   # and reading the owner's files waits for a Yes
+            result = held or agent.guard(name, args, a0.tainted()) or _execute(name, args)
+        finally:
+            phone._here.ask = False
     if isinstance(result, dict) and result.get("status") == "needs_confirmation":
         if not a0.note_pending(result):                        # no Rosie turn to show the card in: it could never be confirmed
             actions.cancel(result["token"])
-            return json.dumps({"status": "not_done", "message": "This needs the owner's Yes, which only works when they ask through Rosie. Tell them to ask Rosie for it."})
+            own = (" To run a command, use your own terminal (code_execution_tool) instead: the owner's files are at /host/home there. "
+                   "Calling this again comes back not_done too.") if name in ("run_command", "term_run") else ""
+            return json.dumps({"status": "not_done", "message": "This needs the owner's Yes, which only works when they ask through Rosie. "
+                               "Tell them to ask Rosie for it." + own})
         return json.dumps({"status": "waiting_for_owner", "message": f"NOT done yet: '{result['summary']}' is waiting for the owner's Yes in Rosie. "
                            "Tell them in one sentence what will happen once they tap Yes. Never say it is done."})
     import mind
@@ -137,7 +156,7 @@ server = MCPServer("rosie", instructions=("Rosie's own tools: the owner's calend
 
 
 async def tools(group: str) -> str:
-    """List one group's Rosie tools with their exact arguments. Groups: core, calendar, mail, phone, pc, term, projects, notes, corner, web, build, selfdev, playbooks."""
+    """List one group's Rosie tools with their exact arguments. Groups: core, calendar, mail, phone, pc, term, projects, notes, corner, web, build, selfdev, board, plan, playbooks."""
     return tool_help(group)
 
 
@@ -161,16 +180,101 @@ class _Bearer:
             await send({"type": "http.response.start", "status": 401, "headers": [(b"content-type", b"text/plain")]})
             await send({"type": "http.response.body", "body": b"unauthorized"})
             return
+        if scope["type"] == "http" and scope.get("path") in LOOP_ROUTES and scope.get("method") == "POST":
+            await _loop_route(LOOP_ROUTES[scope["path"]], receive, send)
+            return
         await self.app(scope, receive, send)
+
+
+# --- Agent Zero's loop with Claude (owner 2026-10-21: Agent Zero takes every task, Claude plans, takes the hard part and checks after,
+# until it is done). Its hook (app/agent_zero_ext) calls these plain routes; they are not Rosie tools, so they never mark a turn as
+# outside text. Each answers {"skip": why} when neither Claude nor Rosie's own model could do it.
+def check(req: dict) -> dict:
+    """A finished answer checked against the request and the real tool output: {"ok", "problems", "fix", "by", "asks_owner"}, plus
+    "team": what the owner's other AIs know about each fact the answer asks the owner for (owner 2026-10-21: "ask other ais")."""
+    import claude_plan
+    request = str(req.get("request", ""))
+    v = claude_plan.verify(request, str(req.get("answer", "")), str(req.get("evidence", "")))
+    if not v:
+        return {"skip": claude_plan.why_not() + " Rosie's own check could not run either."}
+    if v.get("asks_owner") and not req.get("asked"):
+        t = claude_plan.ask_team(v["asks_owner"], request)
+        if t:
+            v["team"] = t["answers"]
+    return v
+
+
+def plan(req: dict) -> dict:
+    """The plan for a many-step task, to follow now: {"plan", "by"}."""
+    import claude_plan
+    return claude_plan.plan_for_agent(str(req.get("request", "")), str(req.get("found", ""))) or {"skip": claude_plan.why_not()}
+
+
+def solve(req: dict) -> dict:
+    """The hard part done by Claude, for Agent Zero to carry out: {"solution", "by"}."""
+    import claude_plan
+    s = claude_plan.solve(str(req.get("request", "")), str(req.get("found", "")), str(req.get("stuck_on", "")))
+    return s or {"skip": claude_plan.why_not()}
+
+
+def write(req: dict) -> dict:
+    """The text of a writing job, written by Claude: {"text", "path", "by"}."""
+    import claude_plan
+    w = claude_plan.write(str(req.get("request", "")), str(req.get("material", "")), str(req.get("draft", "")), str(req.get("problems", "")))
+    return w or {"skip": claude_plan.why_not()}
+
+
+LOOP_ROUTES = {"/check": check, "/plan": plan, "/solve": solve, "/write": write}
+
+
+async def _loop_route(fn, receive, send):
+    body = b""
+    while True:
+        msg = await receive()
+        body += msg.get("body", b"")
+        if not msg.get("more_body") or len(body) > 200_000:
+            break
+    try:
+        req = json.loads(body or b"{}")
+    except ValueError:
+        req = {}
+    out = await anyio.to_thread.run_sync(fn, req if isinstance(req, dict) else {})
+    await send({"type": "http.response.start", "status": 200, "headers": [(b"content-type", b"application/json")]})
+    await send({"type": "http.response.body", "body": json.dumps(out).encode()})
 
 
 def start():
     """Serve on the Docker bridge in a background thread. Skipped in tests and the update check's sandbox."""
     if testguard.active() or os.environ.get("ROSIE_SANDBOX"):
         return
+    try:                                                       # its rules and the Claude check, also for chats in Agent Zero's own
+        a0.write_include()                                     # window (Rosie's turns rewrite them too)
+    except Exception:
+        a0.install_extensions()
     import uvicorn
     security = TransportSecuritySettings(allowed_hosts=[f"{HOST}:{PORT}", f"host.docker.internal:{PORT}"], allowed_origins=[])
-    app = _Bearer(server.streamable_http_app(transport_security=security, host=HOST, stateless_http=True, json_response=True),   # no sessions: a Rosie
-                  a0.keys()["mcp_token"])                                                                                   # restart never strands Agent Zero
-    srv = uvicorn.Server(uvicorn.Config(app, host=HOST, port=PORT, log_level="warning"))
-    threading.Thread(target=srv.run, name="a0-mcp", daemon=True).start()
+
+    def make_app():                                # a new one each try: its session manager can only run once (audit pass 2)
+        return _Bearer(server.streamable_http_app(transport_security=security, host=HOST, stateless_http=True, json_response=True),  # no sessions:
+                       a0.keys()["mcp_token"])                                                                  # a Rosie restart never strands Agent Zero
+
+    threading.Thread(target=_serve, args=(make_app, HOST, PORT), name="a0-mcp", daemon=True).start()
+
+
+def _serve(make_app, host, port, retry_s=BIND_RETRY_S, on_server=None):
+    """docker0 (172.17.0.1) may not exist yet when Rosie starts with the PC (assistant.service and docker start together): uvicorn then
+    exits its thread with SystemExit and Agent Zero lost Rosie's tools until a restart (audit 2026-10-23). So: try again, each time with
+    a fresh app (its MCP session manager runs only once)."""
+    import uvicorn
+    while True:
+        srv = uvicorn.Server(uvicorn.Config(make_app(), host=host, port=port, log_level="warning", loop="asyncio"))   # little traffic:
+        if on_server:                                                      # asyncio's own loop is plenty (and the tests' guard allows it)
+            on_server(srv)
+        try:
+            srv.run()
+        except (SystemExit, Exception) as e:                               # any failed start is tried again; the thread never dies
+            if not isinstance(e, SystemExit):
+                print(f"a0-mcp: {type(e).__name__}: {e}; trying again in {retry_s} s", flush=True)
+        if srv.should_exit:                                                # a real shutdown, not a failed start
+            return
+        time.sleep(retry_s)

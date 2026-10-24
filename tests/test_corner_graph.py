@@ -57,7 +57,7 @@ def fresh(monkeypatch, tmp_path):
     monkeypatch.setattr(corner, "_paper", {"t": 0.0, "w": ("06:15", "06:45")})
     monkeypatch.setattr(corner, "_activity", {"last": time.time() - 3600, "in_flight": 0})
     monkeypatch.setattr(corner, "_busy_probe", None)
-    monkeypatch.setattr(corner.os, "getloadavg", lambda: (0.0, 0.0, 0.0))
+    monkeypatch.setattr(corner.os, "getloadavg", lambda: (0.0, 0.0, 0.0), raising=False)
     monkeypatch.setattr(cg, "state", {"on": False, "why": "", "checked": 0.0, "waiting": "", "doing": "", "added": 0, "last_add": None,
                                       "last_error": "", "secs_per": None})
     monkeypatch.setattr(cg, "_graph", {"g": None})
@@ -81,10 +81,10 @@ def graph(monkeypatch):
 def client(tmp_path, monkeypatch):
     import server
     (tmp_path / "secrets").mkdir(exist_ok=True)
-    (tmp_path / "secrets" / "session_key").write_text("testkey")
+    (tmp_path / "secrets" / "session_key").write_text("testkey-0123456789abcdef0123456789abcdef")
     monkeypatch.setattr(server, "SECRETS", tmp_path / "secrets")
     c = TestClient(server.app)
-    c.cookies.set("assistant_session", hmac.new(b"testkey", b"assistant-ok", hashlib.sha256).hexdigest())
+    c.cookies.set("assistant_session", hmac.new(b"testkey-0123456789abcdef0123456789abcdef", b"assistant-ok", hashlib.sha256).hexdigest())
     return c
 
 
@@ -185,6 +185,19 @@ def test_a_failing_piece_is_tried_three_times_then_left(graph):
     assert cg.status()["failed"] > 0 and "bad JSON" in cg.state["last_error"]
 
 
+
+def test_skipped_pieces_are_left_out_and_not_counted_as_waiting_or_failed(graph):
+    _seed()
+    old = [it for it in cg.pending(limit=100) if it["kind"] == "find"]
+    before = cg.status()["total"]
+    assert cg.skip(old, "old find, the owner trimmed the backlog") == len(old) > 0
+    assert not any(it["kind"] == "find" for it in cg.pending(limit=100))
+    st = cg.status()
+    assert st["total"] == before - len(old) and st["failed"] == 0
+    _fill()
+    st = cg.status()
+    assert st["done"] == st["total"] and cg.pending() == []
+
 # ---------------------------------------------------------------- 2. only when the GPU is free
 @pytest.mark.parametrize("case, why", [
     ("owner", "Waiting while you use Rosie."),
@@ -210,7 +223,7 @@ def test_it_only_adds_when_the_gpu_is_free(graph, monkeypatch, case, why):
     elif case == "job":
         monkeypatch.setattr(corner, "_busy_probe", lambda now: "A scheduled job is running.")
     elif case == "load":
-        monkeypatch.setattr(corner.os, "getloadavg", lambda: (999.0, 0, 0))
+        monkeypatch.setattr(corner.os, "getloadavg", lambda: (999.0, 0, 0), raising=False)
     assert cg.step() == 0 and graph.added == []
     assert cg.state["waiting"] == why
     assert why in cg.status()["line"]
@@ -262,6 +275,55 @@ def test_model_calls_use_her_model_one_at_a_time_and_stop_when_the_owner_comes(m
     with pytest.raises(cg.OwnerBusy):
         asyncio.run(cg.ollama_chat([{"role": "user", "content": "x"}], schema))
     assert calls == []
+
+
+def test_a_runaway_answer_is_cut_short_and_asked_once_more_a_little_warmer(monkeypatch):
+    pytest.importorskip("graphiti_core")
+    from graphiti_core.prompts.models import Message
+    from pydantic import BaseModel
+
+    class Out(BaseModel):
+        names: list[str]
+    temps, answers = [], []
+
+    def handler(request):
+        temps.append(json.loads(request.content)["options"]["temperature"])
+        return httpx.Response(200, text=answers.pop(0))
+    monkeypatch.setattr(cg, "_ollama_transport", httpx.MockTransport(handler))
+    llm = cg.adapters().OllamaLLM()
+    ask = lambda: asyncio.run(llm.generate_response([Message(role="system", content="s"), Message(role="user", content="u")], response_model=Out))
+    blank = '{"names": ["Meshtastic",' + " " * 60
+    answers[:] = [_stream(blank, " " * 60, '"never read"]}'), _stream('{"names": ["Meshtastic"]}')]     # empty space: stopped at once
+    assert ask() == {"names": ["Meshtastic"]} and temps == [0.0, cg.RETRY_TEMPERATURE]
+    long = "\n".join(json.dumps({"message": {"content": c}, "done": False}) for c in ('{"names": ["a", ', '"b", ')) + "\n"
+    long += json.dumps({"message": {"content": ""}, "done": True, "done_reason": "length"}) + "\n"
+    temps.clear()
+    answers[:] = [long, long, _stream('{"names": []}')]                     # cut off at the cap twice: this piece fails, no 4 retries
+    with pytest.raises(cg.RanAway):
+        ask()
+    assert temps == [0.0, cg.RETRY_TEMPERATURE] and len(answers) == 1
+
+
+def test_each_piece_stands_alone_and_rosie_is_not_extracted(graph):
+    _seed()
+    cg.step()
+    a = graph.added[0]
+    assert a["previous_episode_uuids"] == [] and "Do not extract Rosie" in a["custom_extraction_instructions"]
+
+
+def test_backlog_counts_the_last_days_pieces_not_in_yet(graph):
+    _seed()
+    before = cg.backlog()
+    waiting = [it for it in cg.pending(10 ** 6) if it["kind"] in ("find", "picture", "note")]
+    assert 0 < before <= len(waiting)
+    assert cg.backlog(NOW + dt.timedelta(days=3)) == 0                       # all older than a day by then
+    cg.step()
+    assert cg.backlog() < before
+
+
+def test_picture_addresses_lose_their_query_strings():
+    assert cg._bare("https://cdn.example/a/p.png?X-Amz-Signature=abc&x=1#top") == "https://cdn.example/a/p.png"
+    assert cg._bare("https://cdn.example/p.png") == "https://cdn.example/p.png" and cg._bare("") == ""
 
 
 def test_embeddings_run_on_the_cpu(monkeypatch):
@@ -330,13 +392,19 @@ def test_a_database_that_is_down_turns_it_off_and_is_retried_later(monkeypatch, 
     assert cg.ready() is True and cg.status()["on"] is True
 
 
-def test_a_database_lost_mid_way_turns_it_off_without_failing_the_piece(graph):
+def test_a_database_lost_mid_way_turns_it_off_and_a_piece_that_keeps_crashing_it_is_left(graph):
     _seed()
+    first = cg.pending(1)[0]["key"]
     graph.fail = ConnectionRefusedError("gone")
-    assert cg.step() == 0 and cg.state["on"] is False and "not answering" in cg.state["why"]
+    for n in range(cg.MAX_TRIES):
+        cg.state["checked"] -= cg.RETRY_S + 1
+        assert cg.step() == 0 and cg.state["on"] is False and "not answering" in cg.state["why"]
+        if n < cg.MAX_TRIES - 1:
+            assert cg.pending(1)[0]["key"] == first                         # the same piece is tried again after a restart
+    assert cg.pending(1)[0]["key"] != first                                 # three database crashes on it: it is left
     graph.fail = None
     cg.state["checked"] -= cg.RETRY_S + 1
-    assert cg.step() == cg.BATCH                                             # nothing was counted as a failed try
+    assert cg.step() == cg.BATCH                                             # the rest go in
 
 
 def test_search_never_waits_for_a_hanging_connect(monkeypatch):
@@ -549,3 +617,42 @@ def test_recall_skips_commands_and_everyday_words():
     assert cg.recall("Text Mom that I'll be there at six") == ""                             # an action, not a question
     assert cg.recall("What did Mom text me?") == ""                                         # only everyday words in common
     assert cg.recall("Add a task about the gpu temps page") == ""
+
+
+def test_a_slow_call_is_skipped_but_never_turns_the_graph_off(graph, monkeypatch):
+    async def slow():
+        await asyncio.sleep(2)
+    with pytest.raises(cg.Slow):
+        cg._run(slow(), 0.2)
+    assert not cg._lost(cg.Slow("x")) and not cg._lost(httpx.ReadTimeout("x")) and cg._lost(ConnectionRefusedError())
+    _seed()
+    cg.ready()
+
+    async def search(*a, **k):
+        await asyncio.sleep(2)
+    monkeypatch.setattr(graph, "search", search)
+    monkeypatch.setattr(cg, "RECALL_TIMEOUT_S", 0.2)
+    cg.recall("LoRa antennas for meshtastic nodes")                         # a slow recall during a chat
+    assert cg._graph["g"] is graph and cg.state["on"] is True
+
+
+def test_an_ollama_outage_waits_and_charges_no_tries(graph):
+    _seed()
+    graph.fail = httpx.ConnectError("Ollama is restarting")
+    for _ in range(cg.MAX_TRIES + 1):
+        assert cg.step() == 0
+    assert "Ollama isn't answering" in cg.state["waiting"] and cg.state["on"] is True
+    graph.fail = None
+    assert cg.step() == cg.BATCH                                             # nothing was used up meanwhile
+
+
+def test_a_board_post_that_keeps_crashing_the_database_is_left(graph, monkeypatch):
+    import agentboard_graph as ag
+    tried = []
+    post = {"id": 7, "t": 1.0, "agent": "claude-1", "kind": "done", "to_agent": "", "text": "x"}
+    monkeypatch.setattr(ag, "pending", lambda limit=4: [post])
+    monkeypatch.setattr(ag, "_record", lambda p, ep=None, error="": tried.append(error))
+    cg.ready()
+    graph.fail = ConnectionRefusedError("gone")
+    ag.step()
+    assert tried and "stopped while adding" in tried[0]                      # the post's try is counted

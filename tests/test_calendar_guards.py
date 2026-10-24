@@ -65,11 +65,33 @@ def test_the_same_event_is_not_added_twice(cal):
 
 
 def test_move_by_title_and_clash_on_move(cal):
-    actions.add_event("Dentist", at(cal, 13), at(cal, 14))
-    r = actions.move_event("dentist", at(cal, 10), at(cal, 11))
+    actions.add_event("Focus block", at(cal, 13), at(cal, 14))
+    actions.add_event("Gym", at(cal, 10), at(cal, 11))
+    r = actions.move_event("focus block", at(cal, 10), at(cal, 11))
     assert r["status"] == "conflict" and "NOT moved" in r["message"]
-    r = actions.move_event("dentist", at(cal, 15), at(cal, 16))
+    r = actions.move_event("focus block", at(cal, 15), at(cal, 16))
     assert r["status"] == "done" and r["event"]["start"].startswith(cal.day.replace(hour=15).isoformat()[:13])
+
+
+def test_classes_and_appointments_never_move_even_with_old_saved_keywords(cal):
+    import config
+    cfg = config.load()
+    cfg["fixed_keywords"] = ["dentist"]                                     # an older saved list without class words
+    config.save(cfg)
+    titles = ["Technical Writing lecture bldg 16", "Sams Tuesday Night Advanced Routing class *Online*", "Doctor appointment", "Dentist"]
+    for title in titles:
+        actions.add_event(title, at(cal, 8), at(cal, 9), double_book=True, _confirmed=True)
+        r = actions.move_event(title.split()[0].lower(), at(cal, 17), at(cal, 18))
+        assert r["status"] == "refused" and "never move" in r["message"], title
+        r = actions.move_event(title.split()[0].lower(), at(cal, 17), at(cal, 18), double_book=True, _confirmed=True)
+        assert r["status"] == "refused", title                              # not even through a confirmed card
+
+
+def test_a_refused_or_clashing_card_is_never_reported_done(cal, monkeypatch):
+    monkeypatch.setitem(actions._executors, "tool", lambda name, args: {"status": "conflict", "message": "NOT moved: overlaps Lunch"})
+    tok = actions.queue_tool("move_event", {"event_id": "x"}, "Move it")["token"]
+    r = actions.confirm(tok)
+    assert r["status"] == "error" and "overlaps" in r["message"]
 
 
 def test_made_up_id_is_an_error_not_done(cal):

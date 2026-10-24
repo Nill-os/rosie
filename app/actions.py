@@ -1,6 +1,7 @@
 """Safe write actions. Deletes and bulk changes become pending actions that only
 the UI's Confirm button (confirm()) can execute. The model has no way to call confirm()."""
 import datetime as dt
+import re
 import secrets
 import time
 
@@ -8,6 +9,7 @@ import gcal
 from config import load
 
 _pending: dict[str, dict] = {}   # token -> action; lost on restart (by design)
+NOT_DONE = ("error", "conflict", "refused", "not_done", "needs_confirmation", "nothing", "nothing_to_move")
 
 
 def _parse(s):
@@ -15,9 +17,15 @@ def _parse(s):
     return d if d.tzinfo else d.replace(tzinfo=gcal.TZ)
 
 
+# The owner's rule: school classes and appointments never move (only flexible work blocks and tasks do). Saved settings keep their own
+# fixed_keywords list, so classes and appointments are recognized here as well, whatever the settings say.
+ALWAYS_FIXED = re.compile(r"\b(class(?:es)?|lecture|lab|exam|midterm|quiz|course|school|appt|appointment|doctor|dentist|dr\.|dr(?=\s+[A-Z]))(?![a-z])", re.I)
+SCHOOL = None                                                     # words that mark the owner's own school's events
+
+
 def _is_fixed(title, cfg):
     t = title.lower()
-    return any(k in t for k in cfg["fixed_keywords"])
+    return any(k in t for k in cfg["fixed_keywords"]) or bool(ALWAYS_FIXED.search(title)) or bool(SCHOOL and SCHOOL.search(title))
 
 
 PENDING_SECONDS = 600                                             # a card nobody answered for 10 minutes can no longer be confirmed
@@ -79,14 +87,20 @@ def resolve_event(ref):
     return None, {"status": "error", "message": f"I could not find an event matching '{ref[:60]}' on the calendar I can change ({'your main calendar' if cal == 'primary' else 'the test calendar'}). Look it up with get_schedule or search_events and use its real id."}
 
 
-def move_event(event_id, new_start, new_end, double_book=False, _confirmed=False):
+def move_event(event_id, new_start, new_end, double_book=False, _confirmed=False, ask_first=False):
     ev, err = resolve_event(event_id)
     if err:
         return err
+    if _is_fixed(ev["title"], load()):                        # all-day ones too (an exam day)
+        return {"status": "refused", "message": f"NOT moved: '{ev['title']}' is a class or an appointment, and those never move (the owner's rule). "
+                                                "Move flexible work blocks or tasks around it instead; if the owner wants it changed, they do that in Google Calendar."}
     s, e = _parse(new_start), _parse(new_end)
     if e <= s:
         return {"status": "error", "message": "The end must be after the start."}
     clash = gcal.conflicts(s, e, exclude_id=ev["id"])
+    if ask_first and not _confirmed:                          # Agent Zero: the owner sees the real title, the time and any overlap
+        return queue_tool("move_event", {"event_id": ev["id"], "new_start": new_start, "new_end": new_end, "double_book": True, "_confirmed": True},
+                          f"Move '{ev['title']}' to {_when(s, e)}" + (" even though it overlaps: " + "; ".join(c["title"] for c in clash) if clash else ""))
     if clash and not double_book:
         return {"status": "conflict", "message": f"NOT moved: '{ev['title']}' would overlap existing events. Do NOT ask the user: immediately call move_event again with the FIRST entry of free_slots (same length), then tell them in one sentence what you did.", "conflicts": clash,
                 "free_slots": gcal.free_slots(s.date(), max(15, int((e - s).total_seconds() // 60)), exclude_id=ev["id"])}
@@ -104,7 +118,7 @@ def delete_event(event_id, title="this event"):
     return _queue("delete", f"Delete event: {ev['title']} ({ev['start'][:16].replace('T', ' ')})", {"event_id": ev["id"]})
 
 
-def shift_day(minutes_late: int, from_time=None, day=None):
+def shift_day(minutes_late: int, from_time=None, day=None, ask_first=False):
     """Push every flexible event at/after from_time (default: now) later by N minutes.
     Fixed events (appointments etc.) are left alone and reported."""
     cfg = load()
@@ -125,6 +139,9 @@ def shift_day(minutes_late: int, from_time=None, day=None):
                       "end": (_parse(e["end"]) + delta).isoformat()})
     if not moves:
         return {"status": "nothing_to_move", "kept_fixed": skipped}
+    if any(_parse(m["start"]).astimezone(gcal.TZ).date() != day for m in moves):   # skill audit 2026-10-23: "push everything back a day";
+        return {"status": "error", "message": "That would push events into another day. shift_day only moves events later on the "   # a block
+                "same day; offer to move specific items with move_event."}                       # may still END after midnight
     clashes = []
     for ev in gcal.events_on(day, cal):
         if ev["all_day"] or not _is_fixed(ev["title"], cfg):
@@ -132,13 +149,13 @@ def shift_day(minutes_late: int, from_time=None, day=None):
         fs, fe = _parse(ev["start"]), _parse(ev["end"])
         clashes += [f"{m['title']} overlaps {ev['title']}" for m in moves
                     if _parse(m["start"]) < fe and _parse(m["end"]) > fs]
-    lines = [f"{m['title']} -> {m['start'][11:16]}" for m in moves]
+    lines = [f"{m['title']} -> {_parse(m['start']).astimezone(gcal.TZ):%H:%M}" for m in moves]   # local time, whatever the event's offset
     summary = f"Shift {len(moves)} event(s) by {minutes_late} min: " + "; ".join(lines)
     if skipped:
         summary += f" (not moved, fixed: {', '.join(skipped)})"
     if clashes:
         summary += f" WARNING: {'; '.join(clashes)}"
-    if len(moves) > cfg["max_changes_without_confirm"] or clashes:
+    if ask_first or len(moves) > cfg["max_changes_without_confirm"] or clashes:   # Agent Zero always gets this full card
         return _queue("shift", summary, {"moves": moves, "calendar": cal})
     for m in moves:
         gcal.move_event(m["id"], _parse(m["start"]), _parse(m["end"]), cal)
@@ -157,6 +174,8 @@ def confirm(token):
         elif a["kind"] == "tool":
             res = _executors["tool"](p["name"], p["args"])
             msg = res.get("error") if isinstance(res, dict) and res.get("error") else None
+            if msg is None and isinstance(res, dict) and res.get("status") in NOT_DONE:   # a clash, a refusal or a second card: not done
+                msg = str(res.get("message") or res.get("summary") or f"Not done ({res['status']}).")
             return {"status": "error" if msg else "done", "message": msg, "summary": a["summary"], "result": str(res)[:400]}
         elif a["kind"] == "shift":
             for m in p["moves"]:

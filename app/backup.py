@@ -84,9 +84,11 @@ def make_snapshot(dest: Path, passfile: Path | None = None, data: Path | None = 
     with tempfile.TemporaryDirectory(prefix="rosie-bk-") as tmp:
         stage = Path(tmp) / "stage"
         (stage / "data").mkdir(parents=True)
-        for db in sorted(data.glob("*.db")):                     # the sqlite backup API: a consistent copy even while the app is writing
+        nested = [p for p in (data / "corner" / "corner.db",) if p.exists()]   # her corner's finds, groups and notes (audit 2026-10-20)
+        for db in sorted(data.glob("*.db")) + nested:            # the sqlite backup API: a consistent copy even while the app is writing
             src = sqlite3.connect(db)
-            dst = sqlite3.connect(stage / "data" / db.name)
+            (stage / "data" / db.relative_to(data)).parent.mkdir(parents=True, exist_ok=True)
+            dst = sqlite3.connect(stage / "data" / db.relative_to(data))
             try:
                 src.backup(dst)
             finally:
@@ -162,10 +164,20 @@ def restore(file: Path, target: Path, passfile: Path | None = None) -> Path:
     return target
 
 
-def rotate(dest: Path, keep: int = KEEP):
+def rotate(dest: Path, keep: int = KEEP, days: int = 30):
+    """Keep the newest `keep`, and also the newest one of each of the last `days` days: a switch makes a backup each time, so
+    counting alone kept barely a day of history (audit 2026-10-20)."""
+    import time
     files = sorted(dest.glob("rosie-data-*.gpg"), reverse=True)
-    for old in files[keep:]:
-        old.unlink()
+    keepers, days_seen = set(files[:keep]), set()
+    for f in files:
+        day = time.strftime("%Y-%m-%d", time.localtime(f.stat().st_mtime))
+        if day not in days_seen and time.time() - f.stat().st_mtime < days * 86400:
+            days_seen.add(day)
+            keepers.add(f)
+    for old in files:
+        if old not in keepers:
+            old.unlink()
 
 
 def status() -> dict:
@@ -181,7 +193,8 @@ def run_backup() -> Path:
     out = make_snapshot(BACKUPS)
     v = verify(out)
     (BACKUPS / "last_verify.json").write_text(json.dumps({**v, "file": out.name}))
-    if not v["ok"]:
+    if not v["ok"]:                                           # set aside, so rotation never keeps it in place of a good one
+        out.rename(out.with_name(out.name + ".failed"))
         raise SystemExit("Backup was made but did NOT pass its check: " + "; ".join(v["problems"]))
     rotate(BACKUPS)
     return out

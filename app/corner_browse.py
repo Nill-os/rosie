@@ -37,6 +37,7 @@ OLLAMA_GENERATE = "http://127.0.0.1:11434/api/generate"
 MODEL = "qwen3.5:9b"            # Rosie's chat model (agent.MODEL); test_corner checks they match
 CTX_OPTIONS = {"num_ctx": 32768}   # num_ctx/num_gpu for MODEL, pushed by ctxsize.push() so they match every other caller
 KEEP_ALIVE = "30m"              # same as agent.chat, so the chat model stays loaded for the owner
+LIVE = {"set": False}           # models.load_saved / _apply set it: this process knows the live pick (the server); see ctxsize.live_model
 VISION_MODEL = "gemma4:12b"     # used sparingly: on an 8 GB GPU it pushes the chat model out, so looks are batched, then it is unloaded
 VISION_CTX = 4096
 UA = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) personal-assistant RosieCorner/1.0 (reads when idle; respects robots.txt)",
@@ -44,7 +45,7 @@ UA = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) personal-assistant RosieCor
 ROBOTS_AGENT = "RosieCorner"
 PAGE_MAX_BYTES = 2 * 1024 * 1024
 ROBOTS_MAX_BYTES = 512 * 1024
-GLOBAL_GAP_S = 4.0              # between any two requests, on top of the per-site gap
+GLOBAL_GAP_S = 1.0              # between any two requests, on top of the per-site gap (owner 2026-10-22: "make her as fast as possible")
 MAX_CRAWL_DELAY = 300           # a site asking for more than this between pages is skipped
 SEARCHES_PER_SESSION = 3
 PICTURES_PER_SESSION = 4
@@ -115,15 +116,18 @@ def _origin(url: str) -> str:
     return f"{p.scheme}://{p.netloc.lower()}"
 
 
-def _polite(url: str, crawl_delay: float = 0.0) -> bool:
-    """Wait the polite gap before a request to this site. True = stop."""
+def _polite(url: str, crawl_delay: float = 0.0, site_gap: bool = True) -> bool:
+    """Wait the polite gap before a request to this site. True = stop. `site_gap` False (robots.txt) waits only the short gap between any
+    two requests and doesn't start the site's gap, so a site's first page follows its robots.txt at once (crawlers read both together)."""
     site = urllib.parse.urlsplit(url).hostname or ""
-    gap = max(float(corner.settings()["corner_site_gap_s"]), float(crawl_delay or 0))
+    gap = max(float(corner.settings()["corner_site_gap_s"]), float(crawl_delay or 0)) if site_gap else 0.0
     now = time.time()
     need = max(_last_hit.get(site, 0) + gap - now, _last_any["t"] + GLOBAL_GAP_S - now, 0)
     if need and _pause(need + random.uniform(0, 1.5)):
         return True
-    _last_hit[site] = _last_any["t"] = time.time()
+    _last_any["t"] = time.time()
+    if site_gap:
+        _last_hit[site] = _last_any["t"]
     return False
 
 
@@ -134,9 +138,9 @@ def robots(url: str) -> tuple[bool, float]:
     hit = _robots.get(origin)
     if not hit or time.time() - hit[0] > 86400:
         rurl = origin + "/robots.txt"
-        if _polite(rurl):
+        if _polite(rurl, site_gap=False):
             return False, 0
-        r = web.get_public(rurl, max_bytes=ROBOTS_MAX_BYTES, accept=(), headers=UA, stop=corner._stop, timeout=12,
+        r = web.get_public(rurl, max_bytes=ROBOTS_MAX_BYTES, accept=(), headers=UA, stop=corner._stop, timeout=12, browser=True,
                            check=lambda u: blocked_reason(u, corner.settings()["corner_block_domains"]) if _origin(u) != origin else None)
         status = r.get("status") or 0
         if "body" in r and 200 <= status < 300:
@@ -229,6 +233,9 @@ def fetch_page(url: str) -> dict | None:
     if prob:
         corner.log("blocked", url, status="blocked", detail=prob)
         return None
+    repo = github_repo(url)
+    if repo:
+        return _github_page(url, repo, extra)
     ok, delay = robots(url)
     if corner.stopping():
         return None
@@ -241,7 +248,7 @@ def fetch_page(url: str) -> dict | None:
     if _polite(url, delay):
         return None
     corner.doing("Reading " + corner.source_of(url))
-    r = web.get_public(url, max_bytes=PAGE_MAX_BYTES, headers=UA, stop=corner._stop, check=lambda u: blocked_reason(u, extra))
+    r = web.get_public(url, max_bytes=PAGE_MAX_BYTES, headers=UA, stop=corner._stop, check=lambda u: blocked_reason(u, extra), browser=True)
     if r.get("stopped"):
         return None
     final = r.get("url") or url
@@ -261,7 +268,13 @@ def fetch_page(url: str) -> dict | None:
     if re.search(r"(?is)<input[^>]+type=[\"']?password", h):
         corner.log("page", final, _title(h), status="skipped", detail="a login page")
         return None
-    page = {"url": final, "title": _title(h) or corner.source_of(final), "text": _strip(h), "links": _links(h, final, extra), "images": _images(h, final, extra)}
+    return _got_page({"url": final, "title": _title(h) or corner.source_of(final), "text": _strip(h), "links": _links(h, final, extra),
+                      "images": _images(h, final, extra)})
+
+
+def _got_page(page: dict) -> dict:
+    """A page she read: the Live view, the trail and the session count."""
+    final = page["url"]
     _clear_thumbs()                                            # she moved on: the last page's previews are gone
     live(f"Reading: {page['title']} — {corner.source_of(final)}", page={"title": page["title"], "url": final, "host": corner.source_of(final),
          "text": page["text"][:LIVE_TEXT]}, links=[], chosen=None, pictures=[])
@@ -285,7 +298,118 @@ def search_web(query: str) -> list[dict]:
     return keep
 
 
-TOOLS = {"fetch_page": fetch_page, "search_web": search_web}         # everything she can do on the web; nothing else exists here
+# ---------------------------------------------------------------- GitHub (owner 2026-10-22: "have her focus on github 60% or so of the time")
+# A repository's GitHub page is mostly menus to her (about 3,500 characters, links to GitHub's own feature pages), so she reads its README
+# straight from raw.githubusercontent.com and searches with GitHub's repository search (no key: 10 searches a minute, plenty here).
+GITHUB_REPO = re.compile(r"https://github\.com/([A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))/([A-Za-z0-9._-]{1,100}?)(?:\.git)?/?")
+GITHUB_NOT_OWNERS = {"about", "apps", "collections", "customer-stories", "enterprise", "events", "explore", "features", "issues", "login",
+                     "marketplace", "mcp", "new", "notifications", "orgs", "organizations", "pricing", "pulls", "readme", "resources",
+                     "search", "security", "settings", "site", "solutions", "sponsors", "team", "topics", "trending", "why-github"}
+README_NAMES = ("README.md", "readme.md", "README.rst", "README")
+MD_LINK = re.compile(r"(!?)\[([^\]\n]{0,200})\]\(\s*<?([^)\s>]+)>?(?:\s+\"[^\"]*\")?\s*\)")
+
+
+def github_repo(url: str) -> tuple[str, str] | None:
+    """(owner, repo) when `url` is a GitHub repository's own page; None for anything else (GitHub's menus, files, issues)."""
+    m = GITHUB_REPO.fullmatch(urllib.parse.urldefrag(str(url))[0].split("?")[0])
+    if not m or m.group(1).lower() in GITHUB_NOT_OWNERS or m.group(2) in (".", ".."):
+        return None
+    return m.group(1), m.group(2)
+
+
+def _md_links(text: str, owner: str, repo: str, extra=()) -> tuple[list[dict], list[dict]]:
+    """Links and pictures in a README (Markdown, plus any HTML in it), made absolute, checked like any page's."""
+    page, raw = f"https://github.com/{owner}/{repo}/blob/HEAD/", f"https://raw.githubusercontent.com/{owner}/{repo}/HEAD/"
+    links, pics, seen = [], [], set()
+    for bang, label, href in MD_LINK.findall(text):
+        if href.startswith(("#", "mailto:", "javascript:", "data:")):
+            continue
+        u = urllib.parse.urldefrag(urllib.parse.urljoin(raw if bang else page, href))[0]
+        if u in seen or blocked_reason(u, extra):
+            continue
+        seen.add(u)
+        if bang and not BADGE_RE.search(u) and len(pics) < 8:
+            pics.append({"url": u, "alt": label.strip()[:120]})
+        elif not bang and len(label.strip()) >= 3 and len(links) < 25 and not label.lstrip().startswith("!["):
+            links.append({"url": u, "text": re.sub(r"\s+", " ", label).strip()[:100]})
+    more = _links(text, page, extra)
+    links += [l for l in more if l["url"] not in seen][:max(0, 25 - len(links))]
+    pics += [i for i in _images(text, raw, extra) if i["url"] not in seen][:max(0, 8 - len(pics))]
+    return links, pics
+
+
+def _github_page(url: str, repo: tuple[str, str], extra) -> dict | None:
+    owner, name = repo
+    r = {}
+    for fname in README_NAMES:
+        raw = f"https://raw.githubusercontent.com/{owner}/{name}/HEAD/{fname}"
+        ok, delay = robots(raw)
+        if corner.stopping():
+            return None
+        if not ok or delay > MAX_CRAWL_DELAY:
+            corner.log("blocked", url, status="robots.txt", detail="raw.githubusercontent.com's robots.txt asks robots not to read it")
+            return None
+        if _polite(raw, delay):
+            return None
+        corner.doing("Reading " + f"{owner}/{name} on GitHub")
+        r = web.get_public(raw, max_bytes=PAGE_MAX_BYTES, accept=("text/",), headers=UA, stop=corner._stop, browser=True,
+                           check=lambda u: blocked_reason(u, extra))
+        if r.get("stopped"):
+            return None
+        if r.get("status") != 404:
+            break
+    if "body" not in r or not (200 <= (r.get("status") or 0) < 300):
+        corner.log("page", url, status="failed", detail=("no README" if r.get("status") == 404 else r.get("error") or f"answer {r.get('status')}")[:200])
+        return None
+    text = r["body"].decode(r.get("encoding") or "utf-8", "replace")
+    links, pics = _md_links(text, owner, name, extra)
+    return _got_page({"url": url, "title": f"{owner}/{name} on GitHub", "text": re.sub(r"\n{3,}", "\n\n", text).strip(), "links": links, "images": pics})
+
+
+def search_github(query: str) -> list[dict]:
+    """TOOL 3: search GitHub's repositories. GitHub needs every word to match, so a long query that finds nothing is tried again with
+    its first three words. Results are repository pages; blocked ones are taken out."""
+    q = re.sub(r"\s+", " ", str(query)).strip()[:100]
+    corner.doing(f"Searching GitHub for “{q}”")
+    live(f"Searching GitHub: {q}")
+    extra = corner.settings()["corner_block_domains"]
+    words = q.split()
+    for terms in dict.fromkeys([" ".join(words), " ".join(words[:3])]):
+        api = "https://api.github.com/search/repositories?" + urllib.parse.urlencode({"q": terms, "per_page": 8})
+        if _polite(api, site_gap=False):
+            return []
+        r = web.get_public(api, max_bytes=1024 * 1024, accept=("application/json",), headers=UA, stop=corner._stop, browser=True)
+        try:
+            items = json.loads(r["body"])["items"] if 200 <= (r.get("status") or 0) < 300 else None
+        except (KeyError, ValueError, TypeError):
+            items = None
+        if items is None:
+            corner.log("search", "", "GitHub: " + q, status="failed", detail=(r.get("error") or f"answer {r.get('status')}")[:200])
+            return []
+        keep = []
+        for it in items if isinstance(items, list) else []:
+            u = str((it or {}).get("html_url") or "")
+            if github_repo(u) and not it.get("archived") and not blocked_reason(u, extra):
+                desc = str(it.get("description") or "")[:300]
+                keep.append({"title": str(it.get("full_name") or u)[:120], "url": u,
+                             "snippet": f"{desc} ({int(it.get('stargazers_count') or 0)} stars)".strip()})
+        if keep:
+            corner.log("search", "", "GitHub: " + terms, status="searched", detail=f"{len(keep)} result{'s' if len(keep) != 1 else ''}")
+            return keep
+    corner.log("search", "", "GitHub: " + q, status="searched", detail="0 results")
+    return []
+
+
+def search(query: str) -> list[dict]:
+    """Her search: GitHub about corner_github_pct of the time (the web when GitHub finds nothing), the web the rest."""
+    if random.random() * 100 < corner.settings()["corner_github_pct"]:
+        res = search_github(query)
+        if res or corner.stopping():
+            return res
+    return search_web(query)
+
+
+TOOLS = {"fetch_page": fetch_page, "search_web": search_web, "search_github": search_github}   # everything she can do on the web; nothing else exists here
 
 
 # ---------------------------------------------------------------- the Live view (owner 2026-10-17: "i want to see live what she is looking at")
@@ -376,12 +500,27 @@ def wait_while_paused() -> bool:
             break
         if corner.state.get("paused") != why:
             live("Paused: " + why)
+        if corner.take_unload() and _let_go():
+            return True
         corner.state["paused"] = why
         corner.doing("Paused: " + why)
         if _pause(PAUSE_STEP_S):
             return True
     corner.state["paused"] = ""
     return corner.stopping()
+
+
+def _let_go() -> bool:
+    """A memory pause: free her models' memory for the owner's programs and tell corner how much that gave back (she waits for that
+    much on top of the floor before loading them again). True = stop."""
+    before = corner.mem_free()
+    unload_chat()
+    unload_vision()
+    stop = _pause(3)                                       # Ollama frees the memory a moment after it answers
+    after = corner.mem_free()
+    if before is not None and after is not None:
+        corner.ram_freed(after - before)
+    return stop
 
 
 def _llm(user: str, schema: dict, predict: int = 700) -> dict | None:
@@ -400,7 +539,7 @@ def _llm(user: str, schema: dict, predict: int = 700) -> dict | None:
                 for line in r.iter_lines():
                     if corner.stopping():
                         return None
-                    if corner.state.get("nonstop") and (corner._activity["in_flight"] > 0 or corner._activity["last"] > asked):
+                    if corner.state.get("nonstop") and (corner._activity["in_flight"] > 0 or corner._activity["last"] >= asked):
                         cut = True                                  # the owner needs the model: let go now, ask again after
                         break
                     if not line.strip():
@@ -570,7 +709,7 @@ def fetch_picture(c: dict) -> dict | None:
     if _polite(url, delay):
         return None
     r = web.get_public(url, max_bytes=corner_pics.MAX_BYTES, accept=("image/", "application/octet-stream", "binary/octet-stream"), headers=UA,
-                       stop=corner._stop, check=lambda u: blocked_reason(u, extra))
+                       stop=corner._stop, check=lambda u: blocked_reason(u, extra), browser=True)
     if r.get("stopped"):
         return None
     if "body" not in r or not (200 <= (r.get("status") or 0) < 300):
@@ -620,6 +759,16 @@ def unload_vision():
         pass
 
 
+def unload_chat():
+    """keep_alive 0: Ollama frees the chat model's GPU memory now, so the vision model loads at once (2026-10-22: a look waited 35 minutes
+    while other callers kept the chat model busy, and the memory graph's embeddings queued behind it)."""
+    try:
+        with httpx.Client(transport=_ollama_transport, timeout=30) as c:
+            c.post(OLLAMA_GENERATE, json={"model": MODEL, "keep_alive": 0})
+    except httpx.HTTPError:
+        pass
+
+
 def warm_chat():
     """Load the chat model back with the owner's exact settings (same num_ctx), so their next question doesn't wait for it."""
     try:
@@ -636,7 +785,7 @@ def pictures_step(cands: list[dict], session: dict):
     if cands and not (ok and s["corner_pictures"]):
         corner.log("picture", "", "", "skipped", why if not ok else "pictures are turned off in the corner's settings")
         cands = []
-    if cands and corner.disk_low():                        # disk safety (nonstop mode has no storage budget)
+    if cands and corner.disk_low():                        # disk safety, on top of the storage budget
         corner.log("picture", "", "", "disk full", "Less than 5 GB free on the disk: no pictures are saved until there is room.")
         cands = []
     room = len(cands) if ns else max(0, min(PICTURES_PER_SESSION, s["corner_images_day"] - corner.images_today()))
@@ -653,8 +802,8 @@ def pictures_step(cands: list[dict], session: dict):
         corner_pics.check_and_keep(batch)
     if corner.stopping():
         return
-    if ns and corner.owner_recent(corner.LOOK_AWAY_S):     # looks wait until the owner has been away ~10 min: qwen stays loaded for their chat
-        return
+    if ns and (corner.owner_recent(corner.LOOK_AWAY_S) or corner.at_pc(s)):   # looks wait until the owner has been away ~10 min from Rosie
+        return                                             # and away from the PC: the vision model is a second model in memory
     looks = 20 if ns else max(0, min(LOOKS_PER_SESSION, s["corner_looks_day"] - corner.looks_today()))
     with corner._db() as db:                               # batched: every picture not looked at yet, one vision-model load for all
         todo = [dict(r) for r in db.execute("SELECT * FROM pictures WHERE looked=0 ORDER BY id LIMIT ?", (looks,))]
@@ -663,11 +812,12 @@ def pictures_step(cands: list[dict], session: dict):
     session["vision"] = True
     corner.doing("Looking at pictures")
     live(f"Looking at {len(todo)} picture{'s' if len(todo) != 1 else ''}…")
-    for p in todo:
-        if corner.stopping() or (ns and corner.owner_recent(corner.LOOK_AWAY_S)):
+    unload_chat()                                          # else Ollama waits for the chat model to go idle, and Agent Zero or a helper may never let it
+    for i, p in enumerate(todo):
+        if corner.stopping() or (ns and (corner.owner_recent(corner.LOOK_AWAY_S) or corner.at_pc(s))):
             break
         txt = look(p)
-        if txt is None and corner.stopping():
+        if txt is None and (corner.stopping() or i == 0):  # the vision model isn't answering: try again next round, not 300 s per picture
             break
         corner.log("look", p["src_url"], p["page_title"], "looked" if txt else "no answer")
         with corner._db() as db:
@@ -802,7 +952,7 @@ def _cycle(session: dict, found: list):
             if _halt():
                 break
             searches += 1
-            res = search_web(q)
+            res = search(q)
             url = pick_result(q, res, seen)
             if not url:
                 continue
@@ -833,7 +983,7 @@ def _cycle(session: dict, found: list):
             queue.append(d["next"])
         elif d["search"] and searches < SEARCHES_PER_SESSION:
             searches += 1
-            url = pick_result(d["search"], search_web(d["search"]), seen)
+            url = pick_result(d["search"], search(d["search"]), seen)
             if url:
                 queue.append(url)
     if not corner.stopping():
@@ -861,6 +1011,7 @@ def run_session():
         return
     session = {"vision": False}
     found, pages = [], 0
+    corner.lower_priority()
     try:
         corner.state["nonstop"] = corner.nonstop()
         corner.log("session", status="started", detail="nonstop" if corner.state["nonstop"] else "")

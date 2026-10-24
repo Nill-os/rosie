@@ -51,10 +51,12 @@ def delete(lesson_id: int):
     return {"status": "deleted" if n else "nothing", "id": lesson_id}
 
 
-def relevant(text: str, n: int = 2, min_hits: int = 2):
+def relevant(text: str, n: int = 2, min_hits: int = 2, owner_only: bool = False):
     w = _words(text)
     scored = []
     for r in list_all():
+        if owner_only and r.get("source") == "agent-zero":   # Agent Zero's own lessons never become Rosie's rules (audit 2026-10-20)
+            continue
         hits = len(w & _words(r["trigger"]))
         if hits >= min_hits:
             scored.append((hits, -r["id"], r["lesson"]))
@@ -62,7 +64,7 @@ def relevant(text: str, n: int = 2, min_hits: int = 2):
 
 
 def block(text: str) -> str:
-    ls = relevant(text)
+    ls = relevant(text, owner_only=True)
     return ("LESSONS from past mistakes (follow them):\n" + "\n".join(f"- {l}" for l in ls) + "\n") if ls else ""
 
 

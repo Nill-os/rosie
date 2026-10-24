@@ -25,7 +25,10 @@ import tasks  # noqa: E402
 import workflows  # noqa: E402
 
 TMP = Path(tempfile.mkdtemp(prefix="rosie-eval-"))
+LIVE_CTX = config.load().get("ctx") or {}          # the owner's tuned context window per model (Settings > Context window)
 config.PATH = TMP / "config.json"
+config.save({**config.load(), "ctx": LIVE_CTX})    # the same num_ctx as Rosie and Agent Zero: a different one reloads the model on the
+                                                   # 8 GB GPU for every call they make during the benchmark (210 reloads on 2026-10-21)
 tasks.DB, inbox.DB, chats.DB, memory.DB, lessons.DB = TMP / "t.db", TMP / "i.db", TMP / "c.db", TMP / "m.db", TMP / "l.db"
 fastpath.try_fast = lambda *a, **k: None          # judge the MODEL, not the exact-code shortcuts
 import corner_graph  # noqa: E402

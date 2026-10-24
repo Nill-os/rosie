@@ -110,20 +110,34 @@ def check_phone():
 
 
 def check_user_services():
-    import os
     import pc_tools
-    env = {**os.environ, **pc_tools.gui_env()}
+    env = pc_tools.user_bus_env()                  # the user bus is enough for systemctl --user (no desktop session needed)
     rows = []
     for unit, label in (("assistant-dictation", "Voice keys (dictation / Copilot key)"), ("assistant-overlay", "Octopus overlay")):
         try:
             st = subprocess.run(["systemctl", "--user", "is-active", unit], capture_output=True, text=True, env=env, timeout=5).stdout.strip()
         except Exception:
             st = "unknown"
-        rows.append(_row(label, "ok" if st == "active" else "warn", st, "~/assistant/dictation-service.sh restart" if st != "active" else ""))
+        rows.append(_row(label, "ok" if st == "active" else "warn", st or "unknown (systemctl gave no answer)",
+                         "~/assistant/dictation-service.sh restart" if st != "active" else ""))
     return rows
 
 
+def _unit_result(unit: str) -> str:
+    """systemd's Result of the user unit's last run ("success", "exit-code", ...), "" when unknown or never run."""
+    import pc_tools
+    try:
+        return subprocess.run(["systemctl", "--user", "show", "-p", "Result", "--value", unit], capture_output=True, text=True, timeout=5,
+                              env=pc_tools.user_bus_env()).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
 def check_backup():
+    res = _unit_result("rosie-backup.service")     # includes the push to the off-PC copy, which the files below can't show (audit pass 2)
+    if res not in ("success", ""):
+        return _row("Backup", "bad", f"the last nightly backup run failed ({res}); the off-PC copy may be out of date",
+                    "systemctl --user start rosie-backup.service")   # running the unit itself also clears its failed result
     s = backup.status()
     if not s.get("exists"):
         return _row("Backup", "bad", "no backup yet", "~/assistant/backup-data.sh")
@@ -144,6 +158,10 @@ def check_repo():
     except Exception:
         return _row("Code backup (GitHub)", "off", "git not available")
     days = (time.time() - last) / 86400
+    res = _unit_result("rosie-sync.service")       # the daily push itself (audit 2026-10-23: the row said "synced" while it could fail)
+    if res not in ("success", ""):
+        return _row("Code backup (GitHub)", "warn", f"the last daily sync failed ({res}): the code isn't reaching GitHub",
+                    "systemctl --user start rosie-sync.service")   # running the unit itself also clears its failed result
     if dirty and days > 3:
         return _row("Code backup (GitHub)", "warn", f"{len(dirty)} unsaved changes, last sync {days:.0f} days ago", "~/assistant/sync-repo.sh")
     return _row("Code backup (GitHub)", "ok", "synced" if not dirty else f"{len(dirty)} changes waiting for the daily sync")
@@ -158,7 +176,28 @@ def check_tailscale():
         return _row("Tailscale (phone access)", "off", "not available")
 
 
-CHECKS = [check_ollama, check_disk, check_calendar, check_gmail, check_phone, check_user_services, check_backup, check_repo, check_tailscale]
+def check_containers():
+    """Agent Zero (her brain), the memory graph's database, and Agent Zero's line to Rosie's tools (a0_mcp on docker0). A container left
+    stopped by Shut down all, or a line that failed to start before docker was up, used to show nothing here (audit 2026-10-23)."""
+    import socket
+    rows = []
+    for name, label in (("agent-zero", "Agent Zero (her brain)"), ("rosie-graph", "Memory graph database")):
+        try:
+            st = subprocess.run(["docker", "inspect", "-f", "{{.State.Status}}", name], capture_output=True, text=True, timeout=10)
+            state = st.stdout.strip() if st.returncode == 0 else ("not found" if "No such" in st.stderr else "unknown: " + st.stderr.strip()[:80])
+        except (OSError, subprocess.SubprocessError) as e:
+            state = f"unknown ({type(e).__name__})"
+        rows.append(_row(label, "ok" if state == "running" else "bad", state, "" if state == "running" else f"docker start {name}"))
+    try:
+        import a0_mcp
+        with socket.create_connection((a0_mcp.HOST, a0_mcp.PORT), timeout=2):
+            rows.append(_row("Agent Zero's line to Rosie", "ok", f"{a0_mcp.HOST}:{a0_mcp.PORT}"))
+    except OSError as e:
+        rows.append(_row("Agent Zero's line to Rosie", "bad", f"not listening ({type(e).__name__})", "restart Rosie"))
+    return rows
+
+
+CHECKS = [check_ollama, check_disk, check_calendar, check_gmail, check_phone, check_user_services, check_containers, check_backup, check_repo, check_tailscale]
 
 
 def run_all() -> list[dict]:

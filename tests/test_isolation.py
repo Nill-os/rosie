@@ -11,12 +11,16 @@ ROOT = Path(__file__).resolve().parent.parent
 HOME = Path.home()
 
 
-def _paths(v):
+def _paths(v, seen=None):
+    seen = set() if seen is None else seen
     if isinstance(v, Path):
         yield v
     elif isinstance(v, dict):
+        if id(v) in seen:                                   # generated protobuf modules keep _globals = globals(), which holds itself
+            return
+        seen.add(id(v))
         for x in v.values():
-            yield from _paths(x)
+            yield from _paths(x, seen)
     elif isinstance(v, (list, tuple)):
         for x in v:
             if isinstance(x, Path):
@@ -123,6 +127,7 @@ def test_asyncio_and_async_httpx_are_refused():
     asyncio.run(go())
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Linux-only: the user bus, systemd timers or Unix sockets")
 def test_loopback_and_unix_sockets_still_work(tmp_path):
     import socket
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

@@ -41,20 +41,25 @@ def _ids(name, query):
     return ids
 
 
-def _query(query):
+ONLY_CHANGED = {"archive": " in:inbox", "mark_read": " is:unread", "trash": " -in:sent -in:drafts"}   # only mail the action really changes (trash: all of it; undo knows which were in the Inbox)
+
+
+def _query(query, action=""):
+    """Only messages the action would change, so undo puts back exactly those (audit 2026-10-20: archiving promotions also matched
+    long-archived mail, and undo dumped it all into the Inbox)."""
     q = (query or "").strip()
     if len(q) < 3:
         raise ValueError("Tell me what to clean up, e.g. 'category:promotions older_than:90d' or 'from:newsletter@x.com'.")
-    return f"({q}) -is:starred -in:trash -in:spam"
+    return f"({q}) -is:starred -in:trash -in:spam" + ONLY_CHANGED.get(action, "")
 
 
-def preview(query, account=""):
+def preview(query, account="", action=""):
     """What WOULD be affected: how many and who from. Changes nothing."""
     name = _acct(account)
     if not name:
         return {"error": "No Gmail account is connected yet. Run ~/assistant/login-gmail.sh"}
     try:
-        ids = _ids(name, _query(query))
+        ids = _ids(name, _query(query, action))
         sample, froms = ids[:30], {}
         if sample:
             svc, got = gmail.service(name), []
@@ -83,7 +88,9 @@ def cleanup(action, query, account="", _confirmed=False):
     try:
         if not can_modify(name):
             return {"error": NEED_LOGIN}
-        ids = _ids(name, _query(query))
+        if action not in ACTIONS:
+            return {"error": f"action must be one of: {', '.join(ACTIONS)}"}
+        ids = _ids(name, _query(query, action))
         if not ids:
             return {"status": "nothing", "message": "Nothing matches that."}
         ids = ids[:CAP]
@@ -94,11 +101,12 @@ def cleanup(action, query, account="", _confirmed=False):
                                       f"{what}: {n} emails matching '{query}' in {name}. Starred mail is skipped. I can undo this right after.")
         add, remove = ACTIONS[action]
         svc = gmail.service(name)
+        inbox_ids = sorted(set(ids) & set(_ids(name, _query(query, action) + " in:inbox"))) if action == "trash" else ids   # before the move
+        UNDO.parent.mkdir(exist_ok=True)
+        UNDO.write_text(json.dumps({"account": name, "action": action, "ids": ids, "inbox_ids": inbox_ids, "query": query, "ts": time.time()}))
+        UNDO.chmod(0o600)                                     # written first: a failure part way through can still be undone
         for i in range(0, len(ids), 1000):
             svc.users().messages().batchModify(userId="me", body={"ids": ids[i:i + 1000], "addLabelIds": add, "removeLabelIds": remove}).execute()
-        UNDO.parent.mkdir(exist_ok=True)
-        UNDO.write_text(json.dumps({"account": name, "action": action, "ids": ids, "query": query, "ts": time.time()}))
-        UNDO.chmod(0o600)
         return {"status": "done", "changed": len(ids), "action": action, "note": "Say 'undo that' to reverse it."}
     except (gmail.MailLoginExpired, ValueError) as e:
         return {"error": str(e)}
@@ -115,8 +123,15 @@ def undo():
     add, remove = ACTIONS[u["action"]]
     try:
         svc = gmail.service(u["account"])
-        for i in range(0, len(u["ids"]), 1000):
-            svc.users().messages().batchModify(userId="me", body={"ids": u["ids"][i:i + 1000], "addLabelIds": remove, "removeLabelIds": add}).execute()
+        if u["action"] == "trash":                             # out of Trash for all; back into the Inbox only those that were there
+            for i in range(0, len(u["ids"]), 1000):
+                svc.users().messages().batchModify(userId="me", body={"ids": u["ids"][i:i + 1000], "addLabelIds": [], "removeLabelIds": ["TRASH"]}).execute()
+            back = u.get("inbox_ids", u["ids"])
+            for i in range(0, len(back), 1000):
+                svc.users().messages().batchModify(userId="me", body={"ids": back[i:i + 1000], "addLabelIds": ["INBOX"], "removeLabelIds": []}).execute()
+        else:
+            for i in range(0, len(u["ids"]), 1000):
+                svc.users().messages().batchModify(userId="me", body={"ids": u["ids"][i:i + 1000], "addLabelIds": remove, "removeLabelIds": add}).execute()
     except gmail.MailLoginExpired as e:
         return {"error": str(e)}
     UNDO.unlink(missing_ok=True)

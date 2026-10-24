@@ -17,6 +17,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import paper
+import timefmt
 
 SECTION_TITLES = {"week": "The Week Ahead", "national": "The Briefing", "local": "The Town", "radio": "Radio & Maker", "hacking": "Hacking & New Tech",
                   "recommends": "Rosie's Picks"}
@@ -70,7 +71,7 @@ def _clock(iso) -> str:
     t = paper.when(iso)
     if not t:
         return ""
-    return t.astimezone(paper.gcal.TZ).strftime("%-I:%M %p").lower().replace(":00 ", " ")
+    return t.astimezone(paper.gcal.TZ).strftime(timefmt.nopad("%-I:%M %p")).lower().replace(":00 ", " ")
 
 
 def _host(link) -> str:
@@ -1114,7 +1115,7 @@ def _render(data: dict, mode, photo_dir, look) -> str:
         briefs = sorted((i for sec in paper.NEWS for i in ((data.get("news") or {}).get(sec) or {}).get("items", []) if not i.get("main")), key=paper.rank)
         out.append(f'<div class="src" data-for="reserve">{"".join(brief_li(i, mode) for i in briefs)}</div>')
     made = paper.when(data.get("made"))
-    colophon = (f'<p class="note" style="text-align:center">Made {made.astimezone(paper.gcal.TZ):%-I:%M %p} from real feeds and article pages, your calendar, '
+    colophon = (f'<p class="note" style="text-align:center">Made {(made.astimezone(paper.gcal.TZ)).strftime(timefmt.nopad("%-I:%M %p"))} from real feeds and article pages, your calendar, '
                 f'your email and Rosie\'s data. Every sentence of a story is the article\'s own (Rosie\'s local model only chooses which). '
                 f'Nothing is made up.</p>') if made and mode != "print" else ""
     cls = f"mode-{mode}" + (f" look-{look}" if mode == "web" else "") + (" printdark" if mode == "print" and data.get("print_dark") else "") + (" fakedata" if _fake.get() else "") + (" fakenews" if is_fake("news") else "")
