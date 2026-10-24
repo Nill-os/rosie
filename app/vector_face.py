@@ -213,8 +213,9 @@ def _safe(panel, ctx):
 class FaceLoop:
     """Rotates screens on Vector's face while he is held (vector_pod says when a timer is done)."""
 
-    def __init__(self, robot, timers: Timers, every=6.0):
-        self.robot, self.timers, self.every = robot, timers, every
+    def __init__(self, robot, timers: Timers, every: float | None = None):
+        self.robot, self.timers, self._every = robot, timers, every
+        self.menu = None                                  # vector_menu.Menu: drawn instead of the screens while it is open
         self._stop = threading.Event()
         self._next = threading.Event()
         self.last_frame = None
@@ -229,8 +230,13 @@ class FaceLoop:
         self._next.set()
 
     def next_screen(self):
-        """His backpack button while he sits: the next screen now."""
+        """His backpack button while he sits: the next screen now (or the menu redrawn)."""
         self._next.set()
+
+    @property
+    def every(self) -> float:
+        """Seconds per screen: fixed when given, else Settings > Vector (his face menu can change it while he sits)."""
+        return self._every or float(config.load().get("vector_face_seconds") or 15)
 
     def frames(self):
         ctx = FaceCtx(self.timers, self.robot)
@@ -252,9 +258,11 @@ class FaceLoop:
                 yield clock(ctx), self.every
 
     def _run(self):
-        for img, wait in self.frames():
-            if self._stop.is_set():
-                return
+        frames = self.frames()
+        while not self._stop.is_set():
+            menu = self.menu
+            img = _safe(lambda ctx: menu.draw(), None) if menu is not None and menu.open else None
+            img, wait = (img, 1.0) if img is not None else next(frames)
             if not self.robot.held:                       # a moment between two holds (Rosie re-taking control): skip a frame
                 self._next.wait(1.0)
                 self._next.clear()

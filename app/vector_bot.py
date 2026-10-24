@@ -13,7 +13,7 @@ import time
 
 import grpc
 
-from vector_pb.sdk import behavior_pb2, external_interface_pb2_grpc, messages_pb2, settings_pb2
+from vector_pb.sdk import behavior_pb2, external_interface_pb2_grpc, messages_pb2, settings_pb2, shared_pb2
 
 PORT = 443
 CONNECT_S = 6
@@ -21,6 +21,11 @@ CONNECT_S = 6
 # reactions still win (and control comes back by itself after). At OVERRIDE_BEHAVIORS his wake word was heard but thrown
 # away ("PendingTriggerNotCleared ... forcing a clear"), so "Hey Rosie" did nothing while he sat (WireOS 3.0.2.34d, 2026-10-21).
 SIT_PRIORITY = behavior_pb2.ControlRequest.DEFAULT
+# His face menu (vector_menu.py) holds at OVERRIDE_BEHAVIORS so more backpack button presses don't start his listening.
+MENU_PRIORITY = behavior_pb2.ControlRequest.OVERRIDE_BEHAVIORS
+FIRST_SDK_TAG, LAST_SDK_TAG = 2000001, 3000000         # his actions (turn, drive straight, head angle) need an id_tag in this range
+_tags = iter(range(FIRST_SDK_TAG, LAST_SDK_TAG))
+BUTTON_PRESSED = 0x10                                # RobotState.status bit (ROBOT_STATUS_IS_BUTTON_PRESSED)
 
 
 def fetch_cert(ip: str, port: int = PORT) -> str:
@@ -49,6 +54,7 @@ class Robot:
         self.channel = grpc.secure_channel(f"{ip}:{PORT}", creds, options=opts)
         self.stub = external_interface_pb2_grpc.ExternalInterfaceStub(self.channel)
         self._hold: _Control | None = None
+        self._priority = SIT_PRIORITY                   # what the hold asks for (sitting, or his face menu)
         self._lock = threading.Lock()
         self.talk_volume: str | None = None              # quiet when idle (Settings > Vector): muted except while he talks
         self._quiet: threading.Timer | None = None
@@ -81,7 +87,8 @@ class Robot:
                 return True
             if self._hold:
                 self._hold.stop()
-            self._hold = _Control(self.stub, SIT_PRIORITY, keep=True)
+            self._priority = SIT_PRIORITY
+            self._hold = _Control(self.stub, self._priority, keep=True)
             if self._hold.start(timeout):
                 return True
             self._hold.stop()                            # not granted: no half-held robot that refuses to move while he wanders
@@ -106,18 +113,20 @@ class Robot:
             if self._hold is not hold:
                 return self.has_control()
             hold.stop()
-            self._hold = _Control(self.stub, SIT_PRIORITY, keep=True)
+            self._hold = _Control(self.stub, self._priority, keep=True)
             return self._hold.start(timeout)
 
-    def rehold(self, timeout: float = 5.0) -> bool:
+    def rehold(self, timeout: float = 5.0, priority=None) -> bool:
         """Take control again on a fresh stream. His listening takes over his face without a control-lost event (seen
         on WireOS 3.0.2.34d 2026-10-21: Rosie still 'had' control, his eyes were back), so after each voice request
-        while he sits, control is asked for anew."""
+        while he sits, control is asked for anew. `priority` changes what the hold asks for from now on."""
         with self._lock:
             if self._hold is None:
                 return False
+            if priority is not None:
+                self._priority = priority
             self._hold.stop()
-            self._hold = _Control(self.stub, SIT_PRIORITY, keep=True)
+            self._hold = _Control(self.stub, self._priority, keep=True)
             return self._hold.start(timeout)
 
     def release(self):
@@ -127,13 +136,14 @@ class Robot:
                 self._hold = None
 
     # actions ---------------------------------------------------------------------------------------------------------
-    def borrow(self, timeout=8.0):
-        """Control for one action: None when he sits (Rosie holds him already), else a granted _Control to stop() after."""
+    def borrow(self, timeout=8.0, priority=behavior_pb2.ControlRequest.OVERRIDE_BEHAVIORS):
+        """Control for one action: None when he sits (Rosie holds him already), else a granted _Control to stop() after.
+        Driving on his own (vector_look.py) borrows at DEFAULT, so his cliff and pick-up reactions still win."""
         hold = self._hold
         if hold is not None and hold.alive():
             hold.granted.wait(timeout)                      # control may be coming back after his wake word
             return None
-        ctl = _Control(self.stub, behavior_pb2.ControlRequest.OVERRIDE_BEHAVIORS)
+        ctl = _Control(self.stub, priority)
         if not ctl.start(timeout):
             ctl.stop()
             raise TimeoutError("Vector did not hand over control")
@@ -268,6 +278,27 @@ class Robot:
         """One of his own animations by trigger name (ListAnimationTriggers), with its sound."""
         req = messages_pb2.PlayAnimationTriggerRequest(animation_trigger=messages_pb2.AnimationTrigger(name=trigger), loops=1)
         return self._speaking(lambda: self.stub.PlayAnimationTrigger(req, timeout=30), ctl)
+
+    def states(self):
+        """His state about 15 times a second (RobotState: lift_height_mm, head_angle_rad, status bits) until the
+        returned stream is cancelled."""
+        return self.stub.EventStream(shared_pb2.EventRequest(white_list=shared_pb2.FilterList(list=["robot_state"])))
+
+    def turn(self, degrees: float, speed_dps: float = 90.0):
+        """Turn on the spot (positive = left) and wait until done."""
+        import math
+        self.stub.TurnInPlace(messages_pb2.TurnInPlaceRequest(angle_rad=math.radians(degrees), speed_rad_per_sec=math.radians(speed_dps),
+                                                              accel_rad_per_sec2=math.radians(360), num_retries=1, id_tag=next(_tags)), timeout=15)
+
+    def forward(self, mm: float, speed_mmps: float = 80.0):
+        """Drive straight (negative = back) and wait until done; his cliff sensors still stop him."""
+        self.stub.DriveStraight(messages_pb2.DriveStraightRequest(speed_mmps=speed_mmps, dist_mm=mm, num_retries=1, id_tag=next(_tags)), timeout=20)
+
+    def head_angle(self, degrees: float):
+        """Point his head (-22 down to 45 up) and wait until done."""
+        import math
+        self.stub.SetHeadAngle(messages_pb2.SetHeadAngleRequest(angle_rad=math.radians(degrees), max_speed_rad_per_sec=3.0,
+                                                                accel_rad_per_sec2=10.0, num_retries=1, id_tag=next(_tags)), timeout=8)
 
     def picture(self, high_res=False) -> bytes:
         """One camera frame (JPEG bytes)."""

@@ -117,7 +117,7 @@ _COMPILED = [(re.compile(rf"^(?:{p})$"), name, fn) for p, name, fn in BUILTIN]
 
 
 # Questions about what is in front of him: Rosie looks through his camera with her own vision model.
-LOOK = re.compile(r"^(?:what do you see|what can you see|what are you looking at|what(?:'s| is) in front of you|what(?:'s| is) around you|"
+LOOK = re.compile(r"^(?:what do you see|what can you see|what are you looking at|what(?:'s| is) in front of you|"
                   r"describe what you see|tell me what you see|look at this|what(?:'s| is) this|who(?:'s| is) this|what am i holding|"
                   r"what color is (?:this|it)|(?:do|can) you see .+|how many .+ (?:do|can) you see|is there (?:a|an|any) .+ (?:in front of you|near you)|"
                   r"what(?:'s| is) on the (?:desk|table|floor))$")
@@ -125,6 +125,24 @@ LOOK = re.compile(r"^(?:what do you see|what can you see|what are you looking at
 
 def wants_look(text: str) -> bool:
     return bool(LOOK.match(normalize(text)))
+
+
+# Orders that need his eyes and wheels (vector_look.py). His own skills (find your cube, go to sleep, go home) match
+# BUILTIN first, so they still go to him.
+LOOK_AROUND = re.compile(r"^(?:look around(?: you| the room)?|have a look around|scan the room|where are you|"
+                         r"(?:tell me )?what(?:'s| is) around you|what(?:'s| is) (?:near|next to) you)$")
+GO_TO = re.compile(r"^(?:(?:go|drive|move|roll|head|get) (?:over )?(?:to|toward|towards|up to)|"
+                   r"(?:find|look for|search for|go find)) (?:the |my |a |an |that |this |your )?(?P<thing>[a-z0-9' -]{2,40})$")
+
+
+def wants_look_around(text: str) -> bool:
+    return bool(LOOK_AROUND.match(normalize(text)))
+
+
+def go_to_target(text: str) -> str:
+    """The thing in "go to the mug" / "find my phone", or ""."""
+    m = GO_TO.match(normalize(text))
+    return m.group("thing").strip() if m else ""
 
 
 def match_command(text: str, commands: list[dict]) -> dict | None:

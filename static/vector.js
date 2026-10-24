@@ -67,7 +67,7 @@ VIEWS.vector = async () => {
     const actionIn = h('select', { 'aria-label': 'Action' }, h('option', { value: 'hold' }, 'Sit (stay still)'), h('option', { value: 'release' }, 'You can move'), h('option', { value: 'say' }, 'Say something'));
     const textIn = h('input', { type: 'text', placeholder: 'What he says (for Say) or his reply', 'aria-label': 'Reply' });
     const commands = h('div', { class: 'card wide' }, h('h3', {}, 'Voice commands'),
-      h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1));margin-bottom:8px' }, 'Said as the whole sentence after his wake word. Your own commands come first. Everything else goes to Rosie, except his own skills (timer, photo, fist bump, volume, eye color).'),
+      h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1));margin-bottom:8px' }, 'Said as the whole sentence after his wake word. Your own commands come first. Everything else goes to Rosie, except his own skills (timer, photo, fist bump, volume, eye color). With his eyes: “what do you see”, “look around”, “go to the mug”, “find my phone”.'),
       h('div', { class: 'list' },
         own.map((c, i) => h('div', { class: 'item' }, h('span', { class: 'tx' }, h('b', {}, c.phrases.join(', ') + '  '), h('span', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1))' }, `${c.action}${c.text ? ': ' + c.text : ''}${c.reply ? ' · replies “' + c.reply + '”' : ''}`)),
           btn('Remove', 'sm bad', () => { own.splice(i, 1); saveCmds(); }))),
@@ -115,7 +115,9 @@ VIEWS.vector = async () => {
           const next = VEC_PANELS.map((p) => p[0]).filter((p) => (p === k ? e.target.checked : picked.includes(p)));
           act('/api/vector/settings', { face_panels: next }, 'Saving');
         } }), h('span', { class: 'tx' }, label)))),
-      h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1));margin-top:6px' }, 'They take turns every few seconds. A running timer always shows. Ask Rosie for a new screen and she can add one.'));
+      h('dl', { class: 'kv', style: 'margin-top:8px' }, h('dt', {}, 'Each screen'), h('dd', {}, h('div', { class: 'seg' }, [[10, '10 s'], [15, '15 s'], [30, '30 s'], [60, '1 min']].map(([v, label]) =>
+        h('button', { class: (d.face_seconds || 15) === v ? 'on' : '', onclick: () => act('/api/vector/settings', { face_seconds: v }, 'Each screen ' + label) }, label))))),
+      h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1));margin-top:6px' }, 'A running timer always shows. While he sits, his backpack button opens a settings menu on his face: move his lift by hand to pick a line, press the button to change it.'));
 
     const pad = d.pad || {};
     const padState = !pad.supported ? 'Needs Linux on this PC.' : !pad.on ? 'Off.'

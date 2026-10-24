@@ -37,7 +37,7 @@ def vector_status():
             "held": bool(vector_pod._robot_obj and vector_pod._robot_obj.held),
             "last": vector_pod.status["last"], "error": vector_pod.status["error"],
             "personality": cfg.get("vector_personality", ""), "commands": cfg.get("vector_commands") or [],
-            "built_in": vector_intents.DEFAULT_COMMANDS, "face_panels": cfg.get("vector_face_panels") or [],
+            "built_in": vector_intents.DEFAULT_COMMANDS, "face_panels": cfg.get("vector_face_panels") or [], "face_seconds": cfg.get("vector_face_seconds") or 15,
             "quiet_idle": bool(cfg.get("vector_quiet_idle")), "wake_word": cfg.get("vector_wake_word") or "hey vector", "backpack": cfg.get("vector_backpack") or "own", "voice": cfg.get("vector_voice") or "rosie", "eyes": cfg.get("vector_eyes") or "rosie",
             "followup": cfg.get("vector_followup", True), "stt_model": cfg.get("vector_stt_model") or "base.en", "talk_volume": cfg.get("vector_talk_volume") or "MEDIUM",
             "pad": {**vector_pad.status, "on": cfg.get("vector_pad", True), "speed": cfg.get("vector_pad_speed") or "normal"}, "wirepod": (vector_pod.WIREPOD / "jdocs" / "jdocs.json").exists()}
@@ -73,6 +73,11 @@ def vector_settings(body: dict):
         cfg["vector_voice"] = body["voice"]
     if "quiet_idle" in body:
         cfg["vector_quiet_idle"] = bool(body["quiet_idle"])
+    if "face_seconds" in body:
+        try:
+            cfg["vector_face_seconds"] = max(5, min(120, int(body["face_seconds"])))
+        except (TypeError, ValueError):
+            pass
     if "face_panels" in body:
         cfg["vector_face_panels"] = [p for p in body["face_panels"] or [] if p in vector_face.PANELS]
     if "on" in body:
