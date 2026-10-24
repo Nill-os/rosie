@@ -4,6 +4,7 @@ import datetime as dt
 import hashlib
 import hmac
 import json
+import os
 
 import pytest
 from fastapi.testclient import TestClient
@@ -102,7 +103,8 @@ def test_the_link_must_be_https_and_is_never_shown_in_full():
         canvas.set_url("http://school.instructure.com/feeds/calendars/user_secret.ics")
     st = canvas.set_url("https://school.instructure.com/feeds/calendars/user_SECRET123.ics")
     assert st["on"] and st["feed"] == "school.instructure.com/…" and "SECRET" not in json.dumps(st)
-    assert oct(canvas.SECRET.stat().st_mode & 0o777) == "0o600"
+    if os.name != "nt":                                                 # Windows has no owner-only mode bits (always 0o666)
+        assert oct(canvas.SECRET.stat().st_mode & 0o777) == "0o600"
     assert not canvas.set_url("")["on"]
 
 
