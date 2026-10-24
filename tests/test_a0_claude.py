@@ -643,3 +643,66 @@ def test_claude_sees_what_its_own_file_and_browser_tools_returned_but_not_its_th
     found = ext.evidence(items)
     assert "q.md written 4 lines" in found and "Walkie-talkie ranges" in found
     assert "secret plan" not in found and "memories" not in found
+
+
+NO_AGENT = ("---------------------------------------------------------------------------\nModuleNotFoundError                       "
+            "Traceback (most recent call last)\nCell In[1], line 1\n----> 1 from agent import Agent\n\n"
+            "ModuleNotFoundError: No module named 'agent'\n(venv) root@be63c360015e:/a0/usr/workdir#")
+
+
+def test_its_terminal_failing_the_same_way_three_times_is_stopped_once_a_streak(ext, monkeypatch):
+    """Chat 1rGAZ2B2 (2026-10-24) ran `from agent import Agent` 5 times and got "No module named 'agent'" each time."""
+    routes(monkeypatch, ext)
+    logs = [item("user", "from what you have learned in your corner, how could we improve yourself?")]
+    for n in range(3):
+        logs += [step("code_execution_tool"), item("code_exe", NO_AGENT.replace("line 1", f"line {n + 1}"))]
+    with pytest.raises(Repairable) as e:
+        asyncio.run(ext.ClaudeLoop(a0_agent(logs, iteration=1)).execute(tool_name="code_execution_tool", tool_args={"code": "x"}))
+    assert "No module named 'agent'" in str(e.value) and "memory_load" in str(e.value)
+    blocked = logs + [step("code_execution_tool"), item("warning", "Traceback...\nRepairableException: " + str(e.value))]
+    asyncio.run(ext.ClaudeLoop(a0_agent(blocked, iteration=1)).execute(tool_name="code_execution_tool", tool_args={"code": "y"}))
+    again = blocked + [item("code_exe", NO_AGENT)]
+    with pytest.raises(Repairable):
+        asyncio.run(ext.ClaudeLoop(a0_agent(again, iteration=1)).execute(tool_name="code_execution_tool", tool_args={"code": "z"}))
+    mixed = logs[:-1] + [item("code_exe", "Traceback...\nFileNotFoundError: [Errno 2] No such file or directory: 'x.txt'")]
+    asyncio.run(ext.ClaudeLoop(a0_agent(mixed, iteration=1)).execute(tool_name="code_execution_tool", tool_args={"code": "x"}))
+    assert ext.code_error("SyntaxWarning: invalid escape sequence\nok") == ""
+    assert ext.code_error("bash: foo: command not found") == "bash: foo: command not found"
+
+
+QUOTED = Path(a0.__file__).parent / "agent_zero_ext" / "tool_execute_before" / "_05_quoted_secrets.py"
+
+
+def test_an_answer_quoting_an_unknown_secret_placeholder_still_goes_out(monkeypatch):
+    """Chat 1rGAZ2B2: an answer quoting §§secret(PROJECT_BOARD_ID) from a memory was blocked by "not found in secrets store"."""
+    secrets = types.ModuleType("helpers.secrets")
+    secrets.ALIAS_PATTERN = r"§§secret\(([A-Za-z_][A-Za-z0-9_]*)\)"
+    secrets.get_secrets_manager = lambda ctx: types.SimpleNamespace(load_secrets=lambda: {"API_KEY_ANTHROPIC": "sk"})
+    extension = types.ModuleType("helpers.extension")
+    extension.Extension = type("Extension", (), {"__init__": lambda self, agent=None: setattr(self, "agent", agent)})
+    for name, mod in (("helpers", types.ModuleType("helpers")), ("helpers.secrets", secrets), ("helpers.extension", extension)):
+        monkeypatch.setitem(sys.modules, name, mod)
+    spec = importlib.util.spec_from_file_location("quoted_secrets_ext", QUOTED)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    agent = types.SimpleNamespace(context=None)
+    args = {"text": "It hunted for `§§secret(PROJECT_BOARD_ID)`; key §§secret(api_key_anthropic) stays."}
+    asyncio.run(mod.QuotedSecrets(agent).execute(tool_name="response", tool_args=args))
+    assert args["text"] == "It hunted for `secret(PROJECT_BOARD_ID)`; key §§secret(api_key_anthropic) stays."
+    code = {"code": "echo §§secret(PROJECT_BOARD_ID)"}
+    asyncio.run(mod.QuotedSecrets(agent).execute(tool_name="code_execution_tool", tool_args=code))
+    assert code["code"] == "echo §§secret(PROJECT_BOARD_ID)"                 # other tools keep Agent Zero's own error
+
+
+def test_claude_names_only_agent_zeros_real_tools_and_agent_zero_asks_its_corner_first(monkeypatch):
+    """Chat 1rGAZ2B2: Claude's fix named rosie-corner-memory search_memory_facts (Claude's own tool) and sent Agent Zero to read its hook."""
+    assert "corner_memory" in claude_plan.VERIFY_RULES and "corner_memory" in claude_plan.SOLVE_RULES
+    assert "can't be imported" in claude_plan.SOLVE_RULES and "search_memory_facts" not in claude_plan.A0_TOOLS
+    sent = []
+    monkeypatch.setattr(claude_plan, "available", lambda: True)
+    monkeypatch.setattr(claude_plan, "context", lambda: "")
+    monkeypatch.setattr(claude_plan, "ask", lambda prompt, *a, **k: sent.append(prompt) or "1. Call corner_memory.")
+    assert claude_plan.plan_for_agent("what did you learn in your corner?")["plan"] == "1. Call corner_memory."
+    assert "rosie.call" in sent[0]
+    assert "always first when the owner asks what you read, found or learned in your corner" in a0.RULES
+    assert "never Python imports" in a0.RULES

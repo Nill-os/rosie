@@ -11,7 +11,8 @@ covers chats started in Agent Zero's own window. Spoken turns, small talk and he
 4. ASK THE OTHER AIs: what an answer asks the owner for (an address, an account) is first looked up in what the owner's other AIs know
    (owner 2026-10-21: "when it doesnt know something i want it to ask other ais"), once a turn.
 5. STUCK: the same tool returning the same thing SAME_RESULTS times in a row is not called again (the Immich task retried Rosie's
-   run_command 40 times, the Meshtastic one its own call_subordinate 7 times with the same error).
+   run_command 40 times, the Meshtastic one its own call_subordinate 7 times with the same error). Its terminal ending SAME_RESULTS runs in a row with the same
+   error gets one stop per streak (chat 1rGAZ2B2, 2026-10-24: `from agent import Agent` 5 times, "No module named 'agent'" each time).
 6. WRITE: a writing job (a document, questions, an email, a report) whose answer did not pass is written by Claude, saved to the file
    the request names in Agent Zero's work folder and sent as the answer (owner 2026-10-22: "have claude write the text for writing jobs").
 Without Claude (out of usage, paused or off), Rosie's own checks and model stand in, and every note says who checked."""
@@ -40,6 +41,7 @@ WORKDIR, JOBS = "/a0/usr/workdir/", "/a0/usr/workdir/jobs/"     # Agent Zero's o
 TEXT_FILES = (".md", ".txt", ".csv", ".json", ".yaml", ".yml", ".html")
 WORK_PATH = re.compile(r"/a0/usr/workdir/[\w./-]+")
 MATERIAL_CHARS, FILE_CHARS = 40000, 20000
+ERROR_LINE = re.compile(r"^\W*(\w*(?:Error|Exception)\b.*|.*: (?:command not found|No such file or directory|Permission denied))$", re.M)
 
 
 def _rosie(route: str) -> tuple[str, str]:
@@ -133,11 +135,29 @@ def results(items) -> list[tuple[str, str]]:
     return out
 
 
+def code_error(text: str) -> str:
+    """The error a terminal run ended with ("ModuleNotFoundError: No module named 'agent'"), else ""."""
+    found = ERROR_LINE.findall(text)
+    return found[-1].strip()[:300] if found else ""
+
+
+def stuck_code(items) -> str:
+    """The error its last SAME_RESULTS terminal runs all ended with, once a streak: after the stop, its next run goes through. Runs
+    without an error (a long scan's "no output yet") never count."""
+    at = [n for n, i in enumerate(items) if i.type == "code_exe"]
+    if not at or any(STUCK_MARK in str(getattr(i, "content", "") or "") for i in items[at[-1] + 1:]):
+        return ""
+    errors = [code_error(str(getattr(items[n], "content", "") or "")) for n in at[-SAME_RESULTS:]]
+    return errors[0] if len(errors) == SAME_RESULTS and errors[0] and len(set(errors)) == 1 else ""
+
+
 def stuck(items, tool_name: str, tool_args) -> str:
-    """What the last SAME_RESULTS calls of this same tool all returned, when they did; else "". Its terminal is left alone: long scans
-    rightly come back "no output yet" again and again."""
+    """What the last SAME_RESULTS calls of this same tool all returned, when they did; else "". Its terminal counts only when its runs
+    end with the same error: long scans rightly come back "no output yet" again and again."""
     name = _key(tool_name, tool_args)
-    if not name or name == "code_execution_tool":
+    if name == "code_execution_tool":
+        return stuck_code(items)
+    if not name:
         return ""
     last = results(items)[-SAME_RESULTS:]
     if len(last) < SAME_RESULTS or any(t != name for t, _ in last) or len({r for _, r in last}) != 1:
@@ -245,6 +265,11 @@ class ClaudeLoop(Extension):
             return
         same = stuck(items, tool_name, tool_args)
         if same:
+            if tool_name == "code_execution_tool":
+                raise RepairableException(
+                    f"Your last {SAME_RESULTS} terminal runs all ended with the same error:\n{same}\n{STUCK_MARK}: running the same idea "
+                    "again won't change it. Change approach: read the error, use the tool made for the job (memory_load for your memory, "
+                    "rosie.call for Rosie's tools; Agent Zero's own code can't be imported in your terminal), or ask_claude_to_solve.")
             raise RepairableException(
                 f"Your last {SAME_RESULTS} calls of this tool all returned the same thing:\n{same}\n{STUCK_MARK}. "
                 "Change approach: another tool (your own terminal for commands), ask_other_ais for a fact you lack, or ask_claude_to_solve.")
