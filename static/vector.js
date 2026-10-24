@@ -30,6 +30,7 @@ VIEWS.vector = async () => {
         h('dt', {}, 'Server'), h('dd', {}, d.running ? `Listening at ${d.host}:${d.port}` : 'Off'),
         h('dt', {}, 'Robot'), h('dd', {}, bot ? `${bot.name || bot.esn} at ${bot.ip}${bot.firmware ? ' · ' + bot.firmware : ''}  ` : 'None set up yet', bot ? h('span', { class: 'chip ' + (d.online ? 'ok' : 'bad') }, d.online ? 'online' : 'not reachable') : null,
           d.held ? h('span', { class: 'chip ok', style: 'margin-left:6px' }, 'sitting') : null),
+        d.life?.mood ? h('dt', {}, 'Mood') : null, d.life?.mood ? h('dd', {}, d.life.mood + (d.life.last ? ` · last on his own ${d.life.last.at} “${d.life.last.said}”` : '')) : null,
         h('dt', {}, 'Last heard'), h('dd', {}, d.last ? `${d.last.at} “${d.last.heard || '(nothing)'}” → ${d.last.did}` : 'Nothing yet.')),
       d.error ? h('div', { class: 'err', style: 'margin-top:8px' }, d.error) : null);
 
@@ -95,6 +96,10 @@ VIEWS.vector = async () => {
         h('dt', {}, 'Follow-ups'), h('dd', {}, h('div', { class: 'seg' },
           h('button', { class: d.followup ? 'on' : '', onclick: () => act('/api/vector/settings', { followup: true }, 'Follow-ups on') }, 'On'),
           h('button', { class: d.followup ? '' : 'on', onclick: () => act('/api/vector/settings', { followup: false }, 'Follow-ups off') }, 'Off'))),
+        h('dt', {}, 'On his own'), h('dd', {}, h('div', { class: 'seg' },
+          h('button', { class: d.life?.level === 'off' ? 'on' : '', onclick: () => act('/api/vector/settings', { life: 'off' }, 'He keeps quiet unless asked') }, 'Off'),
+          h('button', { class: (d.life?.level || 'some') === 'some' ? 'on' : '', onclick: () => act('/api/vector/settings', { life: 'some' }, 'He speaks up sometimes') }, 'Some'),
+          h('button', { class: d.life?.level === 'lots' ? 'on' : '', onclick: () => act('/api/vector/settings', { life: 'lots' }, 'He speaks up often') }, 'Lots'))),
         h('dt', {}, 'Listening'), h('dd', {}, h('div', { class: 'seg' },
           h('button', { class: d.stt_model !== 'small.en' ? 'on' : '', onclick: () => act('/api/vector/settings', { stt_model: 'base.en' }, 'Quick listening') }, 'Quick'),
           h('button', { class: d.stt_model === 'small.en' ? 'on' : '', onclick: () => act('/api/vector/settings', { stt_model: 'small.en' }, 'Careful listening') }, 'Careful'))),
@@ -106,7 +111,7 @@ VIEWS.vector = async () => {
           h('button', { class: d.quiet_idle ? '' : 'on', onclick: () => act('/api/vector/settings', { quiet_idle: false }, 'Normal sounds') }, 'Off'))),
         h('dt', {}, 'Talking volume'), h('dd', {}, h('div', { class: 'seg' }, vols.map(([v, label]) =>
           h('button', { class: d.talk_volume === v ? 'on' : '', onclick: () => act('/api/vector/settings', { talk_volume: v }, 'Volume ' + label) }, label))))),
-      h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1));margin-top:6px' }, 'Quiet when idle: no chirps or mumbles while he wanders. His wake word gives him his voice back until he has answered.'));
+      h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1));margin-top:6px' }, 'Quiet when idle: no chirps or mumbles while he wanders. His wake word gives him his voice back until he has answered. On his own: he speaks up when picked up, petted or when he sees you after a while; never at night (22:00 to 08:00) or while he\'s busy.'));
 
     const picked = d.face_panels || [];
     const face = h('div', { class: 'card' }, h('h3', {}, 'His face while he sits'),
@@ -117,7 +122,7 @@ VIEWS.vector = async () => {
         } }), h('span', { class: 'tx' }, label)))),
       h('dl', { class: 'kv', style: 'margin-top:8px' }, h('dt', {}, 'Each screen'), h('dd', {}, h('div', { class: 'seg' }, [[10, '10 s'], [15, '15 s'], [30, '30 s'], [60, '1 min']].map(([v, label]) =>
         h('button', { class: (d.face_seconds || 15) === v ? 'on' : '', onclick: () => act('/api/vector/settings', { face_seconds: v }, 'Each screen ' + label) }, label))))),
-      h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1));margin-top:6px' }, 'A running timer always shows. While he sits, his backpack button opens a settings menu on his face: move his lift by hand to pick a line, press the button to change it.'));
+      h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1));margin-top:6px' }, 'A running timer always shows. While he sits, his backpack button or the controller\'s D-pad opens a settings menu on his face: D-pad up and down picks a line, Cross or his button changes it, Circle closes it.'));
 
     const pad = d.pad || {};
     const padState = !pad.supported ? 'Needs Linux on this PC.' : !pad.on ? 'Off.'
@@ -126,7 +131,7 @@ VIEWS.vector = async () => {
     const speeds = [['slow', 'Slow'], ['normal', 'Normal'], ['fast', 'Fast']];
     const padMap = [['Left stick', 'Drive (pushing it starts driving mode)'], ['Right stick', 'Tilt his head'], ['L2 / R2', 'Lower / raise his lift'],
       ['PS', 'Driving mode on or off'], ['Circle', 'Sit / you can move'], ['Triangle', 'What do you see?'], ['Cross', 'Rosie says a quick line'],
-      ['Square', 'One of his animations'], ['Options', 'He listens (no wake word)'], ['D-pad left/right', 'Next screen while he sits']];
+      ['Square', 'One of his animations'], ['Options', 'He listens (no wake word)'], ['D-pad left/right', 'Next screen while he sits'], ['D-pad up/down', 'His face menu while he sits (Cross changes, Circle closes)']];
     const controller = h('div', { class: 'card' }, h('h3', {}, 'Controller'),
       h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1));margin-bottom:8px' }, padState),
       h('dl', { class: 'kv' },

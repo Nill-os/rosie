@@ -14,6 +14,7 @@ library); any gamepad with the standard buttons works (PS4, PS5, Xbox). Settings
     Square           one of his own animations
     Options          he listens (no wake word needed)
     D-pad left/right next screen while he sits
+    D-pad up/down    while he sits: open his face menu, then move its highlight (Cross changes it, Circle closes it)
 
 Driving mode holds him the way sitting does (his wandering stops; his wake word, cliffs and being picked up still
 win), without the sit screens. It ends with PS, Circle, "you can move", two minutes without input, or when the
@@ -27,6 +28,7 @@ import time
 from pathlib import Path
 
 import config
+import vector_bot
 
 try:
     import fcntl                                     # Linux and macOS; the Windows copy has no controller support
@@ -54,6 +56,8 @@ HEAD_SPEED = 1.5                                     # rad/s at full stick
 LIFT_SPEED = 2.5
 IDLE_S = 120.0                                       # driving mode ends after this long without input
 TICK_S = 0.05                                        # motor updates up to 20 times a second
+DRIVE_ACCEL = 600.0                                  # mm/s^2: wheel speed ramps instead of jumping (no jerks from stick noise)
+WHEEL_STEP, MOTOR_STEP = 10, 0.25                    # speeds are rounded to these, so stick noise is not a new command
 ANIMATIONS = ("FistBumpSuccess", "GreetAfterLongTime", "KnowledgeGraphSuccessReaction", "ReactToGreeting",
               "PickupCubeSuccess", "FrustratedByFailureMajor")   # seen on his WireOS 3.0.2.34d trigger list, 2026-10-24
 QUIP_PROMPT = ("Say one short, witty line out loud to the person playing with you, under 15 words. No question, no emoji.")
@@ -156,12 +160,16 @@ def wheels(x: float, y: float, top: float = TOP_SPEED) -> tuple[float, float]:
     return round(left * top / big), round(right * top / big)
 
 
+def _step(v: float, step: float) -> float:
+    return round(v / step) * step + 0.0                  # + 0.0: no -0.0, which would count as a change
+
+
 def targets(pad: Pad, top: float = TOP_SPEED) -> tuple[float, float, float, float]:
-    """(left wheel, right wheel, head, lift) for the controller as it is now."""
+    """(left wheel, right wheel, head, lift) for the controller as it is now, rounded to steps."""
     left, right = wheels(pad.axis(ABS_X), pad.axis(ABS_Y), top)
-    head = round(-pad.axis(ABS_RY) * HEAD_SPEED, 2)
-    lift = round((pad.trigger(ABS_RZ) - pad.trigger(ABS_Z)) * LIFT_SPEED, 2)
-    return left, right, head, lift
+    head = _step(-pad.axis(ABS_RY) * HEAD_SPEED, MOTOR_STEP)
+    lift = _step((pad.trigger(ABS_RZ) - pad.trigger(ABS_Z)) * LIFT_SPEED, MOTOR_STEP)
+    return _step(left, WHEEL_STEP), _step(right, WHEEL_STEP), head, lift
 
 
 # --- the loop -------------------------------------------------------------------------------------------------------
@@ -220,14 +228,28 @@ def _once():
 
 
 class Driver:
-    """One connected controller: buttons to actions, sticks to motors while driving mode is on."""
+    """One connected controller: buttons to actions, sticks to motors while driving mode is on.
+
+    Reading the controller never waits on Vector: the loop keeps only the latest target and a sender thread sends it at
+    most every TICK_S. (Sending from the reading loop made every stick event wait for up to three calls to him, so
+    input piled up and came out in bursts: driving "isn't consistent", owner 2026-10-24.)"""
 
     def __init__(self, pad: Pad):
         self.pad = pad
         self.driving = False
         self.sent = (0.0, 0.0, 0.0, 0.0)
+        self.want = (0.0, 0.0, 0.0, 0.0)
         self.last_input = time.time()
         self.hat = 0.0
+        self.hat_y = 0.0
+        self._cfg, self._cfg_at = {}, 0.0
+        self._done = threading.Event()
+
+    def cfg(self) -> dict:
+        """Settings, read at most once a second (not on every stick event)."""
+        if time.time() - self._cfg_at > 1.0:
+            self._cfg, self._cfg_at = config.load(), time.time()
+        return self._cfg
 
     @staticmethod
     def _bot():
@@ -235,13 +257,29 @@ class Driver:
         return vector_pod.robot()
 
     def run(self):
+        threading.Thread(target=self._sender, daemon=True, name="vector-pad-send").start()
+        try:
+            self._loop()
+        finally:
+            self._done.set()
+
+    def _sender(self):
+        while not self._done.wait(TICK_S):
+            if self.driving:
+                self.send()
+
+    def _loop(self):
         import vector_pod
-        while not _stop.is_set() and config.load().get("vector_pad", True):
+        last_tick = 0.0
+        while not _stop.is_set() and self.cfg().get("vector_pad", True):
             try:
                 presses = self.pad.read(TICK_S)
             except OSError:
                 break                                        # unplugged, turned off, or out of Bluetooth range
             now = time.time()
+            if not presses and now - last_tick < TICK_S:
+                continue                                     # stick events come fast: work out targets once a tick
+            last_tick = now
             if presses:
                 self.last_input = now
             for code, down in presses:
@@ -252,7 +290,12 @@ class Driver:
                 vector_pod._face.next_screen()
                 self.last_input = now
             self.hat = hat
-            t = targets(self.pad, TOP_SPEED * SPEEDS.get(config.load().get("vector_pad_speed") or "normal", 0.7))
+            hat_y = self.pad.axis(ABS_HAT0Y)
+            if hat_y and not self.hat_y and vector_pod._face is not None:
+                self.menu_move(int(hat_y))
+                self.last_input = now
+            self.hat_y = hat_y
+            t = targets(self.pad, TOP_SPEED * SPEEDS.get(self.cfg().get("vector_pad_speed") or "normal", 0.7))
             if any(t):
                 self.last_input = now
             if not self.driving and abs(t[0]) + abs(t[1]) > TOP_SPEED * 0.5 and not vector_pod.sitting():
@@ -269,12 +312,17 @@ class Driver:
             self.set_driving(False)
 
     def motors(self, t):
+        """The latest target; the sender thread sends it."""
+        self.want = t
+
+    def send(self):
+        t = self.want
         if t == self.sent:
             return
         bot = self._bot()
         try:
             if t[:2] != self.sent[:2]:
-                bot.drive(t[0], t[1])
+                bot.drive(t[0], t[1], DRIVE_ACCEL if any(t[:2]) else 0.0)   # stopping is at once
             if t[2] != self.sent[2]:
                 bot.move_head(t[2])
             if t[3] != self.sent[3]:
@@ -290,10 +338,13 @@ class Driver:
             return
         if on:
             vector_pod.stop_face()                           # driving and the sit screens don't go together
-            if not bot.hold():
+            ok = bot.hold(priority=vector_bot.DRIVE_PRIORITY)
+            if ok and getattr(bot, "_priority", vector_bot.DRIVE_PRIORITY) != vector_bot.DRIVE_PRIORITY:
+                ok = bot.rehold(priority=vector_bot.DRIVE_PRIORITY)   # he sat (DEFAULT): hold him firmer for driving
+            if not ok:
                 status["error"] = "Vector did not hand over control"
                 return
-            self.driving, self.sent = True, (0.0, 0.0, 0.0, 0.0)
+            self.driving, self.sent, self.want = True, (0.0, 0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 0.0)
             status.update(driving=True, error="")
             vector_pod._later(vector_pod.speak, "Driving mode.", bot, None)
             return
@@ -303,14 +354,29 @@ class Driver:
             bot.stop_motors()
         except Exception:
             pass
-        self.sent = (0.0, 0.0, 0.0, 0.0)
+        self.sent = self.want = (0.0, 0.0, 0.0, 0.0)
         if release and bot.held and vector_pod._face is None:
             bot.release()
+        elif bot.held and getattr(bot, "_priority", vector_bot.SIT_PRIORITY) != vector_bot.SIT_PRIORITY:
+            bot.rehold(priority=vector_bot.SIT_PRIORITY)     # he sits now: back to DEFAULT, so "Hey Rosie" works
+
+    @staticmethod
+    def menu_move(step: int):
+        """D-pad up (-1) / down (+1) while he sits: open his face menu, or move its highlight. His lift stays locked
+        while Rosie holds him, so the controller is how to pick a line (owner 2026-10-24)."""
+        import vector_pod
+        if vector_pod._menu.open:
+            vector_pod._menu.move(step)
+        else:
+            vector_pod._later(vector_pod._open_menu, False)
 
     def press(self, code: int):
         import vector_pod
         bot = self._bot()
         if bot is None:
+            return
+        if vector_pod._menu.open and code in (BTN_SOUTH, BTN_EAST):   # the face menu has these two while it is open
+            vector_pod._later(vector_pod._menu.press if code == BTN_SOUTH else vector_pod._menu.close)
             return
         if code == BTN_MODE:
             self.set_driving(not self.driving)

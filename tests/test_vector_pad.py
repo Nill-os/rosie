@@ -77,7 +77,7 @@ class Bot:
     def __init__(self):
         self.calls, self.held, self.ip = [], False, "192.168.1.130"
 
-    def hold(self):
+    def hold(self, **k):
         self.calls.append("hold")
         self.held = True
         return True
@@ -86,7 +86,7 @@ class Bot:
         self.calls.append("release")
         self.held = False
 
-    def drive(self, l, r):
+    def drive(self, l, r, accel=0.0):
         self.calls.append(("drive", l, r))
 
     def move_head(self, s):
@@ -121,9 +121,13 @@ def test_ps_starts_driving_the_sticks_drive_him_and_ps_again_lets_him_go(monkeyp
     assert d.driving and bot.calls == ["hold"] and said == ["Driving mode."]
     pad.axes_raw.update({1: 0, 4: 0, 5: 255})                                            # full forward, head up, lift up
     d.motors(vector_pad.targets(pad))
+    assert bot.calls == ["hold"]                                                         # the reading loop never waits on him
+    d.send()
     assert ("drive", 220, 220) in bot.calls and ("head", 1.5) in bot.calls and ("lift", 2.5) in bot.calls
     n = len(bot.calls)
+    pad.axes_raw.update({1: 1})                                                          # stick noise: same rounded target
     d.motors(vector_pad.targets(pad))
+    d.send()
     assert len(bot.calls) == n                                                           # unchanged: nothing re-sent
     d.press(vector_pad.BTN_MODE)
     assert not d.driving and bot.calls[-2:] == ["stop", "release"]
@@ -167,3 +171,36 @@ def test_controller_settings_are_saved_and_shown(monkeypatch):
     assert config.load()["vector_pad_speed"] == "fast"
     pad = vector_api.vector_status()["pad"]
     assert pad["on"] is False and pad["speed"] == "fast" and pad["controller"] == ""
+
+
+def test_driving_ramps_the_wheels_and_holds_him_firmly(monkeypatch):
+    import vector_bot
+    bot, said = _setup(monkeypatch)
+    accels, priorities = [], []
+    bot.drive = lambda l, r, accel=0.0: accels.append(accel)
+    bot._priority = vector_bot.SIT_PRIORITY
+    bot.held = True                                                                      # he was sitting
+    bot.rehold = lambda priority=None, **k: priorities.append(priority) or setattr(bot, "_priority", priority) or True
+    pad, w = _pad()
+    d = vector_pad.Driver(pad)
+    d.set_driving(True)
+    assert priorities == [vector_bot.DRIVE_PRIORITY]                                     # his own reactions can't take the wheels
+    d.motors((100.0, 100.0, 0.0, 0.0))
+    d.send()
+    d.motors((0.0, 0.0, 0.0, 0.0))
+    d.send()
+    assert accels == [vector_pad.DRIVE_ACCEL, 0.0]                                      # ramp up, stop at once
+    monkeypatch.setattr(vector_pod, "_face", object())                                   # "sit" took over
+    d.set_driving(False, release=False)
+    assert priorities[-1] == vector_bot.SIT_PRIORITY                                     # "Hey Rosie" works while he sits
+    os.close(w)
+    pad.close()
+
+
+def test_targets_are_rounded_so_noise_is_not_a_command():
+    pad, w = _pad()
+    pad.axes_raw.update({1: 3})                                                          # nearly full forward
+    left, right, head, lift = vector_pad.targets(pad)
+    assert left % vector_pad.WHEEL_STEP == 0 and left == right and head == 0.0 and str(head) == "0.0"
+    os.close(w)
+    pad.close()

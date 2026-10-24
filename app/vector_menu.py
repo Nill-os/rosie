@@ -1,8 +1,9 @@
 """A settings menu on Vector's face while he sits (owner 2026-10-21: "make the button for menu settings and the arm to go
 through them when she sits").
 
-His backpack button opens the menu; after that each press changes the highlighted setting. Raising or lowering his lift
-by hand moves the highlight: lift all the way down is the first line, all the way up the last. The menu closes after
+His backpack button (or the game controller's D-pad, vector_pad.py) opens the menu; after that each press (or Cross)
+changes the highlighted setting. The D-pad moves the highlight, Circle closes. His lift moves it too where it can be
+moved by hand, but it stays locked while Rosie holds him (owner 2026-10-24), so the controller is the way to pick a line. The menu closes after
 MENU_IDLE_S without a press or a lift move, or with "Done".
 
 His firmware lets the button do only two things, start his listening or start Alexa (BUTTON_WAKEWORD_HEY_VECTOR or
@@ -19,6 +20,7 @@ import vector_face
 MENU_IDLE_S = 15.0
 LIFT_DOWN_MM, LIFT_UP_MM = 32.0, 92.0                # his lift's travel (lift_height_mm)
 HYSTERESIS_MM = 2.0
+HINT = "▲▼ move  ✕ change  ○ close"              # the controller's D-pad, Cross and Circle
 WAKE_AFTER_PRESS_S = 4.0                             # a voice request this soon after a press came from the press
 OPEN_FALLBACK_S = 3.5                                # no voice request after a press: open the menu without it
 
@@ -122,6 +124,15 @@ class Menu:
             self._redraw()
         return True
 
+    def move(self, step: int):
+        """The controller's D-pad: the highlight one line up (-1) or down (+1), wrapping round."""
+        with self.lock:
+            if not self.open:
+                return
+            self.index = (self.index + step) % len(ITEMS)
+            self.last_activity = time.time()
+        self._redraw()
+
     def lift(self, mm: float):
         """His lift moved (by hand): move the highlight when it crosses into another band."""
         with self.lock:
@@ -160,7 +171,7 @@ class Menu:
             d.text((10, y + 1), label, font=row, fill=vector_face.CYAN if here else vector_face.DIM)
             if choices:
                 d.text((w - 10, y + 1), shown(key, choices, cfg), font=row, fill=vector_face.PINK if here else vector_face.DIM, anchor="ra")
-        d.text((w // 2, h - 12), "lift: move   button: change", font=small, fill=vector_face.DIM, anchor="ma")
+        d.text((w // 2, h - 12), HINT, font=small, fill=vector_face.DIM, anchor="ma")
         return img
 
 

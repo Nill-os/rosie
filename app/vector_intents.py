@@ -18,6 +18,16 @@ def normalize(text: str) -> str:
     return " ".join(t.split())
 
 
+# Backchannels and noise words: a transcript of only these is not a request (false requests from "uh-huh" and noise, 2026-10-24)
+FILLER_WORDS = {"uh", "um", "umm", "uh-huh", "uhhuh", "mm", "mmm", "hmm", "hm", "mhm", "ah", "oh", "er", "erm", "huh"}
+
+
+def is_filler(text: str) -> bool:
+    """True when the transcript is only filler words ("Uh-huh.", "Hmm, hmm"); "oh hi" and "hmm what time is it" are not."""
+    words = re.sub(r"[^a-z' -]+", " ", text.lower()).replace(" -", " ").replace("- ", " ").split()
+    return bool(words) and all(w.strip("-") in FILLER_WORDS for w in words)
+
+
 # Rosie's own commands: handled by her through Vector's SDK port. Users can add more in Settings > Vector.
 DEFAULT_COMMANDS = [
     {"phrases": ["sit", "stay", "sit down", "sit still", "stay there", "stay here", "don't move", "freeze", "hold still",

@@ -41,7 +41,7 @@ import testguard  # noqa: E402
 testguard.block_network()                                    # from collection on, also for imports and module-level fixtures
 
 # (module, attribute, stand-in name under tmp_path). Modules marked lazy are only patched when something already imported them.
-PATCHES = [("config", "PATH", "config.json"), ("tasks", "DB", "tasks.db"), ("lifequest", "DB", "lifequest.db"), ("study", "DB", "study.db"), ("inbox", "DB", "inbox.db"), ("chats", "DB", "chats.db"),
+PATCHES = [("config", "PATH", "config.json"), ("tasks", "DB", "tasks.db"), ("lifequest", "DB", "lifequest.db"), ("canvas", "SECRET", "secrets/canvas.json"), ("canvas", "EXTRA", "canvas_extra.json"), ("canvas", "STATE", "canvas_state.json"), ("study", "DB", "study.db"), ("inbox", "DB", "inbox.db"), ("chats", "DB", "chats.db"),
            ("memory", "DB", "memory.db"), ("lessons", "DB", "lessons.db"), ("mind", "DB", "mind.db"),
            ("proposals", "DB", "proposals.db"), ("skills", "DIR", "skills"), ("pc_tools", "LOG", "audit.log"),
            ("server", "VOICE_CHAT", "voice_chat.json"), ("server", "SECRETS", "secrets"), ("server", "VOICE_DIR", "voices"),
@@ -67,13 +67,13 @@ PATCHES = [("config", "PATH", "config.json"), ("tasks", "DB", "tasks.db"), ("lif
            ("vector_pod", "DOCS", "vector/jdocs.json"), ("vector_pod", "TOKEN", "vector/client_token"), ("vector_pod", "SSH_KEY", "vector/ssh_root_key"), ("vector_pod", "WIREPOD", "wire-pod"), ("vector_pod", "EP_CERT", "vector/ep.crt"), ("vector_pod", "EP_KEY", "vector/ep.key"), ("vector_pod", "HEY_ROSIE", "vector/hey_rosie_1-5.ppn"), ("vector_pod", "LAST_HEARD", "vector/last_heard.wav"),
            ("vector_pad", "SYS", "input"), ("vector_pad", "DEV", "dev-input")]
 ALWAYS = ("config", "tasks", "inbox", "chats", "memory", "lessons", "proposals", "skills", "pc_tools", "server",
-          "briefs", "projects", "mailwatch", "mailorganize", "gcal", "gmail", "workflows", "corner_graph", "a0", "paper", "agentboard", "skill_sync", "vector_pod", "vector_pad", "lifequest", "board_link", "study")
+          "briefs", "projects", "mailwatch", "mailorganize", "gcal", "gmail", "workflows", "corner_graph", "a0", "paper", "agentboard", "skill_sync", "vector_pod", "vector_pad", "lifequest", "board_link", "canvas", "study")
 
 
 # Linux-only parts (owner 2026-10-23, the Windows copy): on Windows these features are off (hub.pages_off) or replaced, so their tests
 # don't run there. Everything else runs on both.
 LINUX_ONLY = ["test_agentdeck.py", "test_backup.py", "test_slots.py", "test_selfdev.py", "test_skill_sync.py", "test_a0_monitor.py",
-              "test_audit_1020.py", "test_vector.py", "test_vector_pad.py", "test_vector_menu.py", "test_terminals.py", "test_dictation.py", "test_overlay.py", "test_meetings.py",
+              "test_audit_1020.py", "test_vector.py", "test_vector_pad.py", "test_vector_menu.py", "test_vector_life.py", "test_vector_talk.py", "test_terminals.py", "test_dictation.py", "test_overlay.py", "test_meetings.py",
               "test_power.py", "test_security_watch.py"]
 collect_ignore = LINUX_ONLY if sys.platform == "win32" else []
 

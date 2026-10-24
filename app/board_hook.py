@@ -10,10 +10,14 @@
 Standard library only and quiet on any error: a broken board must never block a Claude session."""
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+
+NOTICE = re.compile(r"\s*(<task-notification|<system-reminder|<cross-session-message|\[SYSTEM NOTIFICATION|\[Cross-session|Stop hook feedback)", re.I)
 
 
 def main(event: str, data: dict) -> dict | None:
@@ -44,7 +48,11 @@ def main(event: str, data: dict) -> dict | None:
         agentboard.checkin(cwd=cwd, task="(new session)" if data.get("source") == "startup" else None)
         text = agentboard.summary() + f"\nYou are {agentboard.me()} on this board (rosie-board MCP: board, post, claim, release)."
     elif event == "UserPromptSubmit":
-        agentboard.checkin(cwd=cwd, task=data.get("prompt") or None)
+        prompt = data.get("prompt") or ""
+        # A finished background job, a note from another session or a hook's own feedback also arrives as a "prompt". It belongs to
+        # the task already under way: it must not start a new count of work (the turn after a background job was told it had "posted
+        # nothing" right after posting), nor become the task the board shows.
+        agentboard.checkin(cwd=cwd, task=None if NOTICE.match(prompt) else (prompt or None))
         text = agentboard.changes()
     else:
         return None

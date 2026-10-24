@@ -28,6 +28,7 @@ the pages the search finds.
 |---|---|---|
 | Agent Zero | `/a0/usr/scrapling-env/py script.py` | Launcher sets the browser folder. The system `python3` has no Scrapling. |
 | Claude Code and the owner's PC | `~/scrapling-env/bin/python -I script.py` | Browsers are in `~/.cache/ms-playwright`. Keep scripts in the scratchpad, not in a download folder. |
+| Claude Code on Windows | `~/scrapling-env/Scripts/python.exe -I script.py` (PowerShell: `& "$env:USERPROFILE\scrapling-env\Scripts\python.exe" -I script.py`) | Browsers are in `%LOCALAPPDATA%\ms-playwright`. Make it once: `python -m venv ~/scrapling-env`, then `~/scrapling-env/Scripts/python.exe -m pip install "scrapling[fetchers]"` and `~/scrapling-env/Scripts/scrapling.exe install`. |
 | Rosie | her `fetch_url` tool (already Scrapling) | |
 
 If that Python is missing on this PC: Agent Zero calls `rosie.fetch_url`, or makes the environment once:

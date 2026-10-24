@@ -1351,6 +1351,27 @@ async function settingsPaper() {
       h('a', { href: '#/paper' }, 'Morning Paper'), ' page.'),
     ppSettings(d, again));
 }
+// Canvas due dates into the calendar (owner 2026-10-24: the partner's daily Canvas task moved into Rosie; app/canvas.py). The feed link is
+// private, so the page only ever shows its site name.
+function canvasCard() {
+  const box = h('div', { class: 'card' }, h('h3', {}, 'Canvas'), h('div', { class: 'muted' }, 'Loading…'));
+  const draw = async () => {
+    let c;
+    try { c = await J('/api/canvas'); } catch (e) { box.replaceChildren(h('h3', {}, 'Canvas'), h('div', { class: 'err' }, e.message)); return; }
+    const url = h('input', { type: 'password', placeholder: 'Paste the link from Canvas: Calendar > Calendar Feed', 'aria-label': 'Canvas calendar feed link', autocomplete: 'off' });
+    const save = btn('Save', 'pur', async () => { try { await post('/api/canvas/url', { url: url.value }); toast('Saved. Syncing now…'); await post('/api/canvas/sync'); toast('Canvas due dates are in your calendar'); } catch (e) { toast(e.message, 1); } draw(); });
+    box.replaceChildren(h('h3', {}, 'Canvas'),
+      h('div', { class: 'muted', style: 'margin-bottom:10px' }, 'Puts every upcoming due date from Canvas in your calendar as an all-day event, with a reminder the day before. Runs every morning; nothing is ever deleted.'),
+      c.on ? h('div', {}, h('div', {}, `Connected to ${c.feed}`),
+        h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1))' }, c.last_run ? `Last sync ${c.last_run.replace('T', ' ')}: ${c.upcoming} upcoming, ${c.added} added, ${c.updated} updated.` : 'Not synced yet.'),
+        c.error ? h('div', { style: 'color:var(--bad)' }, c.error) : null,
+        h('div', { class: 'form', style: 'margin-top:10px' }, btn('Sync now', 'sm', async () => { try { await post('/api/canvas/sync'); toast('Synced'); } catch (e) { toast(e.message, 1); } draw(); }),
+          btn('Turn off', 'sm dim', async () => { if (!confirm('Stop syncing Canvas? Events already in your calendar stay.')) return; await post('/api/canvas/url', { url: '' }); draw(); })))
+        : h('form', { class: 'form', onsubmit: (e) => { e.preventDefault(); save.click(); } }, url, save));
+  };
+  draw();
+  return box;
+}
 VIEWS.settings = async (arg) => {
   if (arg === 'paper' && typeof ppSettings === 'function') return settingsPaper();
   setHeader('Settings', []);
@@ -1403,6 +1424,7 @@ VIEWS.settings = async (arg) => {
         h('div', { class: 'form', style: 'margin-top:10px' }, btn('Check again', 'sm', async () => { toast('Checking…'); await J('/api/health?fresh=true'); again(); }))),
       h('div', { class: 'card' }, h('h3', {}, 'Calendar writes'), h('div', { class: 'muted', style: 'margin-bottom:10px' }, 'Where the assistant adds and changes events. Reading always uses your real calendar.'),
         h('div', { class: 'seg' + (s.write_target === 'primary' ? ' warn' : '') }, h('button', { class: s.write_target === 'test' ? 'on' : '', onclick: () => setTarget('test') }, 'Test calendar'), h('button', { class: s.write_target === 'primary' ? 'on' : '', onclick: () => setTarget('primary') }, 'Real calendar'))),
+      canvasCard(),
       h('div', { class: 'card wide', id: 'autocard' }, h('h3', {}, 'Automations'),
         h('div', { class: 'muted', style: 'margin-bottom:12px' }, 'What I do on my own and when I reach out to you. By default I only notify you. The "auto" modes, where I do the work for you (sorting notes, wrapping up your day), are off until you choose them.'),
         h('div', { class: 'kv' },

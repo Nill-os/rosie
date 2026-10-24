@@ -189,6 +189,26 @@ def job_mail(now, cfg):
     threading.Thread(target=run, daemon=True, name="mail-check").start()
 
 
+_canvas = {"running": False}
+
+
+def job_canvas(now, cfg):
+    """Once a day after canvas_time: Canvas due dates into the calendar (canvas.py). In its own thread: Google and Canvas can be slow."""
+    import canvas
+    if _canvas["running"] or not canvas.due_today_run(now, cfg.get("canvas_time") or "07:00"):
+        return
+    _canvas["running"] = True
+
+    def run():
+        try:
+            r = canvas.sync()
+            if r.get("error"):
+                inbox.add("system", "Canvas sync didn't work", r["error"], "#/settings", key=f"canvas:{now.date().isoformat()}", now=now)
+        finally:
+            _canvas["running"] = False
+    threading.Thread(target=run, daemon=True, name="canvas-sync").start()
+
+
 def job_meeting(now, cfg):
     meetings.watchdog(now)
 
@@ -275,7 +295,7 @@ def job_paper(now, cfg):
     threading.Thread(target=paper._quiet, args=(paper.morning,), kwargs={"now": now}, daemon=True, name="paper-morning").start()
 
 
-JOBS = [job_health, job_meeting, job_brief, job_reminders, job_events, job_agents, job_overdue, job_weekly_review, job_scratch, job_wrapup, job_paper, job_mail]   # mail last: it can take a while
+JOBS = [job_health, job_meeting, job_brief, job_reminders, job_events, job_agents, job_overdue, job_weekly_review, job_scratch, job_wrapup, job_paper, job_canvas, job_mail]   # mail last: it can take a while
 
 
 def job_model(now, cfg):

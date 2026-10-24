@@ -381,3 +381,21 @@ def test_a_quick_question_never_has_to_post(monkeypatch):
                                          ("kicad-cli pcb drc board.kicad_pcb", True), ("rm -rf build", True), ("cmd | tee log", True)])
 def test_commands_that_change_things_are_told_apart(cmd, changes):
     assert bool(board.CHANGE_CMD.search(cmd)) is changes
+
+
+def test_a_background_notice_keeps_the_current_task_and_its_posts(monkeypatch):
+    """2026-10-24: after a background job finished, the next turn was told it had posted nothing, though it had posted minutes before."""
+    import board_hook
+    monkeypatch.setenv("ROSIE_AGENT", "claude-1")
+    board_hook.main("UserPromptSubmit", {"cwd": "/tmp/x", "prompt": "deploy the Canvas sync"})
+    board.post("deploying the Canvas sync", "doing", agent="claude-1")
+    for notice in ("<task-notification>\n<task-id>b1</task-id> completed</task-notification>",
+                   "[SYSTEM NOTIFICATION - NOT USER INPUT] a background task finished",
+                   "Stop hook feedback:\n[Agent board] ...", "<cross-session-message from=\"x\">hi</cross-session-message>"):
+        board_hook.main("UserPromptSubmit", {"cwd": "/tmp/x", "prompt": notice})
+        for _ in range(4):
+            board_hook.main("PostToolUse", {"tool_name": "Edit"})
+        assert board_hook.main("Stop", {}) is None, notice                  # the earlier post still counts for this task
+    with board._db() as c:
+        task = c.execute("SELECT task FROM sessions WHERE agent='claude-1'").fetchone()[0]
+    assert "Canvas sync" in task and not any(w in task for w in ("notification", "Stop hook", "cross-session"))   # never the notice

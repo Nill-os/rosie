@@ -249,3 +249,131 @@ def test_the_watcher_turns_his_state_stream_into_presses_and_lift_moves():
     w._stop.wait = lambda t: None                                         # no 2 s pause between streams
     w._run()
     assert len(presses) == 2 and m.lift_mm == 90                          # one press per push, held button counts once
+
+
+def test_the_controller_runs_the_menu_while_he_sits(monkeypatch):
+    import vector_pad
+    priorities = []
+    bot, menu = _sitting(monkeypatch, priorities)
+    monkeypatch.setattr(vector_pod, "robot", lambda: bot)
+    d = vector_pad.Driver(types.SimpleNamespace())
+    d.menu_move(1)                                                         # D-pad while closed: open it
+    assert menu.open and priorities == [vector_bot.MENU_PRIORITY]
+    start = menu.index
+    d.menu_move(1)
+    assert menu.index == (start + 1) % len(vector_menu.ITEMS)
+    d.menu_move(-1)
+    d.menu_move(-1)
+    assert menu.index == (start - 1) % len(vector_menu.ITEMS)              # wraps round
+    menu.index = [k for k, *_ in vector_menu.ITEMS].index("quiet_idle")
+    d.press(vector_pad.BTN_SOUTH)                                          # Cross: change the line (not a quip)
+    assert config.load()["vector_quiet_idle"] is True
+    d.press(vector_pad.BTN_EAST)                                           # Circle: close (not stand up)
+    assert not menu.open and priorities[-1] == vector_bot.SIT_PRIORITY
+
+
+def test_the_menu_hint_fits_his_screen():
+    img, d = vector_face.canvas()
+    assert d.textlength(vector_menu.HINT, font=vector_face.font(11)) < img.size[0] - 8
+
+
+# --- moves while he talks (vector_moves.py) and "what do you see" as a conversation ----------------------------------
+import vector_moves
+
+
+class Body:
+    def __init__(self):
+        self.moves = []
+
+    def head_angle(self, deg):
+        self.moves.append(("head", deg))
+
+    def turn(self, deg, speed=90):
+        self.moves.append(("turn", deg))
+
+    def move_lift(self, s):
+        self.moves.append(("lift", s))
+
+
+def test_move_tags_come_out_of_the_words_and_unknown_ones_are_never_spoken():
+    assert vector_moves.split("Oh, a cat! [look_up] Hi [Wiggle] there [dance].") == ("Oh, a cat! Hi there .", ["look_up", "wiggle"])
+    assert vector_moves.split("[nod] [nod] [nod] Yes.")[1] == ["nod", "nod"]                # at most two per sentence
+    assert "[turn_left]" in vector_moves.prompt_hint(False) and "[turn_left]" not in vector_moves.prompt_hint(True)
+
+
+def test_moves_run_and_sitting_keeps_his_wheels_still():
+    body = Body()
+    vector_moves.perform(body, ["nod", "wiggle"], sitting=True)
+    assert body.moves and all(m == "head" for m, _ in body.moves)                        # the wiggle needs his wheels: skipped
+    body = Body()
+    vector_moves.perform(body, ["turn_left", "arms_up"], sitting=False)
+    assert ("turn", 35) in body.moves and ("lift", 4.0) in body.moves
+
+
+def test_what_do_you_see_is_a_conversation_with_moves_and_rosie_remembers_it(monkeypatch):
+    import queue as _q
+    played, performed = [], []
+    bot = types.SimpleNamespace(ip="", picture=lambda: b"jpg", borrow=lambda *a, **k: None,
+                                play=lambda pcm, ctl=None: played.append(pcm))
+    monkeypatch.setattr(vector_pod, "robot", lambda: bot)
+    monkeypatch.setattr(vector_pod, "_robot_obj", None)
+    monkeypatch.setattr(vector_pod, "rosie_voice", lambda: True)
+    monkeypatch.setattr(vector_pod, "tts", lambda words: ([0.0] * 160, 16000))
+    monkeypatch.setattr(vector_pod, "TAKE_CONTROL_AFTER_S", 0)
+    monkeypatch.setattr(vector_pod, "_vision_stream", lambda jpg, system, q, num_predict=160: iter(["A mug of coffee! [look_up] ", "Long night, huh? [wiggle]"]))
+    monkeypatch.setattr(vector_moves, "perform", lambda b, moves, sitting=False: performed.append(moves))
+    cfg = config.load()
+    cfg["vector_followup"] = False
+    config.save(cfg)
+    tasks = []
+    monkeypatch.setattr(vector_pod, "_later", lambda fn, *a: tasks.append((fn, a)))
+    assert vector_pod.route("what do you see", time.time()) == ("intent", vector_pod.ROSIE_SPEAKS_INTENT, {})
+    fn, a = tasks[0]
+    fn(*a)                                                                                # the conversation itself
+    deadline = time.time() + 3
+    while len(performed) < 2 and time.time() < deadline:
+        time.sleep(0.02)
+    assert len(played) == 2 and performed == [["look_up"], ["wiggle"]]                   # a closing tag still moves him
+    assert vector_pod.status["scene"]["saw"] == "A mug of coffee! Long night, huh?"
+
+
+# --- heat and a sleeping camera (vic-engine crash 2026-10-24) -------------------------------------------------------
+def test_no_picture_is_asked_for_while_he_sleeps(monkeypatch):
+    calls = []
+    bot = vector_bot.Robot.__new__(vector_bot.Robot)
+    bot.stub = types.SimpleNamespace(CaptureSingleImage=lambda *a, **k: calls.append(1))
+    monkeypatch.setattr(bot, "asleep", lambda: True)
+    try:
+        bot.picture()
+        raise AssertionError("must not ask his sleeping camera")
+    except vector_bot.CameraAsleep:
+        pass
+    assert calls == []
+    monkeypatch.setattr(vector_pod, "robot", lambda: bot)
+    assert "napping" in vector_pod.see("what do you see")
+
+
+def test_the_eye_sweep_rests_under_the_sit_screens_and_when_he_is_hot():
+    import vector_dev
+    sets = []
+    bot = types.SimpleNamespace(ip="x", has_control=lambda: True, eye_color=lambda h, s: sets.append(h), save_eye_color=lambda h, s: sets.append(h))
+    covered = {"v": True}
+    sweep = vector_dev.EyeSweep(bot, step_s=0.01, idle_step_s=0.01, covered=lambda: covered["v"]).start()
+    time.sleep(0.15)
+    assert sets == []
+    covered["v"] = False
+    time.sleep(0.15)
+    sweep.stop()
+    assert sets
+
+
+def test_heat_has_hysteresis(monkeypatch):
+    temps = iter([73.0, 70.0, 66.0])
+    monkeypatch.setattr(vector_pod, "robot_temp", lambda ip: next(temps))
+    monkeypatch.setattr(vector_pod, "_hot", False)
+    vector_pod._check_heat("x")
+    assert vector_pod._hot
+    vector_pod._check_heat("x")
+    assert vector_pod._hot                                                                # still cooling down
+    vector_pod._check_heat("x")
+    assert not vector_pod._hot and vector_pod.status["temp_c"] == 66.0

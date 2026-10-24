@@ -721,6 +721,28 @@ def badges():
             "pages_off": pages_off(), "google_login": plat.google_login(), "gmail_login": plat.google_login("main"), "pages_hidden": config.load().get("hidden_pages") or []}
 
 
+@router.get("/api/canvas")
+def canvas_status():
+    import canvas
+    return canvas.status()
+
+
+@router.post("/api/canvas/url")
+def canvas_url(body: dict):
+    import canvas
+    try:
+        return canvas.set_url(str(body.get("url") or ""))
+    except ValueError as e:
+        return err(str(e))
+
+
+@router.post("/api/canvas/sync")
+def canvas_sync():
+    import canvas
+    r = canvas.sync()
+    return err(r["error"], 502) if r.get("error") and not r.get("last_run") else {**canvas.status(), "result": r}
+
+
 @router.post("/api/look/theme")
 def look_theme(body: dict):
     """This Rosie's default theme, for every device that has not picked its own (Settings > Display)."""

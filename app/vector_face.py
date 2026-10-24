@@ -166,6 +166,23 @@ def _fetch_events():
         _events["at"], _events["busy"] = time.time(), False
 
 
+def upcoming() -> list[tuple[str, float]]:
+    """[(title, start epoch)] of today's calendar from the same cache as his NEXT screen (refreshed in the background)."""
+    if time.time() - _events["at"] > 300 and not _events["busy"]:
+        _events["busy"] = True
+        threading.Thread(target=_fetch_events, daemon=True, name="vector-face-cal").start()
+    out = []
+    for e in _events["list"]:
+        start = str(e.get("start", ""))
+        if "T" not in start:
+            continue                                      # all-day events: no heads-up
+        try:
+            out.append((e.get("summary") or e.get("title") or "Event", dt.datetime.fromisoformat(start).timestamp()))
+        except ValueError:
+            continue
+    return out
+
+
 def next_event(ctx):
     """Calendar from a cache refreshed in the background once a minute: a slow Google call never freezes his face."""
     if time.time() - _events["at"] > 60 and not _events["busy"]:

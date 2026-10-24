@@ -42,6 +42,7 @@ DEFAULTS = {
     "mail_flag": True,              # pop-up + Inbox item for important mail
     "mail_find_tasks": True,        # propose tasks/events found in mail (you approve)
     "mail_digest": True,            # email section in the daily brief
+    "canvas_time": "07:00",          # the daily Canvas due-date sync (Settings > Canvas; off until a feed link is saved)
     "mail_organize": False,         # sort mail into your own Gmail labels (you approve each batch on the Mail page)
     "mail_organize_archive": False, # also take labeled mail out of the Inbox (off: labels only)
     "mail_labels": {},              # {Gmail label name: short hint for the model}: the only labels Rosie may use; empty until you pick
@@ -93,6 +94,7 @@ DEFAULTS = {
     "vector_followup": True,          # after he answers, he listens again for a follow-up (no wake word); silence ends the talk
     "vector_voice": "rosie",          # "rosie" = her own voice streamed to his speaker; "vector" = his built-in voice
     "vector_backpack": "own",         # WireOS: "rosie" = his backpack light patterns in cyan and purple (vector_pod.set_backpack_theme)
+    "vector_life": "some",            # he speaks up on his own (picked up, petted, greeting you): off, some or lots (vector_life.py)
     "vector_pad": True,               # a game controller paired with this PC drives him (vector_pad.py; Linux)
     "vector_pad_speed": "normal",     # his top driving speed with the controller: slow, normal or fast
     "vector_wake_word": "hey vector",   # WireOS only: "hey rosie" puts Rosie's keyword file on him (vector_pod.set_wake_word)

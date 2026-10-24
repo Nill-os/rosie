@@ -9,6 +9,7 @@ import config
 import vector_bot
 import vector_face
 import vector_intents
+import vector_life
 import vector_pad
 import vector_pod
 
@@ -39,7 +40,8 @@ def vector_status():
             "personality": cfg.get("vector_personality", ""), "commands": cfg.get("vector_commands") or [],
             "built_in": vector_intents.DEFAULT_COMMANDS, "face_panels": cfg.get("vector_face_panels") or [], "face_seconds": cfg.get("vector_face_seconds") or 15,
             "quiet_idle": bool(cfg.get("vector_quiet_idle")), "wake_word": cfg.get("vector_wake_word") or "hey vector", "backpack": cfg.get("vector_backpack") or "own", "voice": cfg.get("vector_voice") or "rosie", "eyes": cfg.get("vector_eyes") or "rosie",
-            "followup": cfg.get("vector_followup", True), "stt_model": cfg.get("vector_stt_model") or "base.en", "talk_volume": cfg.get("vector_talk_volume") or "MEDIUM",
+            "followup": cfg.get("vector_followup", True),
+            "life": {"level": cfg.get("vector_life") or "some", "mood": vector_pod._alive.mood.describe() if vector_pod._alive else "", "last": vector_pod._alive.last if vector_pod._alive else None}, "stt_model": cfg.get("vector_stt_model") or "base.en", "talk_volume": cfg.get("vector_talk_volume") or "MEDIUM",
             "pad": {**vector_pad.status, "on": cfg.get("vector_pad", True), "speed": cfg.get("vector_pad_speed") or "normal"}, "wirepod": (vector_pod.WIREPOD / "jdocs" / "jdocs.json").exists()}
 
 
@@ -63,6 +65,8 @@ def vector_settings(body: dict):
         cfg["vector_eyes"] = body["eyes"]
     if "followup" in body:
         cfg["vector_followup"] = bool(body["followup"])
+    if body.get("life") in vector_life.LEVELS:
+        cfg["vector_life"] = body["life"]
     if "pad" in body:
         cfg["vector_pad"] = bool(body["pad"])
     if body.get("pad_speed") in vector_pad.SPEEDS:

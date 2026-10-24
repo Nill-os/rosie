@@ -23,8 +23,12 @@ CONNECT_S = 6
 SIT_PRIORITY = behavior_pb2.ControlRequest.DEFAULT
 # His face menu (vector_menu.py) holds at OVERRIDE_BEHAVIORS so more backpack button presses don't start his listening.
 MENU_PRIORITY = behavior_pb2.ControlRequest.OVERRIDE_BEHAVIORS
+# Driving with the controller: at DEFAULT his own reactions (unexpected movement and the like) took the wheels back
+# mid-drive, "like he is fighting the tracks" (owner 2026-10-24).
+DRIVE_PRIORITY = behavior_pb2.ControlRequest.OVERRIDE_BEHAVIORS
 FIRST_SDK_TAG, LAST_SDK_TAG = 2000001, 3000000         # his actions (turn, drive straight, head angle) need an id_tag in this range
 _tags = iter(range(FIRST_SDK_TAG, LAST_SDK_TAG))
+CALM_POWER_MODE = 0x400                              # RobotState.status bit (ROBOT_STATUS_CALM_POWER_MODE): sleeping, camera off
 BUTTON_PRESSED = 0x10                                # RobotState.status bit (ROBOT_STATUS_IS_BUTTON_PRESSED)
 
 
@@ -80,14 +84,14 @@ class Robot:
         """Sitting: Rosie holds him (also while control is away for a moment: she takes it back)."""
         return bool(self._hold and self._hold.alive())
 
-    def hold(self, timeout=8.0) -> bool:
+    def hold(self, timeout=8.0, priority=SIT_PRIORITY) -> bool:
         """Keep Vector still: his own behaviors (wandering, exploring, idle animations) stay off until release()."""
         with self._lock:
             if self.held:
                 return True
             if self._hold:
                 self._hold.stop()
-            self._priority = SIT_PRIORITY
+            self._priority = priority
             self._hold = _Control(self.stub, self._priority, keep=True)
             if self._hold.start(timeout):
                 return True
@@ -259,9 +263,11 @@ class Robot:
         self._update_settings({"custom_eye_color": {"enabled": True, "hue": hue, "saturation": saturation}})
 
     # motors (need control: vector_pad.py holds him while you drive) ------------------------------------------------
-    def drive(self, left_mmps: float, right_mmps: float):
-        """Wheel speeds in mm/s (about 220 is his top speed); they keep going until the next call."""
-        self.stub.DriveWheels(messages_pb2.DriveWheelsRequest(left_wheel_mmps=left_mmps, right_wheel_mmps=right_mmps), timeout=3)
+    def drive(self, left_mmps: float, right_mmps: float, accel: float = 0.0):
+        """Wheel speeds in mm/s (about 220 is his top speed); they keep going until the next call. accel (mm/s^2) ramps
+        to the new speed instead of jumping (0 = at once)."""
+        self.stub.DriveWheels(messages_pb2.DriveWheelsRequest(left_wheel_mmps=left_mmps, right_wheel_mmps=right_mmps,
+                                                              left_wheel_mmps2=accel, right_wheel_mmps2=accel), timeout=3)
 
     def move_head(self, rad_per_s: float):
         """Tilt his head up (+) or down (-) until 0 or the end of its travel."""
@@ -294,15 +300,40 @@ class Robot:
         """Drive straight (negative = back) and wait until done; his cliff sensors still stop him."""
         self.stub.DriveStraight(messages_pb2.DriveStraightRequest(speed_mmps=speed_mmps, dist_mm=mm, num_retries=1, id_tag=next(_tags)), timeout=20)
 
+    def drive_on_charger(self):
+        """He finds his charger and backs onto it (his own docking), with control at DEFAULT so cliffs still win."""
+        ctl = self.borrow(priority=behavior_pb2.ControlRequest.DEFAULT)
+        try:
+            self.stub.DriveOnCharger(messages_pb2.DriveOnChargerRequest(), timeout=90)
+        finally:
+            if ctl is not None:
+                ctl.stop()
+
     def head_angle(self, degrees: float):
         """Point his head (-22 down to 45 up) and wait until done."""
         import math
         self.stub.SetHeadAngle(messages_pb2.SetHeadAngleRequest(angle_rad=math.radians(degrees), max_speed_rad_per_sec=3.0,
                                                                 accel_rad_per_sec2=10.0, num_retries=1, id_tag=next(_tags)), timeout=8)
 
+    def asleep(self) -> bool:
+        """In power-save sleep (calm power mode): his camera is off. Unknown counts as awake."""
+        try:
+            call = self.states()
+            for ev in call:
+                if ev.event.WhichOneof("event_type") == "robot_state":
+                    call.cancel()
+                    return bool(ev.event.robot_state.status & CALM_POWER_MODE)
+        except Exception:
+            pass
+        return False
+
     def picture(self, high_res=False) -> bytes:
-        """One camera frame (JPEG bytes)."""
-        r = self.stub.CaptureSingleImage(messages_pb2.CaptureSingleImageRequest(enable_high_resolution=high_res), timeout=10)
+        """One camera frame (JPEG bytes). Never asked for while he sleeps: on 2026-10-24 two requests made while a heat
+        warning had him in emergency sleep (camera powered off) waited in his engine, were answered when he was picked
+        up, and his engine crashed (SIGSEGV) restarting the camera four seconds later."""
+        if self.asleep():
+            raise CameraAsleep("his camera is off while he sleeps")
+        r = self.stub.CaptureSingleImage(messages_pb2.CaptureSingleImageRequest(enable_high_resolution=high_res), timeout=6)
         return r.data
 
     def show(self, rgb565: bytes, duration_ms: int):
@@ -321,6 +352,10 @@ class Robot:
     def volume(self, level: str):
         """level: VOLUME_LOW, VOLUME_MEDIUM_LOW, VOLUME_MEDIUM, VOLUME_MEDIUM_HIGH or VOLUME_HIGH."""
         self.stub.SetMasterVolume(messages_pb2.MasterVolumeRequest(volume_level=messages_pb2.MasterVolumeLevel.Value(level)), timeout=5)
+
+
+class CameraAsleep(RuntimeError):
+    pass
 
 
 class _Control:
