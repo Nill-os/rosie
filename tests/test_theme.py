@@ -92,8 +92,8 @@ def test_the_deck_follows_the_theme_with_the_same_readable_colors():
 
 def test_the_menu_groups_pages_by_what_she_is_doing_and_settings_stands_alone():
     js = (ROOT / "static" / "app.js").read_text()
-    heads = re.findall(r"\['-', '([^']*)'\]", js[js.index("const NAV = ["):js.index("NAV.splice(")])
+    nav = re.search(r"const NAV = \[.*?\]\];", js, re.S).group(0)      # the public copy has no private line after it: find the list's own end
+    heads = re.findall(r"\['-', '([^']*)'\]", nav)
     assert heads == ["My day", "Learn and grow", "Work", "Rosie and helpers", "Advanced", ""]
-    nav = js[js.index("const NAV = ["):js.index("NAV.splice(")]
     assert nav.index("'study'") < nav.index("'lifequest'") < nav.index("'-', 'Work'") and nav.rstrip().endswith("['settings', '⚙', 'Settings']];")
     assert "store.get('nav.folded', ['Advanced'])" in js and "navRail()" in js      # Advanced starts folded; the icon rail never folds
