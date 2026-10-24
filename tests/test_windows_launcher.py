@@ -361,3 +361,17 @@ def test_the_sign_in_file_is_copied_into_an_older_install_and_the_installer_crea
     assert "Rosie Google Sign-in.bat" in ps and "Rosie Google Sign-in.lnk" in ps
     assert "--google-login" in (SRC.parent / "Rosie Google Sign-in.bat").read_text()
     assert "--google-login" in SRC.read_text(encoding="utf-8")
+
+
+def test_the_update_check_starts_the_new_version_on_a_free_port(L):
+    """Her 02:35 check on 2026-10-24 failed: the fixed port 8766 was Rosie's own tool line for Agent Zero on Windows."""
+    import socket
+    with socket.socket() as busy:
+        busy.bind(("127.0.0.1", 0))
+        busy.listen()
+        taken = busy.getsockname()[1]
+        p = L.free_port()
+        assert p != taken and 1024 <= p <= 65535
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", p))
+    assert not hasattr(L, "STAGE_PORT")

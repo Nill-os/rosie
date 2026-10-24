@@ -29,6 +29,7 @@ import json
 import os
 import secrets as _secrets
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -44,7 +45,7 @@ STATE = ROOT / "state.json"
 LOG = ROOT / "update.log"
 SETTINGS = ROOT / "update.json"
 SHARED = ("data", "secrets", "vault")          # one copy in ROOT, linked into each slot
-PORT, STAGE_PORT = 8765, 8766
+PORT = 8765
 PROXY_PORT = 8771                                      # a0_proxy_port's default
 CHECK_EVERY_S = 6 * 3600
 PROBATION_S = 30 * 60
@@ -267,6 +268,13 @@ def healthz(port=PORT, timeout=3) -> dict | None:
         return None
 
 
+def free_port() -> int:
+    """A port nothing listens on right now. A fixed one clashed: on Windows Rosie's tool line for Agent Zero (a0_mcp) uses 8766."""
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
 def smoke(slot: str) -> dict:
     """Start the candidate once on a spare port with a copy of the data (sandboxed: no jobs, no mail) and check the basics."""
     tmp = Path(tempfile.mkdtemp(prefix="rosie-check-"))
@@ -286,11 +294,12 @@ def smoke(slot: str) -> dict:
         (tmp / "secrets" / "session_key").write_text(key)
         (tmp / "secrets" / "access_code").write_text("CHEC-KING-UPDT\n")
         me = f"{slot}-check-{_secrets.token_hex(4)}"
-        proc = subprocess.Popen(server_cmd(slot, STAGE_PORT, "127.0.0.1"), cwd=tmp / "app", env={**_env(), "ROSIE_SANDBOX": "1", "ROSIE_SLOT": me},
+        stage = free_port()
+        proc = subprocess.Popen(server_cmd(slot, stage, "127.0.0.1"), cwd=tmp / "app", env={**_env(), "ROSIE_SANDBOX": "1", "ROSIE_SLOT": me},
                                 stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         up = None
         for _ in range(120):
-            h = healthz(STAGE_PORT, 2)
+            h = healthz(stage, 2)
             up = h if h and h.get("slot") == me else None
             if up or proc.poll() is not None:
                 break
@@ -300,10 +309,10 @@ def smoke(slot: str) -> dict:
             out["error"] = proc.stderr.read().decode(errors="replace")[-600:] if proc.poll() is not None else "no answer in 2 minutes"
             return out
         cookie = hmac.new(key.encode(), b"assistant-ok", hashlib.sha256).hexdigest()
-        req = urllib.request.Request(f"http://127.0.0.1:{STAGE_PORT}/api/home", headers={"Cookie": f"assistant_session={cookie}"})
+        req = urllib.request.Request(f"http://127.0.0.1:{stage}/api/home", headers={"Cookie": f"assistant_session={cookie}"})
         with urllib.request.urlopen(req, timeout=60) as r:
             out["checks"]["home_page"] = bool(json.loads(r.read()).get("date"))
-        with urllib.request.urlopen(f"http://127.0.0.1:{STAGE_PORT}/", timeout=20) as r:
+        with urllib.request.urlopen(f"http://127.0.0.1:{stage}/", timeout=20) as r:
             out["checks"]["pages"] = r.status == 200
         out["ok"] = all(out["checks"].values())
     except Exception as e:
