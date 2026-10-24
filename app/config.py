@@ -93,6 +93,8 @@ DEFAULTS = {
     "vector_followup": True,          # after he answers, he listens again for a follow-up (no wake word); silence ends the talk
     "vector_voice": "rosie",          # "rosie" = her own voice streamed to his speaker; "vector" = his built-in voice
     "vector_backpack": "own",         # WireOS: "rosie" = his backpack light patterns in cyan and purple (vector_pod.set_backpack_theme)
+    "vector_pad": True,               # a game controller paired with this PC drives him (vector_pad.py; Linux)
+    "vector_pad_speed": "normal",     # his top driving speed with the controller: slow, normal or fast
     "vector_wake_word": "hey vector",   # WireOS only: "hey rosie" puts Rosie's keyword file on him (vector_pod.set_wake_word)
     "vector_escapepod": False,        # his firmware is DDL's escape pod build: Rosie answers as escapepod.local:443 (set by Connect)
     "vector_robots": [],              # [{"esn": "00808493", "ip": "192.168.1.15"}]: only these robots may use the server

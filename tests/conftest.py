@@ -64,15 +64,16 @@ PATCHES = [("config", "PATH", "config.json"), ("tasks", "DB", "tasks.db"), ("lif
            ("a0_mcp", "AUDIT", "mcp_audit.log"), ("a0_api", "AUDIT", "mcp_audit.log"), ("paper", "DB", "paper.db"), ("paper", "DIR", "paper"), ("paper", "REDDIT_KEYS", "secrets/reddit.json"),
            ("agentboard", "DB", "board.db"), ("agentboard", "OPS", "rosie-ops"), ("agentboard", "SESSIONS", "claude-sessions"), ("claude_plan", "STATE", "claude_plan.json"), ("model_scout", "STATE", "model_scout.json"), ("security_watch", "STATE", "security_watch.json"), ("servers", "STATE", "servers.json"), ("ctxsize", "LIVE_FILE", "live_model.json"), ("claude_plan", "WORKDIR", "claude_plan_cwd"), ("skill_sync", "CLAUDE", "claude-home"), ("skill_sync", "CLAUDE_SKILLS", "claude-home/skills"), ("skill_sync", "A0_SKILLS", "a0-skills"), ("skill_sync", "STATE", "skill_sync.json"), ("skill_sync", "APPROVED", "skill_sync_approved.json"), ("hub", "ORCH", "claude-home/skills/orchestrate/state.json"),
            ("server", "VECTOR_CHAT", "vector_chat.json"), ("server", "ICON", "icon.svg"), ("vector_pod", "DIR", "vector"), ("vector_pod", "CERT", "vector/cert.pem"), ("vector_pod", "KEY", "vector/key.pem"),
-           ("vector_pod", "DOCS", "vector/jdocs.json"), ("vector_pod", "TOKEN", "vector/client_token"), ("vector_pod", "SSH_KEY", "vector/ssh_root_key"), ("vector_pod", "WIREPOD", "wire-pod"), ("vector_pod", "EP_CERT", "vector/ep.crt"), ("vector_pod", "EP_KEY", "vector/ep.key"), ("vector_pod", "HEY_ROSIE", "vector/hey_rosie_1-5.ppn"), ("vector_pod", "LAST_HEARD", "vector/last_heard.wav")]
+           ("vector_pod", "DOCS", "vector/jdocs.json"), ("vector_pod", "TOKEN", "vector/client_token"), ("vector_pod", "SSH_KEY", "vector/ssh_root_key"), ("vector_pod", "WIREPOD", "wire-pod"), ("vector_pod", "EP_CERT", "vector/ep.crt"), ("vector_pod", "EP_KEY", "vector/ep.key"), ("vector_pod", "HEY_ROSIE", "vector/hey_rosie_1-5.ppn"), ("vector_pod", "LAST_HEARD", "vector/last_heard.wav"),
+           ("vector_pad", "SYS", "input"), ("vector_pad", "DEV", "dev-input")]
 ALWAYS = ("config", "tasks", "inbox", "chats", "memory", "lessons", "proposals", "skills", "pc_tools", "server",
-          "briefs", "projects", "mailwatch", "mailorganize", "gcal", "gmail", "workflows", "corner_graph", "a0", "paper", "agentboard", "skill_sync", "vector_pod", "lifequest", "board_link", "study")
+          "briefs", "projects", "mailwatch", "mailorganize", "gcal", "gmail", "workflows", "corner_graph", "a0", "paper", "agentboard", "skill_sync", "vector_pod", "vector_pad", "lifequest", "board_link", "study")
 
 
 # Linux-only parts (owner 2026-10-23, the Windows copy): on Windows these features are off (hub.pages_off) or replaced, so their tests
 # don't run there. Everything else runs on both.
 LINUX_ONLY = ["test_agentdeck.py", "test_backup.py", "test_slots.py", "test_selfdev.py", "test_skill_sync.py", "test_a0_monitor.py",
-              "test_audit_1020.py", "test_vector.py", "test_terminals.py", "test_dictation.py", "test_overlay.py", "test_meetings.py",
+              "test_audit_1020.py", "test_vector.py", "test_vector_pad.py", "test_terminals.py", "test_dictation.py", "test_overlay.py", "test_meetings.py",
               "test_power.py", "test_security_watch.py"]
 collect_ignore = LINUX_ONLY if sys.platform == "win32" else []
 

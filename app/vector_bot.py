@@ -248,6 +248,27 @@ class Robot:
         protos have no field for it, so this uses his gateway's JSON route with the same token and pinned certificate."""
         self._update_settings({"custom_eye_color": {"enabled": True, "hue": hue, "saturation": saturation}})
 
+    # motors (need control: vector_pad.py holds him while you drive) ------------------------------------------------
+    def drive(self, left_mmps: float, right_mmps: float):
+        """Wheel speeds in mm/s (about 220 is his top speed); they keep going until the next call."""
+        self.stub.DriveWheels(messages_pb2.DriveWheelsRequest(left_wheel_mmps=left_mmps, right_wheel_mmps=right_mmps), timeout=3)
+
+    def move_head(self, rad_per_s: float):
+        """Tilt his head up (+) or down (-) until 0 or the end of its travel."""
+        self.stub.MoveHead(messages_pb2.MoveHeadRequest(speed_rad_per_sec=rad_per_s), timeout=3)
+
+    def move_lift(self, rad_per_s: float):
+        """Raise (+) or lower (-) his lift until 0 or the end of its travel."""
+        self.stub.MoveLift(messages_pb2.MoveLiftRequest(speed_rad_per_sec=rad_per_s), timeout=3)
+
+    def stop_motors(self):
+        self.stub.StopAllMotors(messages_pb2.StopAllMotorsRequest(), timeout=3)
+
+    def animate(self, trigger: str, ctl="borrow"):
+        """One of his own animations by trigger name (ListAnimationTriggers), with its sound."""
+        req = messages_pb2.PlayAnimationTriggerRequest(animation_trigger=messages_pb2.AnimationTrigger(name=trigger), loops=1)
+        return self._speaking(lambda: self.stub.PlayAnimationTrigger(req, timeout=30), ctl)
+
     def picture(self, high_res=False) -> bytes:
         """One camera frame (JPEG bytes)."""
         r = self.stub.CaptureSingleImage(messages_pb2.CaptureSingleImageRequest(enable_high_resolution=high_res), timeout=10)

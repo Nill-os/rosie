@@ -117,9 +117,28 @@ VIEWS.vector = async () => {
         } }), h('span', { class: 'tx' }, label)))),
       h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1));margin-top:6px' }, 'They take turns every few seconds. A running timer always shows. Ask Rosie for a new screen and she can add one.'));
 
+    const pad = d.pad || {};
+    const padState = !pad.supported ? 'Needs Linux on this PC.' : !pad.on ? 'Off.'
+      : pad.error ? pad.error : !pad.controller ? 'No controller found. Pair it with this PC (PS4: hold Share and PS until the light flashes), or plug it in.'
+        : `${pad.controller}: ${pad.driving ? 'driving mode' : 'connected'}.`;
+    const speeds = [['slow', 'Slow'], ['normal', 'Normal'], ['fast', 'Fast']];
+    const padMap = [['Left stick', 'Drive (pushing it starts driving mode)'], ['Right stick', 'Tilt his head'], ['L2 / R2', 'Lower / raise his lift'],
+      ['PS', 'Driving mode on or off'], ['Circle', 'Sit / you can move'], ['Triangle', 'What do you see?'], ['Cross', 'Rosie says a quick line'],
+      ['Square', 'One of his animations'], ['Options', 'He listens (no wake word)'], ['D-pad left/right', 'Next screen while he sits']];
+    const controller = h('div', { class: 'card' }, h('h3', {}, 'Controller'),
+      h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1));margin-bottom:8px' }, padState),
+      h('dl', { class: 'kv' },
+        h('dt', {}, 'Controller'), h('dd', {}, h('div', { class: 'seg' },
+          h('button', { class: pad.on ? 'on' : '', onclick: () => act('/api/vector/settings', { pad: true }, 'Controller on') }, 'On'),
+          h('button', { class: pad.on ? '' : 'on', onclick: () => act('/api/vector/settings', { pad: false }, 'Controller off') }, 'Off'))),
+        h('dt', {}, 'Speed'), h('dd', {}, h('div', { class: 'seg' }, speeds.map(([v, label]) =>
+          h('button', { class: (pad.speed || 'normal') === v ? 'on' : '', onclick: () => act('/api/vector/settings', { pad_speed: v }, 'Speed ' + label) }, label)))),
+        padMap.flatMap(([k, v]) => [h('dt', {}, k), h('dd', {}, v)])),
+      h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1));margin-top:6px' }, 'Driving mode ends with PS, Circle, “you can move”, two minutes without input, or when the controller turns off. Cliffs and his wake word still work.'));
+
     const y = $('#view').scrollTop;
     show(h('div', { class: 'pagehead' }, h('h2', {}, 'Vector'), h('span', { class: 'muted' }, 'Your robot, with Rosie as his brain. Local only: no wire-pod, no cloud.')),
-      h('div', { class: 'grid' }, status, control, setup, sounds, personality, face, commands));
+      h('div', { class: 'grid' }, status, control, controller, setup, sounds, personality, face, commands));
     $('#view').scrollTop = y;
   };
   clearInterval(vecTimer);

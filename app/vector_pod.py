@@ -33,6 +33,7 @@ import vector_bot
 import vector_dev
 import vector_face
 import vector_intents
+import vector_pad
 from vector_pb import chipperpb_pb2 as cpb, chipperpb_pb2_grpc as cgrpc
 from vector_pb import jdocs_pb2 as jpb, jdocs_pb2_grpc as jgrpc
 from vector_pb import token_pb2 as tpb, token_pb2_grpc as tgrpc
@@ -517,6 +518,14 @@ def sit(bot, say_first: str = "") -> bool:
     _face = vector_face.FaceLoop(bot, timers, every=float(config.load().get("vector_face_seconds") or 15)).start()
     _later(_back_to_sitting)
     return True
+
+
+def stop_face():
+    """Sit screens off, Rosie keeps holding him (game controller driving mode)."""
+    global _face
+    if _face is not None:
+        _face.stop()
+        _face = None
 
 
 def stand(bot, say_after: str = ""):
@@ -1040,10 +1049,10 @@ def _keep_looks(srv):
     quiet when idle. Checked every minute while this server runs."""
     global _eyes
     while _server is srv:
-        cfg = config.load()
-        robots = cfg.get("vector_robots") or []
-        ip = robots[0].get("ip") if robots else ""
         try:
+            cfg = config.load()
+            robots = cfg.get("vector_robots") or []
+            ip = robots[0].get("ip") if robots else ""
             if ip and vector_dev.available(ip):
                 vector_dev.eye_sounds(ip, not cfg.get("vector_quiet_idle"))
                 want = (cfg.get("vector_eyes") or "rosie") == "rosie"
@@ -1094,6 +1103,7 @@ def _start() -> bool:
     threading.Thread(target=_warm_ears, daemon=True, name="vector-warm").start()
     threading.Thread(target=_watch_timers, args=(srv,), daemon=True, name="vector-timers").start()
     threading.Thread(target=_keep_looks, args=(srv,), daemon=True, name="vector-looks").start()
+    vector_pad.start()
     if ep:
         _publish_mdns(addr)
     else:
@@ -1113,6 +1123,7 @@ def stop():
 
 def _stop():
     global _server, _check, _robot_obj, _face, _mdns
+    vector_pad.stop()
     if _mdns is not None:
         _mdns.terminate()
         try:
