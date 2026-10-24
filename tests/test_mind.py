@@ -294,7 +294,7 @@ def test_skill_search_results_are_parsed_and_unsafe_skills_refused(monkeypatch, 
     monkeypatch.setattr(skill_finder, "fetch_skill", lambda p: {"package": p, "name": "pdf-forms", "url": "https://raw.githubusercontent.com/o/r/HEAD/skills/pdf-forms/SKILL.md",
                                                                "text": good, "files": []})
     r = skill_finder.install_skill("o/r@pdf-forms")
-    assert r["status"] == "added" and (skills.DIR / "pdf-forms.md").read_text().startswith("Use when filling in PDF forms.\n\nSource: https://")
+    assert r["status"] == "added" and (skills.DIR / "pdf-forms.md").read_text(encoding="utf-8").startswith("Use when filling in PDF forms.\n\nSource: https://")
     assert ("pdf-forms", "Use when filling in PDF forms.") in skills.listing()
     (skills.DIR / "plan-my-day.md").write_text("Use when planning.\n\nOwner's own steps.\n")
     monkeypatch.setattr(skill_finder, "fetch_skill", lambda p: {"package": p, "name": "plan-my-day", "url": "u", "text": good.replace("pdf-forms", "plan-my-day"), "files": []})

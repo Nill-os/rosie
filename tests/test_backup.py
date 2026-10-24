@@ -69,7 +69,7 @@ def test_restore_never_overwrites_a_live_folder(world):
     (world["tmp"] / "live" / "keep.txt").write_text("mine")
     with pytest.raises(SystemExit):
         backup.restore(f, world["tmp"] / "live")
-    assert (world["tmp"] / "live" / "keep.txt").read_text() == "mine"
+    assert (world["tmp"] / "live" / "keep.txt").read_text(encoding="utf-8") == "mine"
 
 
 def test_consistent_copy_while_the_database_is_in_use(world):
@@ -94,6 +94,6 @@ def test_rotation_keeps_the_newest(world, monkeypatch):
 
 def test_passphrase_is_created_once_with_private_permissions(world):
     p = backup.passphrase_file()
-    first = p.read_text()
+    first = p.read_text(encoding="utf-8")
     assert len(first.strip()) >= 40 and oct(p.stat().st_mode)[-3:] == "600"
-    assert backup.passphrase_file().read_text() == first
+    assert backup.passphrase_file().read_text(encoding="utf-8") == first

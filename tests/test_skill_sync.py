@@ -49,7 +49,7 @@ def test_a_claude_skill_reaches_rosie_and_agent_zero(world):
     pb = skills.use_skill("prusa-xl")["instructions"]
     assert pb.startswith("Use for the owner's Prusa XL printer.") and "Mirrored-from: claude:" in pb and "Skill folder:" not in pb   # ~/.claude is blocked to her (skill audit pass 2)
     assert "Slice with PrusaSlicer." in pb
-    assert (ss.A0_SKILLS / "prusa-xl" / "scripts" / "slice.sh").read_text() == "echo hi"
+    assert (ss.A0_SKILLS / "prusa-xl" / "scripts" / "slice.sh").read_text(encoding="utf-8") == "echo hi"
     assert (ss.A0_SKILLS / "prusa-xl" / ss.MARK).exists()
     assert ss.sync()["added"] == [] and ss.sync()["updated"] == []                       # nothing changed: nothing rewritten
 
@@ -59,14 +59,14 @@ def test_rosies_and_agent_zeros_own_skills_reach_the_others(world):
     (skills.DIR / "garden-care.md").write_text("Use for plants and the garden.\n\n1. recall(kind=garden) first.\n")
     _skill(ss.A0_SKILLS, "harness2", "Use to run harness2 experiments.")
     ss.sync()
-    claude = (ss.CLAUDE_SKILLS / "garden-care" / "SKILL.md").read_text()
+    claude = (ss.CLAUDE_SKILLS / "garden-care" / "SKILL.md").read_text(encoding="utf-8")
     assert 'description: "Use for plants and the garden."' in claude and "Rosie's playbook" in claude
     assert (ss.A0_SKILLS / "garden-care" / "SKILL.md").exists()
     assert not (ss.CLAUDE_SKILLS / "harness2").exists()                     # Agent Zero's own skill waits for the owner's OK
     held = ss.approve("harness2")                                            # no version: refused, and told the current one
     assert "error" in held and ss.approve("harness2", held["version"])["approved"] == "harness2"
     ss.sync()
-    assert (ss.CLAUDE_SKILLS / "harness2" / ss.MARK).read_text().startswith("agent-zero:")
+    assert (ss.CLAUDE_SKILLS / "harness2" / ss.MARK).read_text(encoding="utf-8").startswith("agent-zero:")
     assert skills.copied("harness2") and not skills.copied("garden-care")
 
 
@@ -122,7 +122,7 @@ def test_a_bundled_skill_points_rosie_at_its_folder_and_follows_a_slot_switch(wo
     monkeypatch.setattr(ss, "BUNDLE", tmp_path / "A" / "skills")
     assert "rosie:gcode" in ss.sync()["added"]
     assert f"Skill folder: {tmp_path / 'A' / 'skills' / 'gcode'}" in skills.use_skill("gcode")["instructions"]
-    assert (ss.A0_SKILLS / "gcode" / "references" / "x.md").read_text() == "ref"
+    assert (ss.A0_SKILLS / "gcode" / "references" / "x.md").read_text(encoding="utf-8") == "ref"
     monkeypatch.setattr(ss, "BUNDLE", tmp_path / "B" / "skills")                         # an update switched slots
     assert "rosie:gcode" in ss.sync()["updated"]
     assert f"Skill folder: {tmp_path / 'B' / 'skills' / 'gcode'}" in skills.use_skill("gcode")["instructions"]

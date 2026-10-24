@@ -16,8 +16,10 @@ import secrets
 import shutil
 import struct
 import subprocess
+from pathlib import Path
 
 import corner
+import plat
 import testguard
 
 MAX_BYTES = 10 * 1024 * 1024
@@ -26,11 +28,21 @@ MIN_SIDE = 64
 SCAN_TIMEOUT = 600
 FORMATS = ("jpeg", "png", "gif", "webp")
 NO_SCANNER = "Pictures are off until the virus scanner is installed."
+WIN_SCANNER_HELP = (" On Windows: open PowerShell and run winget install Cisco.ClamAV, then copy conf_examples\\freshclam.conf.sample in "
+                    "C:\\Program Files\\ClamAV to freshclam.conf (delete its Example line), make a database folder next to it, run "
+                    "freshclam.exe once, and restart Rosie (she looks in that folder, so the PATH needs no change).")
 NO_PILLOW = "Pictures are off until the picture cleaner (Pillow) is installed."
 
 
 def scanner() -> str | None:
-    return shutil.which("clamscan")
+    found = shutil.which("clamscan")
+    if found or not plat.IS_WIN:
+        return found
+    for var in ("ProgramFiles", "ProgramW6432"):                       # winget's ClamAV doesn't add itself to the PATH
+        exe = Path(os.environ.get(var, "")) / "ClamAV" / "clamscan.exe"
+        if os.environ.get(var) and exe.exists():
+            return str(exe)
+    return None
 
 
 def _pil():
@@ -45,7 +57,7 @@ def _pil():
 
 def ready() -> tuple[bool, str]:
     if not scanner():
-        return False, NO_SCANNER
+        return False, NO_SCANNER + (WIN_SCANNER_HELP if plat.IS_WIN else "")
     if importlib.util.find_spec("PIL") is None:
         return False, NO_PILLOW
     return True, "Pictures are on: each one is virus-checked and cleaned before it is kept."
@@ -142,9 +154,11 @@ def scan(paths: list) -> dict:
         return {p: "error: no virus scanner" for p in out}
     if not paths:
         return {}
-    cmd = ["nice", "-n", "19", exe, "--no-summary", "--stdout", "--"] + [str(p) for p in paths]
+    low = ["nice", "-n", "19"] if shutil.which("nice") else []            # Windows has no nice: its own idle priority class instead
+    cmd = low + [exe, "--no-summary", "--stdout", "--"] + [str(p) for p in paths]
+    flags = (getattr(subprocess, "IDLE_PRIORITY_CLASS", 0) | plat.NO_WINDOW) if plat.IS_WIN else 0
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=SCAN_TIMEOUT)
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=SCAN_TIMEOUT, creationflags=flags)
     except (OSError, subprocess.SubprocessError) as e:
         return {p: f"error: {type(e).__name__}" for p in out}
     for line in r.stdout.splitlines():

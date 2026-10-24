@@ -13,6 +13,9 @@ DEFAULTS = {
     "owner_name": "",               # what Rosie calls you in her own prompts (her corner); empty = "your owner"
     "hidden_pages": [],             # pages left out of the menu (Settings > Menu), like ["vector"]
     "owner_notes": "",              # how you like help, added to her and Agent Zero's prompts (Settings > About you)
+    "board_link_repo": "",          # "owner/repo": share the agent board with another PC through issue board_link_issue (board_link.py)
+    "board_link_issue": 1,
+    "board_link_pc": "",            # this PC's short name on the shared board (default: its host name)
     "claude_planning": False,        # planning requests go to Claude (your Claude Code login), then Rosie carries out the plan (Settings > Planning; claude_plan.py). Off unless you turn it on: it sends your week to Anthropic
     "brain": "rosie",                # who answers chat: "rosie" = her own tool loop, "agent_zero" = Agent Zero with her tools (Settings > Brain; a0.py)
     "write_target": "test",          # "test" = Assistant Test calendar, "primary" = your real calendar
@@ -35,6 +38,9 @@ DEFAULTS = {
     "mail_flag": True,              # pop-up + Inbox item for important mail
     "mail_find_tasks": True,        # propose tasks/events found in mail (you approve)
     "mail_digest": True,            # email section in the daily brief
+    "mail_organize": False,         # sort mail into your own Gmail labels (you approve each batch on the Mail page)
+    "mail_organize_archive": False, # also take labeled mail out of the Inbox (off: labels only)
+    "mail_labels": {},              # {Gmail label name: short hint for the model}: the only labels Rosie may use; empty until you pick
     "agents": {                      # command templates; {prompt} is replaced by the (shell-quoted) task. Edit to add agents.
         "claude": "claude {prompt}",
         "codex": "codex {prompt}",

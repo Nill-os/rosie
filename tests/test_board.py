@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 import agentboard as board
+from conftest import needs_symlinks
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "ops"))
 import slots  # noqa: E402
@@ -163,6 +164,7 @@ def world(tmp_path, monkeypatch):
     return {"a": a, "b": b}
 
 
+@needs_symlinks
 def test_a_prepared_slot_is_claimed_and_other_agents_are_kept_out(world, monkeypatch):
     monkeypatch.setenv("ROSIE_AGENT", "helper")
     r = slots.prepare("mind fix")
@@ -170,7 +172,7 @@ def test_a_prepared_slot_is_claimed_and_other_agents_are_kept_out(world, monkeyp
     assert "prepared Rosie slot B" in board.recent()[-1]["text"]
     (world["b"] / "app" / "server.py").write_text("print('v2')\n")
     monkeypatch.setenv("ROSIE_AGENT", "autopilot")
-    assert slots.prepare("autopilot").get("claimed") and (world["b"] / "app" / "server.py").read_text() == "print('v2')\n"
+    assert slots.prepare("autopilot").get("claimed") and (world["b"] / "app" / "server.py").read_text(encoding="utf-8") == "print('v2')\n"
     assert slots.commit("autopilot: x").get("claimed") and slots.stage().get("claimed")
     assert "claimed by helper" in slots.status()["claimed_by"]
     assert slots.claim("audit")["ok"] is False
@@ -184,6 +186,7 @@ def test_a_prepared_slot_is_claimed_and_other_agents_are_kept_out(world, monkeyp
     assert board.claims() == [] and "switched Rosie to slot B" in board.recent()[-1]["text"]
 
 
+@needs_symlinks
 def test_forcing_a_prepare_takes_the_claim_over(world, monkeypatch):
     monkeypatch.setenv("ROSIE_AGENT", "rosie")
     slots.prepare("one")

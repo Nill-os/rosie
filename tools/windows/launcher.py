@@ -17,6 +17,8 @@ her own things. Standard library only: it must run before any library is install
     py launcher.py --status     what is installed and what the last check found
     py launcher.py --check-pc   what this PC already has (Ollama and its models, Docker, Agent Zero), changing nothing
     py launcher.py --setup      choose the model from what Ollama has, and connect Agent Zero as the brain
+    py launcher.py --google-login   sign in to Google Calendar and Gmail (Rosie Google Sign-in.bat does this)
+    py launcher.py --start-deps start Ollama, Docker Desktop and Agent Zero when they are not running (Rosie does this at every start)
 """
 from __future__ import annotations
 
@@ -49,6 +51,7 @@ IDLE_TO_SWITCH_S = 15 * 60                     # an update waits until nobody ha
 NIGHT = (2, 5)                                 # 02:00-05:00: switch even if the PC was used recently
 DEFAULTS = {"repo": "Nill-os/rosie", "branch": "main", "auto": True, "host": "127.0.0.1"}
 WIN = sys.platform == "win32"
+SIGN_IN_BAT = "Rosie Google Sign-in.bat"
 UA = {"User-Agent": "rosie-updater", "Accept": "application/vnd.github+json"}
 
 
@@ -405,6 +408,16 @@ def first_run():
             log(f"could not download the voice ({type(e).__name__}); Rosie works without it and tries again next start")
 
 
+def sign_in_file():
+    """Rosie Google Sign-in.bat for installs that began before it existed: copied from the active slot when it isn't in the Rosie folder."""
+    src = slot_dir(load()["active"]) / "tools" / "windows" / SIGN_IN_BAT
+    try:
+        if src.exists() and not (ROOT / SIGN_IN_BAT).exists():
+            shutil.copy2(src, ROOT / SIGN_IN_BAT)
+    except OSError:
+        pass
+
+
 def phone_address() -> str | None:
     """Tailscale, when installed and signed in: serve Rosie over HTTPS on this PC's Tailscale name, for the phone."""
     ts = shutil.which("tailscale") or (r"C:\Program Files\Tailscale\tailscale.exe" if WIN else None)
@@ -452,6 +465,132 @@ def find_agent_zero() -> dict:
     if not pick:
         return {"found": False, "why": "No Agent Zero container."}
     return {"found": True, "container": pick[0], "image": pick[1], "running": pick[2] == "running"}
+
+
+# ---------------------------------------------------------------- starting what Rosie needs (partner 2026-10-23: Rosie came up without
+# Ollama, Docker or Agent Zero when they were closed). Programs are only started here, never stopped; a program that can't start is
+# logged and Rosie starts anyway.
+DOCKER_WAIT_S = 180
+OLLAMA_WAIT_S = 45
+_wait = time.sleep                                   # replaced in tests
+_clock = time.monotonic
+
+
+def _spawn(args: list[str]) -> bool:
+    """Start a program on its own (it keeps running when Rosie's window closes). False when it can't be started."""
+    flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    try:
+        subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=flags)
+        return True
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def _until(ok, seconds: float, every: float = 3) -> bool:
+    end = _clock() + seconds
+    while True:
+        if ok():
+            return True
+        if _clock() >= end:
+            return False
+        _wait(every)
+
+
+def ollama_program() -> list[str] | None:
+    """How to start Ollama: its tray app when installed (it also serves), else `ollama serve`."""
+    base = Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Ollama"
+    app = base / "ollama app.exe"
+    if app.exists():
+        return [str(app)]
+    exe = shutil.which("ollama") or (str(base / "ollama.exe") if (base / "ollama.exe").exists() else None)
+    return [exe, "serve"] if exe else None
+
+
+def start_ollama() -> bool:
+    if ollama_models() is not None:
+        return True
+    cmd = ollama_program()
+    if not cmd:
+        log("Ollama is not installed; Rosie starts without it")
+        return False
+    log("starting Ollama")
+    if not _spawn(cmd) or not _until(lambda: ollama_models() is not None, OLLAMA_WAIT_S):
+        log("Ollama did not start; Rosie starts without it")
+        return False
+    return True
+
+
+def docker_up() -> bool:
+    r = _run(["docker", "info"], timeout=30)
+    return r is not None and r.returncode == 0
+
+
+def docker_desktop_exe() -> str | None:
+    for var in ("ProgramFiles", "ProgramW6432", "LOCALAPPDATA"):
+        if os.environ.get(var):
+            p = Path(os.environ[var]) / "Docker" / "Docker" / "Docker Desktop.exe"
+            if p.exists():
+                return str(p)
+    return None
+
+
+def start_docker() -> bool:
+    if docker_up():
+        return True
+    exe = docker_desktop_exe()
+    if not exe:
+        if shutil.which("docker"):
+            log("Docker is not running and Docker Desktop was not found; Rosie starts without Agent Zero")
+        return False
+    log(f"starting Docker Desktop (waiting up to {DOCKER_WAIT_S // 60} minutes)")
+    if not _spawn([exe]) or not _until(docker_up, DOCKER_WAIT_S, every=5):
+        log("Docker did not come up in time; Rosie starts without Agent Zero")
+        return False
+    return True
+
+
+def a0_container_name() -> str | None:
+    """The Agent Zero container Rosie saved (data/a0_host.json), else the one Docker lists."""
+    try:
+        name = json.loads((ROOT / "data" / "a0_host.json").read_text(encoding="utf-8")).get("container")
+    except (OSError, ValueError, AttributeError):
+        name = None
+    return name or find_agent_zero().get("container")
+
+
+def start_agent_zero() -> bool:
+    name = a0_container_name()
+    if not name:
+        return False
+    r = _run(["docker", "inspect", "-f", "{{.State.Running}}", name], timeout=30)
+    if r is None or r.returncode:
+        log(f"Agent Zero container {name} was not found; Rosie starts without it")
+        return False
+    if r.stdout.strip() == "true":
+        return True
+    log(f"starting Agent Zero ({name})")
+    r = _run(["docker", "start", name], timeout=60)
+    if r is None or r.returncode:
+        log("Agent Zero did not start; Rosie starts without it")
+        return False
+    return True
+
+
+def start_dependencies() -> dict:
+    """Ollama, Docker Desktop and the Agent Zero container, started when they are not running. Nothing here stops Rosie from starting."""
+    out = {}
+    for name, fn in (("ollama", start_ollama), ("docker", start_docker)):
+        try:
+            out[name] = fn()
+        except Exception as e:                       # never keep Rosie from starting
+            log(f"{name}: {e}")
+            out[name] = False
+    try:
+        out["agent_zero"] = out["docker"] and start_agent_zero()
+    except Exception as e:
+        log(f"agent zero: {e}")
+        out["agent_zero"] = False
+    return out
 
 
 def check_pc() -> dict:
@@ -522,6 +661,7 @@ def pick_model(models: list[str], ask=input) -> str | None:
 
 def setup():
     """After the install: check the PC, choose the model, and make Agent Zero the brain when it is there. Safe to run again."""
+    start_dependencies()
     pc = check_pc()
     print("\nThis PC:\n" + report(pc) + "\n", flush=True)
     if pc["models"] is None:
@@ -547,6 +687,29 @@ def setup():
     if r.returncode:
         print("  Agent Zero could not be connected (see above). Rosie answers her chat herself; run Rosie.bat --setup to try again.")
     return 0
+
+
+GOOGLE_STEPS = (("Google Calendar", "import gcal; gcal.login()"),
+                ("Gmail", "import gmail; print('Connected:', gmail.login(sys.argv[1] if len(sys.argv) > 1 else 'main'))"))
+
+
+def google_login(account: str = "main") -> int:
+    """Google sign-in for Calendar, then Gmail, with the active slot's Python (login.sh and login-gmail.sh are bash). A browser opens for each."""
+    if not (ROOT / "secrets" / "google_client.json").exists():
+        print("  Google sign-in needs your Google app file first: put google_client.json in " + str(ROOT / "secrets") + " (see the Rosie README), then run this again.")
+        return 1
+    slot = load()["active"]
+    if not venv_python(slot).exists():
+        print("  Rosie is not installed yet. Run the installer first.")
+        return 1
+    failed = 0
+    for name, code in GOOGLE_STEPS:
+        print(f"\n  {name}: a browser window opens. Pick your Google account and allow access.", flush=True)
+        r = subprocess.run([str(venv_python(slot)), "-c", "import sys; sys.path.insert(0, '.'); " + code, account], cwd=slot_dir(slot) / "app",
+                           env={**_env(), "ROSIE_SLOT": slot})
+        print(f"  {name}: " + ("connected." if r.returncode == 0 else "did not connect (see above). Run this again to retry."))
+        failed += bool(r.returncode)
+    return 1 if failed else 0
 
 
 # ---------------------------------------------------------------- running Rosie
@@ -589,6 +752,8 @@ def run():
         log("Rosie is not installed yet. Run the installer (or: launcher.py --install).")
         sys.exit(1)
     first_run()
+    sign_in_file()
+    start_dependencies()
     code = (ROOT / "secrets" / "access_code").read_text().strip()
     phone = phone_address()
     print(f"\n  Rosie: http://127.0.0.1:{PORT}    Access code: {code}" + (f"\n  Phone address (in the Rosie app): {phone}" if phone else "")
@@ -665,7 +830,53 @@ def install():
     log("installed")
 
 
+HOOK_EVENTS = ("SessionStart", "UserPromptSubmit", "PostToolUse", "Stop", "SessionEnd")
+
+
+def board_run(script: str, args: list) -> int:
+    """Run one of the live slot's board programs (app/board_hook.py, app/board_mcp.py) with this program's stdin and stdout, so Claude
+    Code's settings name this launcher once and keep working after every update switches slots."""
+    try:
+        slot = load().get("active") or "A"
+        return subprocess.call([str(venv_python(slot)), str(slot_dir(slot) / "app" / script), *args], cwd=str(slot_dir(slot) / "app"))
+    except OSError:
+        return 0                                                 # a broken board never blocks a Claude session
+
+
+def link_claude() -> int:
+    """Connect Claude Code on this PC to Rosie's agent board (owner 2026-10-23: "i want a shared board between you two"): the board's
+    MCP server and its hooks, both through this launcher. Adds to Claude Code's settings and keeps everything already there (a backup
+    first)."""
+    py, me = Path(sys.executable).as_posix(), Path(__file__).resolve().as_posix()
+    cmd = f'"{py}" "{me}"'
+    settings_file = Path.home() / ".claude" / "settings.json"
+    try:
+        cur = json.loads(settings_file.read_text(encoding="utf-8")) if settings_file.exists() else {}
+    except ValueError:
+        print(f"{settings_file} isn't valid JSON; fix it first. Nothing changed.")
+        return 1
+    if settings_file.exists():
+        shutil.copy2(settings_file, settings_file.with_name(f"settings.json.bak-{time.strftime('%Y%m%d-%H%M%S')}"))
+    hooks = cur.setdefault("hooks", {})
+    for ev in HOOK_EVENTS:
+        groups = hooks.setdefault(ev, [])
+        mine = f"{cmd} --board-hook {ev}"
+        groups[:] = [g for g in groups if not any("--board-hook" in (x.get("command") or "") for x in g.get("hooks", []))]
+        groups.append({"hooks": [{"type": "command", "command": mine, "timeout": 20}]})
+    settings_file.parent.mkdir(parents=True, exist_ok=True)
+    settings_file.write_text(json.dumps(cur, indent=2), encoding="utf-8")
+    claude = shutil.which("claude") or str(Path.home() / ".local" / "bin" / "claude.exe")
+    subprocess.run([claude, "mcp", "remove", "-s", "user", "rosie-board"], capture_output=True, timeout=60)
+    r = subprocess.run([claude, "mcp", "add", "-s", "user", "rosie-board", "--", py, me, "--board-mcp"], capture_output=True, text=True, timeout=60)
+    print("Claude Code hooks: added for " + ", ".join(HOOK_EVENTS) + f" ({settings_file})")
+    print("Board tools (rosie-board MCP): " + ("added" if r.returncode == 0 else "NOT added: " + (r.stderr or r.stdout).strip()[:200]))
+    print("Start a new Claude Code session to use them.")
+    return 0 if r.returncode == 0 else 1
+
+
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] in ("--board-hook", "--board-mcp"):    # for Claude Code: fast, quiet, no folders made
+        sys.exit(board_run("board_hook.py" if sys.argv[1] == "--board-hook" else "board_mcp.py", sys.argv[2:]))
     if not ({"--check-pc", "--status"} & set(sys.argv)):          # the checker changes nothing, not even a folder
         SLOTS.mkdir(parents=True, exist_ok=True)
     if "--install" in sys.argv:
@@ -681,6 +892,12 @@ def main():
         print(report(check_pc()))
     elif "--setup" in sys.argv:
         sys.exit(setup())
+    elif "--link-claude" in sys.argv:
+        sys.exit(link_claude())
+    elif "--google-login" in sys.argv:
+        sys.exit(google_login())
+    elif "--start-deps" in sys.argv:
+        print(json.dumps(start_dependencies()))
     else:
         run()
 

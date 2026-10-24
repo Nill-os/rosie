@@ -134,10 +134,10 @@ def test_the_page_needs_the_login_and_a_down_graph_is_a_plain_message(client, mo
 
 def test_rosie_lists_the_page_and_it_never_inserts_html(client):
     server, _ = client
-    js = Path(server.STATIC / "graph.js").read_text()
+    js = Path(server.STATIC / "graph.js").read_text(encoding="utf-8")
     assert "innerHTML" not in js and "'html'" not in js
-    assert "['graph', '⌬', 'Memory graph']" in Path(server.STATIC / "app.js").read_text()
-    assert '<script src="/graph.js"></script>' in Path(server.STATIC / "index.html").read_text()
+    assert "['graph', '⌬', 'Memory graph']" in Path(server.STATIC / "app.js").read_text(encoding="utf-8")
+    assert '<script src="/graph.js"></script>' in Path(server.STATIC / "index.html").read_text(encoding="utf-8")
 
 
 def test_offshoot_groups_join_their_main_group_but_themes_stay_apart():
@@ -171,6 +171,6 @@ def test_a_missing_graph_password_is_a_plain_message(monkeypatch):
 
 def test_ctrl_click_picks_several_dots_and_shows_the_chain_between_them(client):
     server, _ = client
-    js = Path(server.STATIC / "graph.js").read_text()
+    js = Path(server.STATIC / "graph.js").read_text(encoding="utf-8")
     assert "e.ctrlKey || e.metaKey" in js and "function chain(" in js and "/api/graph/links?" in js
     assert "These are not connected on this map" in js

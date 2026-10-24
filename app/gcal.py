@@ -8,6 +8,8 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from tzlocal import get_localzone
 
+import plat
+
 ROOT = Path(__file__).resolve().parent.parent
 CLIENT_FILE = ROOT / "secrets" / "google_client.json"
 TOKEN_FILE = ROOT / "secrets" / "google_token.json"
@@ -34,13 +36,13 @@ def login():
 
 def service():
     if not TOKEN_FILE.exists():
-        raise LoginExpired("Not logged in to Google. Run ./login.sh")
+        raise LoginExpired("Not logged in to Google. " + plat.pick("Run ./login.sh", plat.google_login(cap=True)))
     creds = Credentials.from_authorized_user_file(str(TOKEN_FILE), SCOPES)
     if not creds.valid:
         try:
             creds.refresh(Request())
         except RefreshError as e:
-            raise LoginExpired("Google login expired (happens every 7 days). Run ./login.sh") from e
+            raise LoginExpired("Google login expired (happens every 7 days). " + plat.pick("Run ./login.sh", plat.google_login(cap=True))) from e
         TOKEN_FILE.write_text(creds.to_json())
         TOKEN_FILE.chmod(0o600)
     return build("calendar", "v3", credentials=creds, cache_discovery=False)
@@ -110,6 +112,11 @@ def add_event(title, start: dt.datetime, end: dt.datetime, calendar_id=None, loc
             "start": {"dateTime": start.isoformat()}, "end": {"dateTime": end.isoformat()}}
     ev = _service_cal().insert(calendarId=calendar_id or write_calendar_id(), body=body).execute()
     return _fmt(ev)
+
+
+def add_all_day_event(title, day: dt.date, calendar_id=None):
+    body = {"summary": title, "start": {"date": day.isoformat()}, "end": {"date": (day + dt.timedelta(days=1)).isoformat()}}
+    return _fmt(_service_cal().insert(calendarId=calendar_id or write_calendar_id(), body=body).execute())
 
 
 def move_event(event_id, start: dt.datetime, end: dt.datetime, calendar_id=None):

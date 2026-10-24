@@ -5,12 +5,13 @@ import time
 from pathlib import Path
 
 import gmail
+import plat
 
 ROOT = Path(__file__).resolve().parent.parent
 UNDO = ROOT / "data" / "mail_undo.json"
 CAP = 500                                   # most messages one cleanup may touch
 ACTIONS = {"archive": ([], ["INBOX"]), "trash": (["TRASH"], ["INBOX"]), "mark_read": ([], ["UNREAD"])}      # (labels to add, labels to remove)
-NEED_LOGIN = "Mail cleanup needs a one-time re-login that allows changing mail (the old login can only read). Run ~/assistant/login-gmail.sh and approve it."
+NEED_LOGIN = "Mail cleanup needs a one-time re-login that allows changing mail (the old login can only read). " + plat.google_login("main", cap=True) + " and approve it."
 
 
 def _acct(account=""):
@@ -57,7 +58,7 @@ def preview(query, account="", action=""):
     """What WOULD be affected: how many and who from. Changes nothing."""
     name = _acct(account)
     if not name:
-        return {"error": "No Gmail account is connected yet. Run ~/assistant/login-gmail.sh"}
+        return {"error": "No Gmail account is connected yet. " + plat.google_login("main", cap=True)}
     try:
         ids = _ids(name, _query(query, action))
         sample, froms = ids[:30], {}
@@ -84,7 +85,7 @@ def cleanup(action, query, account="", _confirmed=False):
         return {"error": "action must be archive, trash or mark_read"}
     name = _acct(account)
     if not name:
-        return {"error": "No Gmail account is connected yet. Run ~/assistant/login-gmail.sh"}
+        return {"error": "No Gmail account is connected yet. " + plat.google_login("main", cap=True)}
     try:
         if not can_modify(name):
             return {"error": NEED_LOGIN}

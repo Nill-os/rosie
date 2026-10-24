@@ -29,7 +29,7 @@ CLAUDE = HOME / ".claude"
 OLLAMA = "http://127.0.0.1:11434"
 ROSIE_URL = "http://127.0.0.1:8765"
 CONTAINERS = ("agent-zero", "rosie-graph")
-A0_CHATS = HOME / "agent-zero" / "usr" / "chats"            # Agent Zero's chats on this PC (root's files, but their times are readable)
+A0_CHATS = HOME / "agent-zero" / "usr" / "chats"            # Agent Zero's chats on the owner's PC (root's files, but their times are readable)
 USER_UNITS = ("assistant-dictation", "assistant-overlay", "graphiti-mcp")
 LINUX = sys.platform.startswith("linux")                    # it reads /proc and /sys: on Windows the Deck is off (agentdeck_api says so)
 CLK = os.sysconf("SC_CLK_TCK") if LINUX else 100
@@ -229,7 +229,11 @@ def sample():
         dt = max(now - _prev["t"], 0.05) if _prev["t"] else None
         uptime = float(read("/proc/uptime", "0 0").split()[0])
         procs = {}
-        for name in os.listdir("/proc"):
+        try:
+            pids = os.listdir("/proc")
+        except OSError:                                  # no /proc (Windows): nothing to list
+            pids = []
+        for name in pids:
             if name.isdigit():
                 p = _proc(int(name))
                 if p:
@@ -371,12 +375,41 @@ def job_unit(agent: str):
     return infos[0]
 
 
+def _a0_host():
+    """Rosie's a0_host (which container and folder Agent Zero uses on this PC), or None when it can't be loaded (the desktop window)."""
+    try:
+        import a0_host
+        return a0_host
+    except Exception:
+        return None
+
+
+def _a0_container() -> str:
+    h = _a0_host()
+    try:
+        return h.container() if h else "agent-zero"
+    except Exception:
+        return "agent-zero"
+
+
+def _a0_chats() -> Path:
+    h = _a0_host()
+    try:
+        return h.usr() / "chats" if h else A0_CHATS
+    except Exception:
+        return A0_CHATS
+
+
 def _containers():
+    """Status by the deck's own names: Agent Zero is always "agent-zero" here, whatever its container is called on this PC."""
     out = {}
-    raw = run(["docker", "inspect", *CONTAINERS], 5)
+    real = _a0_container()
+    names = [real if c == "agent-zero" else c for c in CONTAINERS]
+    raw = run(["docker", "inspect", *names], 5)
     for c in json.loads(raw) if raw.strip() else []:
         st = c.get("State") or {}
-        out[c["Name"].lstrip("/")] = {"status": st.get("Status"), "pid": st.get("Pid") or 0, "started": st.get("StartedAt", "")[:19],
+        name = c["Name"].lstrip("/")
+        out["agent-zero" if name == real else name] = {"status": st.get("Status"), "pid": st.get("Pid") or 0, "started": st.get("StartedAt", "")[:19],
                                       "image": (c.get("Config") or {}).get("Image", "")}
     return out
 
@@ -390,7 +423,7 @@ def _a0_activity() -> dict:
     """When Agent Zero last wrote a chat (it saves the chat as it works) and which one. Its own CPU says little: the model runs in Ollama."""
     last, chat, n = 0.0, "", 0
     try:
-        for d in A0_CHATS.iterdir():
+        for d in _a0_chats().iterdir():
             if not d.is_dir():
                 continue
             n += 1
@@ -525,6 +558,8 @@ def _sum(rows):
 
 # ---------------------------------------------------------------- the snapshot
 def snapshot():
+    if not LINUX:                                        # it reads /proc and /sys; the page is hidden there, this keeps a direct call from raising
+        return {"error": "The Agent Deck reads Linux's /proc and is off on this system."}
     start_counting()
     procs, cores, net, uptime = sample()
     gpu = cached("gpu", 2, _gpu)
@@ -638,7 +673,7 @@ def act(body: dict) -> dict:
         name, op = body.get("name"), body.get("op")
         if name not in CONTAINERS or op not in ("start", "stop", "restart"):
             return {"error": "Unknown container or action."}
-        r = subprocess.run(["docker", op, name], capture_output=True, text=True, timeout=90, env=_env())
+        r = subprocess.run(["docker", op, _a0_container() if name == "agent-zero" else name], capture_output=True, text=True, timeout=90, env=_env())
         _cache.pop("docker", None)
         return {"ok": True, "msg": f"{name}: {op} done."} if r.returncode == 0 else {"error": r.stderr.strip()[:200]}
     if a == "power":

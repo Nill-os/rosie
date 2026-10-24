@@ -99,4 +99,4 @@ def test_shut_down_all_runs_outside_rosie_and_she_clears_the_flag_when_she_start
 
 def test_the_power_script_is_valid_and_the_watchdog_respects_a_stop_on_purpose():
     assert subprocess.run(["bash", "-n", str(ROOT / "ops" / "power.sh")]).returncode == 0
-    assert '(slots.OPS / "stopped").exists()' in (ROOT / "ops" / "watchdog.py").read_text()
+    assert '(slots.OPS / "stopped").exists()' in (ROOT / "ops" / "watchdog.py").read_text(encoding="utf-8")

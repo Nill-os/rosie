@@ -15,6 +15,7 @@ import gmail
 import inbox
 import mailwatch
 import meetings
+import plat
 import projects
 import terminals
 import tasks
@@ -31,7 +32,7 @@ def _hhmm(s):
 
 
 def _login_alert(now):
-    inbox.add("system", "Google login expired", "The calendar can't be read. Run ~/assistant/login.sh in a terminal (about once a week).",
+    inbox.add("system", "Google login expired", "The calendar can't be read. " + plat.pick("Run ~/assistant/login.sh in a terminal", plat.google_login(cap=True)) + " (about once a week).",
               "#/settings", key=f"login:{now.date().isoformat()}", now=now)
 
 

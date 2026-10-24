@@ -38,18 +38,18 @@ def test_a_link_that_leads_to_shared_state_is_refused(idle):
     (idle / "app" / "sneaky").symlink_to(idle / "data")                # a link inside app/ pointing at the real data
     with pytest.raises(ValueError):
         selfdev.safe_path("app/sneaky/tasks.db", idle)
-    assert (idle / "data" / "tasks.db").read_text() == "precious"
+    assert (idle / "data" / "tasks.db").read_text(encoding="utf-8") == "precious"
 
 
 def test_edit_must_match_exactly_once_and_undoes_breakage(idle):
     assert selfdev.edit("app/thing.py", "x = 1", "x = 2")["done"]
-    assert "x = 2" in (idle / "app" / "thing.py").read_text()
+    assert "x = 2" in (idle / "app" / "thing.py").read_text(encoding="utf-8")
     assert "0 times" in selfdev.edit("app/thing.py", "nothing like this", "y")["error"]
     (idle / "app" / "thing.py").write_text("a = 1\na = 1\n")
     assert "2 times" in selfdev.edit("app/thing.py", "a = 1", "a = 3")["error"]
     (idle / "app" / "thing.py").write_text("x = 1\n")
     r = selfdev.edit("app/thing.py", "x = 1", "x = (")                 # would break the file
-    assert "put it back" in r["error"] and (idle / "app" / "thing.py").read_text() == "x = 1\n"
+    assert "put it back" in r["error"] and (idle / "app" / "thing.py").read_text(encoding="utf-8") == "x = 1\n"
 
 
 def test_write_refuses_files_that_do_not_parse_and_huge_files(idle):
@@ -61,7 +61,7 @@ def test_write_refuses_files_that_do_not_parse_and_huge_files(idle):
 
 def test_javascript_breakage_is_caught_too(idle):
     r = selfdev.edit("static/app.js", "const a = 1;", "const a = (;")
-    assert "error" in r and (idle / "static" / "app.js").read_text() == "const a = 1;\n"
+    assert "error" in r and (idle / "static" / "app.js").read_text(encoding="utf-8") == "const a = 1;\n"
 
 
 def test_switch_needs_a_passing_check_for_the_exact_code_and_then_asks(idle, monkeypatch):
@@ -93,4 +93,4 @@ def test_a_javascript_change_without_node_is_refused_not_a_crash(idle, monkeypat
     real = subprocess.run
     monkeypatch.setattr(selfdev.subprocess, "run", lambda args, *a, **k: (_ for _ in ()).throw(FileNotFoundError("node")) if args[0] == "node" else real(args, *a, **k))
     r = selfdev.edit("static/app.js", "const a = 1;", "const a = 2;")
-    assert "node is not installed" in r["error"] and (idle / "static" / "app.js").read_text() == "const a = 1;\n"
+    assert "node is not installed" in r["error"] and (idle / "static" / "app.js").read_text(encoding="utf-8") == "const a = 1;\n"

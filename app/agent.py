@@ -24,6 +24,7 @@ import selfdev
 import mailwatch
 import usertools
 import vaultsearch
+import lifequest
 import projects
 import proposals
 import terminals
@@ -130,6 +131,24 @@ def _proj(fn):
         except (ValueError, RuntimeError) as e:
             return {"error": str(e)}
     return inner
+
+
+def _lifequest_log(note="", stat="", xp=20):
+    """Log a win the user said they did. No note, no XP. An unclear stat is asked about, never guessed."""
+    note = str(note or "").strip()
+    if len(note) < 3:
+        return {"error": "No XP without a note: use the user's own words for what they did."}
+    s = lifequest.find_stat(stat)
+    if not s:
+        names = ", ".join(x["name"] for x in lifequest.state()["stats"] if not x["archived"])
+        return {"ask_user": True, "question": f"Which area does that grow: {names}?"}
+    try:
+        r = lifequest.log_win(note, [{"stat": s["id"], "xp": max(5, min(int(xp or 20), 100))}], source="chat")
+    except ValueError as e:
+        return {"error": str(e)}
+    st = next(x for x in r["stats"] if x["id"] == s["id"])
+    return {"status": "logged", "xp": r["logged"]["xp"], "stat": s["name"], "stat_level": st["level"], "level": r["overall"]["level"],
+            "level_up": bool(r["level_up"]), "to_next_level": r["overall"]["to_next"]}
 
 
 def _list_projects():
@@ -296,6 +315,9 @@ TOOLS = {
                        {"name": ("string", "session name"), "text": ("string", "text to type"), "enter": ("boolean", "press Enter after, default true optional")}),
     "terminal_list": (lambda: terminals.list_sessions(), "List open terminal and agent sessions.", {}),
     "terminal_stop": (lambda name: terminals.kill(name), "Stop (kill) a terminal or agent session.", {"name": ("string", "session name")}),
+    "lifequest_log": (_lifequest_log, "Log XP in Life Quest for something the user SAYS they did (a run, studying, a bill paid). note = their words for what they did; stat = the area it grows (leave empty if unclear and I will ask); xp 5-100 (default 20, small win 10, big effort 50). Never for something they did not say they did.",
+                      {"note": ("string", "what they did, in their words"), "stat": ("string", "area name like Fitness, optional"), "xp": ("integer", "5-100, default 20 optional")}),
+    "lifequest_progress": (lifequest.progress_text, "Read the user's Life Quest progress: level, XP, each stat, open quests today and recent wins.", {}),
     "list_projects": (_list_projects, "List the user's projects with status and next action.", {}),
     "project_status": (_proj(_project_status), "Details of one project: goal, finish line, next action, tasks, milestones, git status.", {"project": ("string", "project name")}),
     "create_project": (_proj(lambda name, goal="", finish_line="", folder="": {"status": "created", "project": projects.create(name, goal, finish_line, folder)["name"]}),
@@ -390,6 +412,7 @@ GROUPS["phone_screen_tap"] = "internal"                      # only runs after t
 GROUPS.update({n: "selfdev" for n in ("selfdev_plan", "selfdev_review", "selfdev_status", "selfdev_prepare", "selfdev_read", "selfdev_search", "selfdev_edit", "selfdev_write", "selfdev_agent", "selfdev_commit", "selfdev_diff", "selfdev_stage", "selfdev_switch", "selfdev_rollback")})
 GROUPS.update({n: "build" for n in ("build_tool", "run_user_tool", "list_user_tools")})
 GROUPS.update({n: "projects" for n in ("list_projects", "project_status", "create_project", "update_project", "add_project_task", "plan_project")})
+GROUPS.update({n: "lifequest" for n in ("lifequest_log", "lifequest_progress")})
 GROUPS.update({n: "term" for n in ("launch_agent", "terminal_start", "terminal_read", "terminal_send", "terminal_list", "terminal_stop")})
 GROUP_RE = {
     "calendar": r"\b(calendar|events?|meetings?|appointments?|schedul\w*|behind|late|agenda|busy|free time|am i free|book|cancel|delete|move|reschedul\w*|when is|what'?s on)\b",
@@ -405,6 +428,7 @@ GROUP_RE = {
     "term": r"\b(terminals?|claude|codex|gemini|opencode|agents?|sessions?|tmux|launch|spawn|shell|attach)\b",
     "board": agentboard.ASKS_BOARD.pattern,
     "plan": claude_plan.PLAN_RE.pattern,
+    "lifequest": r"\b(life ?quest|xp|level(?:ed)? up|my stats|quests?|character sheet|log (?:a |my )?wins?|i (?:just )?(?:went (?:for|to)|ran|worked out|exercised|studied|meditated|practiced|finished|completed))\b",
     "projects": r"\b(projects?|milestones?|roadmap|plan\w*|finish line|next action|goal|areas?|weekly review)\b",
     "corner": r"\b(corner|your finds?|you(?:'ve| have)? found|did you find|you(?:'ve| have)? (?:been )?read(?:ing)?|did you read|you saw|browsing|into lately|interested in lately|that [\w .,'-]{0,40}\b(?:page|site|article|picture|link)\b)",
 }
@@ -491,7 +515,7 @@ def system_prompt(mode="auto", voice=False):
         + (f"WORKING MEMORY (current focus, waiting on, decisions):\n{work}\n" if work else ""))
 
 
-WRITE_TOOLS = {"board_post", "board_claim", "board_release", "selfdev_prepare", "selfdev_edit", "selfdev_write", "selfdev_agent", "selfdev_commit", "selfdev_stage", "selfdev_switch", "selfdev_rollback", "phone_screen_do", "phone_reply_notification", "phone_screen_tap", "phone_keep_note", "phone_send_sms", "phone_call", "phone_set_alarm", "phone_set_timer", "phone_open_app", "phone_music", "phone_torch", "phone_volume", "phone_navigate", "mail_cleanup", "mail_undo", "build_tool", "run_user_tool", "add_event", "move_event", "delete_event", "shift_day", "add_task", "complete_task", "move_task", "capture", "remember",
+WRITE_TOOLS = {"lifequest_log", "board_post", "board_claim", "board_release", "selfdev_prepare", "selfdev_edit", "selfdev_write", "selfdev_agent", "selfdev_commit", "selfdev_stage", "selfdev_switch", "selfdev_rollback", "phone_screen_do", "phone_reply_notification", "phone_screen_tap", "phone_keep_note", "phone_send_sms", "phone_call", "phone_set_alarm", "phone_set_timer", "phone_open_app", "phone_music", "phone_torch", "phone_volume", "phone_navigate", "mail_cleanup", "mail_undo", "build_tool", "run_user_tool", "add_event", "move_event", "delete_event", "shift_day", "add_task", "complete_task", "move_task", "capture", "remember",
                "forget", "write_file", "run_command", "open_on_desktop", "run_sync", "wrap_up_day", "set_reminder", "cancel_reminder", "propose_task", "propose_event", "create_project", "update_project", "add_project_task", "plan_project", "launch_agent", "terminal_start", "terminal_send", "terminal_stop"}
 REFUSAL = re.compile(r"(\bI (can'?t|cannot|can not|am unable to|'m unable to|am not able to|don'?t have (direct )?(access|a way|the ability|tools?)|do not have (direct )?(access|a way|the ability|tools?))|"
                      r"\b(not able to|unable to) (directly |currently )?(check|access|run|do|see|look|find|get|fetch)|(my|with my) current tools|you('ll| will)? (need|have) to (open|go to|check|use))", re.I)
@@ -800,6 +824,10 @@ def call_problem(name, args, user_text, recent_user, today=None):
         words = set(re.findall(r"[a-z]{4,}", str(args.get("title", "")).lower()))
         if words and not (words & set(re.findall(r"[a-z]{4,}", recent_user.lower()))):
             return "That task title did not come from the user's words. A briefing or list request never means 'add tasks'. Do not add tasks the user did not ask for."
+    if name == "lifequest_log" and recent_user:
+        words = set(re.findall(r"[a-z]{4,}", str(args.get("note", "")).lower()))
+        if not words or not (words & set(re.findall(r"[a-z]{4,}", recent_user.lower()))):
+            return "That note did not come from the user's words. XP is only for something the user said they did. Use their words, or do not log it."
     if name == "delete_event" and recent_user:
         if re.fullmatch(r"\d{1,6}", str(args.get("event_id", "")).strip()):
             return "That is a task number, not a calendar event id. Events have long ids: look the event up first. Tasks are not calendar events."

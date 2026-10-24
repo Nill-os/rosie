@@ -199,6 +199,6 @@ def test_agent_zero_follows_rosies_model_and_keeps_its_own_extras(tmp_path):
     script = ctxsize.SYNC_SCRIPT.replace("/a0/usr/plugins/_model_config/config.json", cfgf.as_posix()).replace("/a0/usr/plugins/_model_config/presets.yaml", presetf.as_posix())
     out = subprocess.run([sys.executable, "-c", script, json.dumps({"model": "new:9b", "num_ctx": 65536, "num_gpu": 99})], capture_output=True, text=True)
     assert out.returncode == 0 and "updated preset Local" in out.stdout
-    local = next(p for p in yaml.safe_load(presetf.read_text()) if p["name"] == "Local")
+    local = next(p for p in yaml.safe_load(presetf.read_text(encoding="utf-8")) if p["name"] == "Local")
     assert local["chat"]["name"] == local["utility"]["name"] == "new:9b" and local["chat"]["ctx_length"] == 65536
     assert local["utility"]["kwargs"] == {"reasoning_effort": "none", "num_ctx": 65536, "num_gpu": 99}

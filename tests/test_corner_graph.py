@@ -487,7 +487,7 @@ FORBIDDEN = {"agent", "gmail", "gcal", "tasks", "pc_tools", "terminals", "phone"
 def test_only_corner_data_goes_into_the_graph(graph):
     import memory
     import tasks
-    tree = ast.parse((ROOT / "app" / "corner_graph.py").read_text())
+    tree = ast.parse((ROOT / "app" / "corner_graph.py").read_text(encoding="utf-8"))
     names = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -495,7 +495,7 @@ def test_only_corner_data_goes_into_the_graph(graph):
         elif isinstance(node, ast.ImportFrom):
             names.add((node.module or "").split(".")[0])
     assert not names & FORBIDDEN, names & FORBIDDEN
-    src = (ROOT / "app" / "corner_graph.py").read_text()
+    src = (ROOT / "app" / "corner_graph.py").read_text(encoding="utf-8")
     assert set(re.findall(r"\bFROM (\w+)", src)) <= {"finds", "notes", "pictures", "trail", "graph_items"}
     memory.remember("PRIVATE-MEMORY-NOTE about the bank")
     tasks.add("PRIVATE-TASK call the doctor")

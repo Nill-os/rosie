@@ -46,7 +46,7 @@ def edit_b(w, text):
 def test_slot_b_is_a_clone_that_shares_the_state_not_a_copy_of_it(world):
     r = slots.ensure_b()
     assert (world["b"] / "app" / "server.py").exists()
-    assert (world["b"] / "data").is_symlink() and (world["b"] / "data" / "tasks.db").read_text() == "precious"      # same data, not a copy
+    assert (world["b"] / "data").is_symlink() and (world["b"] / "data" / "tasks.db").read_text(encoding="utf-8") == "precious"      # same data, not a copy
     assert (world["b"] / ".venv").is_symlink()
     sh("git", "add", "-A", cwd=world["b"])
     tracked = subprocess.run(["git", "ls-files"], cwd=world["b"], capture_output=True, text=True).stdout.split()
@@ -56,7 +56,7 @@ def test_slot_b_is_a_clone_that_shares_the_state_not_a_copy_of_it(world):
 def test_prepare_makes_b_an_exact_copy_and_snapshots_unsaved_live_changes(world):
     (world["a"] / "app" / "server.py").write_text("print('live edit not committed')\n")                        # the live slot has unsaved changes
     r = slots.prepare("add feature")
-    assert r["slot"] == "B" and (world["b"] / "app" / "server.py").read_text() == "print('live edit not committed')\n"
+    assert r["slot"] == "B" and (world["b"] / "app" / "server.py").read_text(encoding="utf-8") == "print('live edit not committed')\n"
     assert r["branch"].startswith("rosie/add-feature") and slots.head("B") == slots.head("A")
 
 
@@ -64,8 +64,8 @@ def test_prepare_will_not_throw_away_unfinished_work_unless_forced(world):
     slots.prepare("one")
     edit_b(world, "print('work in progress')\n")
     r = slots.prepare("two")
-    assert "uncommitted work" in r["error"] and (world["b"] / "app" / "server.py").read_text() == "print('work in progress')\n"
-    assert slots.prepare("two", force=True)["slot"] == "B" and (world["b"] / "app" / "server.py").read_text() == "print('v1')\n"
+    assert "uncommitted work" in r["error"] and (world["b"] / "app" / "server.py").read_text(encoding="utf-8") == "print('work in progress')\n"
+    assert slots.prepare("two", force=True)["slot"] == "B" and (world["b"] / "app" / "server.py").read_text(encoding="utf-8") == "print('v1')\n"
 
 
 def test_diff_and_commit(world):
@@ -122,7 +122,7 @@ def test_manual_rollback_goes_back_and_switch_again_goes_forward(world):
 def test_state_file_is_never_half_written(world):
     slots.save_state(a=1)
     slots.save_state(b=2)
-    assert json.loads(slots.STATE.read_text()) == {"a": 1, "b": 2} and not (world["ops"] / "state.tmp").exists()
+    assert json.loads(slots.STATE.read_text(encoding="utf-8")) == {"a": 1, "b": 2} and not (world["ops"] / "state.tmp").exists()
 
 
 def test_watchdog_rolls_back_only_after_repeated_failures_inside_the_probation(world, monkeypatch):
@@ -164,10 +164,10 @@ def test_launcher_falls_back_when_the_active_slot_is_unusable(tmp_path):
     (venv / "uvicorn").write_text("#!/bin/bash\necho STARTED-FROM $(pwd) SLOT=$ROSIE_SLOT\n")
     (venv / "uvicorn").chmod(0o755)
     launcher = ops / "launch.sh"
-    launcher.write_text((Path(__file__).resolve().parent.parent / "ops" / "launch.sh").read_text())
+    launcher.write_text((Path(__file__).resolve().parent.parent / "ops" / "launch.sh").read_text(encoding="utf-8"))
     launcher.chmod(0o755)
     out = subprocess.run([str(launcher)], capture_output=True, text=True, env={"PATH": "/usr/bin:/bin", "ROSIE_SLOT_A": str(tmp_path / "A"), "ROSIE_SLOT_B": str(tmp_path / "missing"), "HOME": str(tmp_path)})
-    assert f"STARTED-FROM {a} SLOT=A" in out.stdout and "unusable" in (ops / "events.log").read_text()
+    assert f"STARTED-FROM {a} SLOT=A" in out.stdout and "unusable" in (ops / "events.log").read_text(encoding="utf-8")
 
 
 def test_the_update_check_uses_the_model_rosie_chats_with(world):

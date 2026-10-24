@@ -85,7 +85,7 @@ const DOWN = 'Can\'t reach the assistant. Is the PC on?';
 // ---------- state ----------
 let chatId = store.get('chat_id', null), chatSpace = null, chatTitle = 'New chat';
 let meetTimer = null;
-let dirty = false, prevHash = location.hash, sideData = { chats: [], spaces: [] }, overdueCount = 0, unreadCount = 0, pagesOff = [], pagesHidden = [];
+let dirty = false, prevHash = location.hash, sideData = { chats: [], spaces: [] }, overdueCount = 0, unreadCount = 0, pagesOff = [], pagesHidden = [], loginHint = 'run ~/assistant/login.sh', gmailHint = 'run ~/assistant/login-gmail.sh main';
 const log = $('#log'), t = $('#t');
 // the message box grows as you write (up to ~45% of the screen, then scrolls), so everything you typed stays visible
 const fit = () => { if (!t.value) { t.style.height = ''; return; } t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight + 2, innerHeight * 0.45) + 'px'; };
@@ -99,7 +99,7 @@ function setHeader(title, actions) { $('#ttl').textContent = title; $('#actions'
 function show(...nodes) { $('#view').replaceChildren(h('div', { class: 'page' }, ...nodes)); $('#view').scrollTop = 0; }
 // In the order of a day (owner 2026-10-20: "reorder rosies side tab to make more sense for daily use"): what needs you and today's plan
 // first, then the work you come back to, then Rosie's own pages. ['-', label] starts a group.
-const NAV = [['-', 'Today'], ['home', '⌂', 'Home'], ['inbox', '🔔', 'Inbox'], ['brief', '☀', 'Daily Brief'], ['calendar', '▦', 'Calendar'], ['tasks', '✓', 'Tasks'],
+const NAV = [['-', 'Today'], ['home', '⌂', 'Home'], ['inbox', '🔔', 'Inbox'], ['brief', '☀', 'Daily Brief'], ['calendar', '▦', 'Calendar'], ['tasks', '✓', 'Tasks'], ['lifequest', '★', 'Life Quest'],
   ['mail', '📧', 'Mail'], ['paper', '📰', 'Morning Paper'],
   ['-', 'Work'], ['projects', '🧭', 'Projects'], ['meetings', '🎙', 'Meetings'], ['notes', '✎', 'Notes'], ['servers', '🖧', 'Servers'], ['terminal', '⌨', 'Terminal'],
   ['-', 'Rosie'], ['memory', '◈', 'Memory'], ['skills', '✦', 'Skills'], ['corner', '❀', "Rosie's corner"], ['graph', '⌬', 'Memory graph'], ['agentzero', '🧠', 'Agent Zero'], ['deck', '◫', 'Agent Deck'], ['vector', '🤖', 'Vector'], ['settings', '⚙', 'Settings']];
@@ -198,7 +198,7 @@ async function route() {
 async function refreshSide() {
   try { sideData = await J('/api/chats'); } catch (e) { $('#dot').className = 'off'; return; }
   $('#dot').className = '';
-  try { const b = await J('/api/badges'); overdueCount = b.overdue; unreadCount = b.inbox; pagesOff = b.pages_off || []; pagesHidden = b.pages_hidden || []; } catch (e) { /* badges only */ }
+  try { const b = await J('/api/badges'); overdueCount = b.overdue; unreadCount = b.inbox; pagesOff = b.pages_off || []; loginHint = b.google_login || loginHint; gmailHint = b.gmail_login || gmailHint; pagesHidden = b.pages_hidden || []; } catch (e) { /* badges only */ }
   renderNav((location.hash.replace(/^#\/?/, '') || 'home').split('/')[0].replace('chat', ''));
   drawChats();
 }
@@ -400,8 +400,8 @@ VIEWS.inbox = async () => {
       h('div', { class: 'muted', style: 'margin-bottom:8px' }, 'Suggestions from me or from your mail. Nothing is added until you approve.'),
       h('div', { class: 'list' }, pr.proposals.map((p) => h('div', { class: 'item', style: 'align-items:flex-start' }, h('span', { style: 'width:24px' }, p.kind === 'event' ? '▦' : p.kind === 'plan' ? '🧭' : '✓'),
         h('div', { class: 'tx' }, h('div', { style: 'color:#fff' }, p.title), p.detail ? h('div', { class: 'muted md', style: 'font-size:calc(13px*var(--ts,1))' }, p.detail) : null, p.source.startsWith('email:') ? h('span', { class: 'chip' }, 'from email') : null),
-        btn('Approve', 'sm ok', async () => { try { await post(`/api/proposals/${p.id}/approve`); toast('Done'); again(); } catch (e) { toast(e.message, 1); } }),
-        btn('Dismiss', 'sm dim', async () => { await post(`/api/proposals/${p.id}/dismiss`); again(); }))))) : null,
+        btn(p.kind === 'event' ? 'Add to calendar' : 'Approve', 'sm ok', async () => { try { await post(`/api/proposals/${p.id}/approve`); toast('Done'); again(); } catch (e) { toast(e.message, 1); } }),
+        btn(p.kind === 'event' ? 'Skip' : 'Dismiss', 'sm dim', async () => { await post(`/api/proposals/${p.id}/dismiss`); again(); }))))) : null,
     h('div', { class: 'card' }, h('h3', {}, 'Reminders'), remindForm(again),
       d.reminders.length ? h('div', { class: 'list', style: 'margin-top:10px' }, d.reminders.map((r) => h('div', { class: 'item' }, h('span', { class: 'time' }, r.due.slice(5, 16).replace('T', ' ')), h('span', { class: 'tx' }, r.text),
         h('button', { class: 'x', 'aria-label': 'Cancel reminder', onclick: async () => { await del('/api/reminders/' + r.id); again(); } }, '✕')))) : h('div', { class: 'empty', style: 'margin-top:8px' }, 'No upcoming reminders. You can also just say "remind me in 20 minutes to…".')),
@@ -434,6 +434,27 @@ function mailRow(m, again) {
         m.suspicious ? null : btn('Draft reply', 'sm', () => draftFlow(m)),
         btn('Done', 'sm ok', async () => { await post('/api/mail/handled', { account: m.account, id: m.id }); again(); }))));
 }
+function mailTodoRow(t, again) {
+  return h('div', { class: 'item' },
+    h('input', { type: 'checkbox', 'aria-label': 'Done: ' + t.title, style: 'flex:none;width:auto', onchange: async () => { await post(`/api/mail/todos/${t.id}/done`, { done: true }); again(); } }),
+    h('div', { class: 'tx' }, h('div', {}, t.title), h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1))' }, [t.due ? 'due ' + t.due : '', t.note].filter(Boolean).join(' · ') || 'from email')),
+    t.link ? h('a', { class: 'btn sm dim', href: t.link, target: '_blank', rel: 'noopener noreferrer', style: 'display:inline-flex;align-items:center;text-decoration:none' }, 'Open email') : null);
+}
+function organizeCard(again) {
+  const box = h('div', { class: 'muted' }, 'Checking what could be filed…');
+  const run = async (path, ok) => { try { const r = await post(path); toast(ok(r)); again(); } catch (e) { toast(e.message, 1); } };
+  J('/api/mail/organize').then((p) => {
+    if (p.error) { box.replaceChildren(p.error); return; }
+    box.className = '';
+    box.replaceChildren(
+      p.total ? h('div', {}, p.groups.map((g) => h('div', { style: 'margin-bottom:8px' }, h('b', {}, g.label), h('span', { class: 'muted' }, ` · ${g.count}`),
+        g.subjects.map((x) => h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1))' }, x))))) : h('div', { class: 'empty' }, 'Nothing waiting to be filed.'),
+      h('div', { class: 'muted', style: 'margin:6px 0' }, p.note + (p.archive ? ' Filed mail will also leave the Inbox.' : ' Mail stays in the Inbox.') + (p.can_change_mail ? '' : ' Needs the one-time login that allows changing mail: run ~/assistant/login-gmail.sh.')),
+      h('div', { class: 'form' }, p.total ? btn(`OK, label ${p.total} email${p.total === 1 ? '' : 's'}`, 'sm ok', () => run('/api/mail/organize/apply', (r) => `Labeled ${r.changed || 0}`)) : null,
+        btn('Undo last', 'sm dim', () => run('/api/mail/organize/undo', (r) => `Undone: ${r.restored || 0}`))));
+  }).catch((e) => box.replaceChildren(e.message));
+  return h('div', { class: 'card', style: 'margin-top:16px' }, h('h3', {}, 'Organize'), box);
+}
 VIEWS.mail = async () => {
   setHeader('Mail', []);
   show(h('div', { class: 'muted' }, 'Loading…'));
@@ -447,7 +468,7 @@ VIEWS.mail = async () => {
         h('ol', { style: 'line-height:1.9;padding-left:20px' },
           h('li', {}, 'Open ', h('a', { href: 'https://console.cloud.google.com/apis/library/gmail.googleapis.com', target: '_blank', rel: 'noopener', style: 'color:var(--acc)' }, 'the Gmail API page'), ' (project "assistant") and click ', h('b', {}, 'Enable'), '.'),
           h('li', {}, 'Open ', h('a', { href: 'https://console.cloud.google.com/auth/scopes', target: '_blank', rel: 'noopener', style: 'color:var(--acc)' }, 'Data Access'), ', click ', h('b', {}, 'Add or remove scopes'), ', search "Gmail API", tick ', h('code', {}, 'gmail.readonly'), ', then Update and Save.'),
-          h('li', {}, 'In a terminal run ', h('code', {}, '~/assistant/login-gmail.sh'), '. A browser opens: pick your Gmail, click Advanced, Go to assistant (unsafe), and allow "View your email messages".'),
+          h('li', {}, ...(gmailHint.startsWith('run ') ? ['In a terminal run ', h('code', {}, gmailHint.slice(4).replace(/ main$/, ''))] : [gmailHint[0].toUpperCase() + gmailHint.slice(1)]), '. A browser opens: pick your Gmail, click Advanced, Go to assistant (unsafe), and allow "View your email messages".'),
           h('li', {}, 'Come back here and press ', h('b', {}, 'Check now'), '.')),
         d.client_ready ? null : h('div', { class: 'err' }, 'Google credentials file not found (secrets/google_client.json).'),
         h('div', { class: 'form', style: 'margin-top:10px' }, btn('Check now', 'sm', check)))); return;
@@ -459,6 +480,8 @@ VIEWS.mail = async () => {
     h('div', { class: 'card' }, d.accounts.map((a) => h('div', { class: 'item' }, h('span', { class: 'tx' }, a.email), h('span', { class: 'chip ok' }, 'read-only'),
       h('button', { class: 'x', title: 'Disconnect', 'aria-label': 'Disconnect', onclick: async () => { if (!confirm('Disconnect ' + a.email + '? (It can be reconnected any time.)')) return; await del('/api/mail/accounts/' + a.name); again(); } }, '✕')))),
     d.items.length ? null : h('div', { class: 'empty', style: 'margin-top:16px' }, 'Nothing triaged yet. Press Check now.'),
+    d.todos.length ? h('div', { style: 'margin-top:16px' }, h('div', { class: 'dayhead' }, `Action items from email · ${d.todos.length}`), h('div', { class: 'list' }, d.todos.map((t) => mailTodoRow(t, again)))) : null,
+    d.organize ? organizeCard(again) : null,
     sec('Needs you', need, 'today'), sec('FYI', fyi), sec('Possible phishing (ignored)', sus), sec('Low priority', low));
 };
 
@@ -671,6 +694,116 @@ VIEWS.tasks = async () => {
     !(d.overdue.length + d.due_today.length + d.upcoming.length) ? h('div', { class: 'empty', style: 'margin-top:16px' }, 'Nothing open. Add one above, or just tell the assistant.') : null);
 };
 
+// ----- Life Quest (a gamified life: stats, quests, evidence-gated XP, a Sunday review; rules and storage in app/lifequest.py) -----
+const LQ_COLORS = ['var(--acc)', 'var(--pur)', 'var(--ok)', '#FFD23F', 'var(--pink)', 'var(--warn)', '#FF9F43', '#5EEAD4', '#FDA4AF', '#A3E635'];
+let lqEdit = false, lqReview = false;
+VIEWS.lifequest = async () => {
+  setHeader('Life Quest', []);
+  show(h('div', { class: 'muted' }, 'Loading…'));
+  let d = await J('/api/lifequest');
+  const color = (id) => LQ_COLORS[Math.max(0, d.stats.findIndex((s) => s.id === id)) % LQ_COLORS.length];
+  const sname = (id) => (d.stats.find((s) => s.id === id) || { name: id }).name;
+  const live = () => d.stats.filter((s) => !s.archived);
+  // every write returns the whole state; draw it again (a level-up gets a toast)
+  const act = async (fn, ok) => {
+    try {
+      const r = await fn();
+      d = r;
+      if (r.level_up) toast('Level up. You are level ' + r.level_up.after + '.');
+      else if (ok) toast(ok);
+      draw();
+    } catch (e) { toast(e.message, 1); }
+  };
+  const pick = new Set(), qxp = { v: 25 };
+  const noteIn = h('input', { placeholder: 'What did you do? (like: ran 2 miles)', maxlength: 200, 'aria-label': 'What you did' });
+  const draw = () => {
+    const o = d.overall;
+    const hero = h('div', { class: 'card wide lq-hero' },
+      h('div', { class: 'lq-lvl' }, h('span', { class: 'lq-n' }, o.level), h('div', {}, h('div', { class: 'lq-t' }, 'Level ' + o.level + ' ' + o.title.toLowerCase()), h('div', { class: 'muted' }, o.to_next + ' XP to level ' + (o.level + 1)))),
+      h('div', { class: 'bar lq-bar', role: 'progressbar', 'aria-valuenow': o.pct, 'aria-valuemin': 0, 'aria-valuemax': 100 }, h('i', { style: 'width:' + o.pct + '%' })),
+      h('div', { class: 'lq-chips' }, [['Total XP', o.xp], ['Today', '+' + d.today_xp], ['Streak', d.streak ? d.streak + ' day' + (d.streak === 1 ? '' : 's') : 'start today'], ['This week', d.week_days + '/7 days'], ['Points', d.wallet]].map(([k, v]) =>
+        h('div', { class: 'lq-chip' }, h('b', {}, v), h('span', {}, k)))),
+      h('div', { class: 'lq-days', 'aria-hidden': 'true' }, Array.from({ length: 21 }, (_, i) => { const t = new Date(); t.setDate(t.getDate() - 20 + i); const k = t.getFullYear() + '-' + String(t.getMonth() + 1).padStart(2, '0') + '-' + String(t.getDate()).padStart(2, '0'); return h('i', { class: (d.active_days.includes(k) ? 'on' : '') + (k === d.today ? ' today' : ''), title: k }); })),
+      h('div', { class: 'muted lq-soft' }, 'A missed day never ends the game. Pick it up whenever you are ready.'));
+    const logWin = async (e) => {
+      e.preventDefault();
+      if (!noteIn.value.trim()) return toast('Say what you did first. XP is only for real, done actions.', 1);
+      if (!pick.size) return toast('Pick the area it grew.', 1);
+      const entries = [...pick].map((s) => ({ stat: s, xp: qxp.v }));
+      await act(() => post('/api/lifequest/log', { note: noteIn.value, entries }), '+' + qxp.v * entries.length + ' XP');
+      noteIn.value = ''; pick.clear();
+    };
+    const logCard = h('div', { class: 'card' }, h('h3', {}, 'Log a win'),
+      h('form', { class: 'form col', onsubmit: logWin }, noteIn,
+        h('div', { class: 'lq-pick', role: 'group', 'aria-label': 'Areas' }, live().map((s) => h('button', { type: 'button', class: 'lq-tag' + (pick.has(s.id) ? ' on' : ''), style: '--c:' + color(s.id), 'aria-pressed': pick.has(s.id) ? 'true' : 'false',
+          onclick: (ev) => { pick.has(s.id) ? pick.delete(s.id) : pick.add(s.id); ev.target.classList.toggle('on'); ev.target.setAttribute('aria-pressed', pick.has(s.id)); } }, s.name))),
+        h('div', { class: 'form' }, h('div', { class: 'seg', role: 'group', 'aria-label': 'XP' }, [10, 25, 50, 100].map((n) => h('button', { type: 'button', class: qxp.v === n ? 'on' : '', onclick: (ev) => { qxp.v = n; ev.target.parentNode.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b === ev.target)); } }, '+' + n))),
+          btn('Log it', 'ok', null, 'submit')),
+        h('div', { class: 'muted lq-soft' }, 'XP is for things you really did. The more areas you pick, the more each one earns.')));
+    const todayQ = d.quests.filter((q) => !q.archived && (q.kind === 'daily' || !q.done || q.done_day === d.today));
+    const questCard = h('div', { class: 'card' }, h('h3', {}, 'Today’s quests'),
+      todayQ.length ? h('div', { class: 'list' }, todayQ.map((q) => h('div', { class: 'item' + (q.done ? ' done' : '') },
+        h('button', { class: 'check' + (q.done ? ' on' : ''), 'aria-label': (q.done ? 'Undo ' : 'Done: ') + q.title, 'aria-pressed': q.done ? 'true' : 'false', onclick: () => act(() => post('/api/lifequest/quests/' + q.id + '/done', { done: !q.done }), q.done ? 'Unchecked' : '+' + q.xp + ' XP') }, q.done ? '✓' : ''),
+        h('div', { class: 'tx' }, q.title, h('div', { class: 'muted lq-sub' }, sname(q.stat) + (q.kind === 'boss' ? ' · boss' : q.kind === 'quest' ? ' · quest' : ''))),
+        h('span', { class: 'lq-xp' }, '+' + q.xp)))) : h('div', { class: 'empty' }, 'No quests yet. Turn a goal into one with Edit.'),
+      h('div', { class: 'muted lq-soft' }, 'Tick a quest only when you did it.'));
+    const statCard = h('div', { class: 'card' }, h('h3', {}, 'Character stats'),
+      h('div', { class: 'list' }, live().map((s) => h('div', { class: 'item lq-stat', style: '--c:' + color(s.id) },
+        h('div', { class: 'tx' }, h('div', { class: 'lq-row' }, h('b', {}, s.name), h('span', { class: 'muted' }, 'Lv ' + s.level + ' · ' + s.xp + ' XP' + (s.week_xp ? ' · +' + s.week_xp + ' this week' : ''))),
+          h('div', { class: 'bar' }, h('i', { style: 'width:' + s.pct + '%;background:var(--c)' })), s.note ? h('div', { class: 'muted lq-sub' }, s.note) : null)))));
+    const claimBtn = (r) => { const b = btn('Claim', 'sm ok', () => act(() => post('/api/lifequest/rewards/' + r.id + '/claim'), 'Enjoy it.')); b.disabled = d.wallet < r.cost; return b; };
+    const rewardCard = h('div', { class: 'card' }, h('h3', {}, 'Rewards'),
+      h('div', { class: 'list' }, d.rewards.filter((r) => !r.archived).map((r) => h('div', { class: 'item' },
+        h('div', { class: 'tx' }, r.title, h('div', { class: 'muted lq-sub' }, (d.wallet >= r.cost ? 'Ready to claim' : (r.cost - d.wallet) + ' more points') + (r.claimed ? ' · claimed ' + r.claimed + '×' : ''))),
+        h('span', { class: 'lq-xp' }, r.cost), claimBtn(r)))),
+      h('div', { class: 'muted lq-soft' }, 'Spending points never lowers your level.'));
+    const winCard = h('div', { class: 'card' }, h('h3', {}, 'Recent wins'),
+      d.wins.length ? h('div', { class: 'list' }, d.wins.slice(0, 10).map((w) => h('div', { class: 'item' },
+        h('div', { class: 'tx' }, w.note, h('div', { class: 'muted lq-sub' }, w.day + ' · ' + w.stats.map((x) => sname(x.stat)).join(', ') + (w.source === 'chat' ? ' · via chat' : ''))),
+        h('span', { class: 'lq-xp' }, '+' + w.xp),
+        h('button', { class: 'x', 'aria-label': 'Remove this entry', title: 'Remove a mistake', onclick: async () => { if (!confirm('Remove this entry and its XP?')) return; await act(() => del('/api/lifequest/log/' + w.win), 'Removed'); } }, '✕')))) : h('div', { class: 'empty' }, 'Nothing logged yet. Your first win is one tick away.'));
+    // weekly review: offered on Sunday, open any day from the button
+    const rv = d.review, saved = rv.saved || {};
+    const fld = (label, v) => { const t = h('textarea', { rows: 2, maxlength: 1000, 'aria-label': label, placeholder: label }); t.value = v || ''; return t; };
+    const rWins = fld('What went well this week?', saved.wins), rLess = fld('What did you learn?', saved.lessons), rNext = fld('One thing for next week', saved.next);
+    const reviewCard = (rv.due || lqReview) ? h('div', { class: 'card wide' }, h('h3', {}, 'Weekly review'),
+      h('div', { class: 'muted', style: 'margin-bottom:8px' }, 'This week you earned ' + d.week_xp + ' XP on ' + d.week_days + ' of 7 days' + (d.stats.some((s) => s.week_xp) ? ': ' + d.stats.filter((s) => s.week_xp).map((s) => s.name + ' +' + s.week_xp).join(', ') : '') + '. Be kind to yourself.'),
+      h('div', { class: 'form col' }, rWins, rLess, rNext, btn(rv.saved ? 'Update review' : 'Save review', 'pur', () => act(() => post('/api/lifequest/review', { wins: rWins.value, lessons: rLess.value, next: rNext.value }), 'Review saved')))) : null;
+    const lastR = rv.last && !reviewCard ? h('div', { class: 'muted lq-soft' }, 'Last review (week ending ' + rv.last.week + '): ' + (rv.last.next || rv.last.wins || rv.last.lessons)) : null;
+    show(h('div', { class: 'pagehead' }, h('h2', {}, 'Life Quest'), h('div', { class: 'sp' }),
+        btn(lqReview ? 'Hide review' : 'Weekly review', 'sm pur', () => { lqReview = !lqReview; draw(); }), btn(lqEdit ? 'Done editing' : 'Edit', 'sm', () => { lqEdit = !lqEdit; draw(); })),
+      h('div', { class: 'grid lq-grid' }, hero, logCard, questCard, statCard, rewardCard, winCard, reviewCard, lqEdit ? lqManage() : null), lastR);
+  };
+  // Edit: stats (add, rename, hide), quests (add, edit, hide) and rewards. Each row saves on its own.
+  const lqManage = () => {
+    const statRow = (s) => {
+      const nm = h('input', { value: s.name, maxlength: 30, 'aria-label': 'Stat name' }), nt = h('input', { value: s.note, maxlength: 80, placeholder: 'What it covers (optional)', 'aria-label': 'Stat note' });
+      return h('div', { class: 'form lq-edit' }, nm, nt, btn('Save', 'sm ok', () => act(() => post('/api/lifequest/stats', { stats: [{ id: s.id, name: nm.value, note: nt.value, archived: s.archived }] }), 'Saved')),
+        s.id ? btn(s.archived ? 'Show' : 'Hide', 'sm dim', () => act(() => post('/api/lifequest/stats', { stats: [{ id: s.id, name: s.name, note: s.note, archived: !s.archived }] }))) : null);
+    };
+    const newStat = h('div', { class: 'form lq-edit' }, (() => { const n = h('input', { placeholder: 'New stat (like Reading)', maxlength: 30, 'aria-label': 'New stat name' }); return [n, btn('Add stat', 'sm pur', () => act(() => post('/api/lifequest/stats', { stats: [{ name: n.value }] }), 'Added'))]; })());
+    const statSel = (v) => h('select', { 'aria-label': 'Stat' }, live().map((s) => h('option', { value: s.id, selected: s.id === v }, s.name)));
+    const questRow = (q) => {
+      const t = h('input', { value: q ? q.title : '', maxlength: 120, placeholder: q ? '' : 'New quest (like Study 45 min)', 'aria-label': 'Quest name' }), st = statSel(q && q.stat);
+      const xp = h('input', { type: 'number', value: q ? q.xp : 25, min: 1, max: d.max_xp, 'aria-label': 'XP', style: 'max-width:80px;flex:none' });
+      const k = h('select', { 'aria-label': 'Kind' }, d.kinds.map((x) => h('option', { value: x, selected: q && q.kind === x }, x)));
+      const save = (arch) => act(() => post('/api/lifequest/quests', { id: q ? q.id : null, title: t.value, stat: st.value, xp: Number(xp.value), kind: k.value, archived: arch }), 'Saved');
+      return h('div', { class: 'form lq-edit' + (q && q.archived ? ' off' : '') }, t, st, xp, k, btn(q ? 'Save' : 'Add quest', 'sm ' + (q ? 'ok' : 'pur'), () => save(q ? q.archived : false)), q ? btn(q.archived ? 'Show' : 'Archive', 'sm dim', () => save(!q.archived)) : null);
+    };
+    const rewardRow = (r) => {
+      const t = h('input', { value: r ? r.title : '', maxlength: 80, placeholder: r ? '' : 'New reward', 'aria-label': 'Reward name' }), c = h('input', { type: 'number', value: r ? r.cost : 500, min: 1, 'aria-label': 'Cost in points', style: 'max-width:90px;flex:none' });
+      const save = (arch) => act(() => post('/api/lifequest/rewards', { id: r ? r.id : null, title: t.value, cost: Number(c.value), archived: arch }), 'Saved');
+      return h('div', { class: 'form lq-edit' + (r && r.archived ? ' off' : '') }, t, c, btn(r ? 'Save' : 'Add reward', 'sm ' + (r ? 'ok' : 'pur'), () => save(r ? r.archived : false)), r ? btn(r.archived ? 'Show' : 'Archive', 'sm dim', () => save(!r.archived)) : null);
+    };
+    return h('div', { class: 'card wide' }, h('h3', {}, 'Edit your game'),
+      h('div', { class: 'muted', style: 'margin-bottom:8px' }, 'Pick up to ' + d.max_stats + ' areas to grow. Hiding a stat or quest keeps the XP you earned.'),
+      h('div', { class: 'dayhead' }, 'Stats'), d.stats.map(statRow), newStat,
+      h('div', { class: 'dayhead' }, 'Quests (daily, quest, or boss for the hard thing you avoid)'), d.quests.map(questRow), questRow(null),
+      h('div', { class: 'dayhead' }, 'Rewards'), d.rewards.map(rewardRow), rewardRow(null));
+  };
+  draw();
+};
+
 // ----- Calendar -----
 VIEWS.calendar = async () => {
   setHeader('Calendar', []);
@@ -680,7 +813,7 @@ VIEWS.calendar = async () => {
   const st = h('input', { type: 'time', value: '09:00', 'aria-label': 'Start' }), en = h('input', { type: 'time', value: '10:00', 'aria-label': 'End' });
   const where = d.write_target === 'primary' ? 'your REAL calendar' : 'the TEST calendar (change in Settings)';
   show(h('div', { class: 'pagehead' }, h('h2', {}, 'Next 7 days'), h('div', { class: 'sp' }), btn('Ask assistant to change something', 'sm pur', () => { newChat(); t.value = 'On my calendar: '; t.focus(); })),
-    d.error ? h('div', { class: 'err' }, d.error + ' (run ~/assistant/login.sh)') : null,
+    d.error ? h('div', { class: 'err' }, d.error + ' (' + loginHint + ')') : null,
     h('div', { class: 'card' }, h('h3', {}, 'Add event'), h('div', { class: 'muted', style: 'margin-bottom:8px' }, 'Saves to ' + where + '. To move or delete events, ask the assistant (it asks you to confirm).'),
       h('form', { class: 'form', onsubmit: async (e) => { e.preventDefault(); try { const r = await post('/api/calendar/event', { title: title.value, date: date.value, start: st.value, end: en.value }); toast('Added to the ' + r.calendar.toUpperCase() + ' calendar'); VIEWS.calendar(); } catch (er) { toast(er.message, 1); } } },
         title, date, st, en, btn('Add', 'pur', null, 'submit'))),
@@ -751,6 +884,17 @@ VIEWS.skills = async () => {
 };
 
 // ----- Settings -----
+function labelPicker() {
+  const box = h('div', { class: 'muted' }, 'Loading your Gmail labels…');
+  J('/api/mail/labels').then((d) => {
+    const rows = d.labels.map((l) => ({ l, tick: h('input', { type: 'checkbox', checked: l.allowed, 'aria-label': 'Use ' + l.name, style: 'flex:none;width:auto' }), hint: h('input', { value: l.hint, placeholder: 'hint (optional)', 'aria-label': 'Hint for ' + l.name, maxlength: 120 }) }));
+    const save = async () => { try { await post('/api/mail/labels', { labels: Object.fromEntries(rows.filter((r) => r.tick.checked).map((r) => [r.l.name, r.hint.value])) }); toast('Saved'); } catch (e) { toast(e.message, 1); } };
+    rows.forEach((r) => { r.tick.onchange = save; r.hint.onchange = save; });
+    box.className = '';
+    box.replaceChildren(...(rows.length ? rows.map((r) => h('div', { class: 'form', style: 'margin-bottom:4px' }, r.tick, h('span', { style: 'min-width:140px' }, r.l.name), r.hint)) : [h('div', { class: 'muted' }, 'No Gmail labels found (connect Gmail first).')]));
+  }).catch((e) => box.replaceChildren(e.message));
+  return box;
+}
 async function autoSet(obj) { try { await post('/api/automations', obj); toast('Saved'); } catch (e) { toast(e.message, 1); } }
 const onOff = (v, fn) => { const w = h('div', { class: 'seg' }); const draw = (cur) => w.replaceChildren(h('button', { class: cur ? 'on' : '', onclick: () => { draw(true); fn(true); } }, 'On'), h('button', { class: cur ? '' : 'on', onclick: () => { draw(false); fn(false); } }, 'Off')); draw(v); return w; };
 const modeSel = (v, fn) => { const w = h('div', { class: 'seg' }); const draw = (cur) => w.replaceChildren(...['off', 'nudge', 'auto'].map((m) => h('button', { class: cur === m ? 'on' : '', onclick: () => { draw(m); fn(m); } }, m))); draw(v); return w; };
@@ -906,7 +1050,7 @@ VIEWS.settings = async (arg) => {
         row('Planning', h('div', {}, h('div', { class: 'seg' }, h('button', { class: s.planning.on ? 'on' : '', onclick: () => setPlanning(true) }, 'Claude'), h('button', { class: s.planning.on ? '' : 'on', onclick: () => setPlanning(false) }, 'Rosie\'s own model')), h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1));margin-top:4px' }, s.planning.line + ' Claude only plans (it gets your calendar, tasks and projects for the week, never mail or notes); Rosie does the work, with her usual Yes cards. Spoken requests skip it.'))),
         s.orchestrator === null ? null : row('Orchestrator', h('div', {}, h('div', { class: 'seg' }, h('button', { class: s.orchestrator ? 'on' : '', onclick: () => setOrch(true) }, 'On'), h('button', { class: s.orchestrator ? '' : 'on', onclick: () => setOrch(false) }, 'Off')), h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1));margin-top:4px' }, 'On: your Claude Code sessions plan and check, and Rosie and Agent Zero do the work until Claude is satisfied. Same switch as "delegate on" and "delegate off".'))),
         row('GPU', s.gpu.name ? [s.gpu.name, h('div', { class: 'bar' }, h('i', { style: 'width:' + gpuPct + '%' })), h('span', { class: 'muted' }, `${s.gpu.used_mb} / ${s.gpu.total_mb} MB`)] : (s.gpu.error || 'not found')),
-        row('Google Calendar', s.google.ok ? 'connected' : h('span', { style: 'color:var(--bad)' }, (s.google.error || 'login needed') + ' · run ~/assistant/login.sh')),
+        row('Google Calendar', s.google.ok ? 'connected' : h('span', { style: 'color:var(--bad)' }, (s.google.error || 'login needed') + ' · ' + loginHint)),
         row('Phone address', s.tailscale.name ? s.tailscale.name : (s.tailscale.error || 'Tailscale not running')),
         row('Disk free', s.disk_free_gb + ' GB'))),
       h('div', { class: 'card' }, h('h3', {}, 'Health'),
@@ -925,7 +1069,10 @@ VIEWS.settings = async (arg) => {
           ...autoRow('Desktop pop-ups', onOff(A.desktop_notify, (v) => autoSet({ desktop_notify: v })), null, 'Reminders you set always pop up, even in quiet hours.'),
           ...autoRow('Mail monitoring', onOff(A.mail_on, (v) => autoSet({ mail_on: v })), numSel(A.mail_check_min, [5, 10, 15, 30, 60], (v) => autoSet({ mail_check_min: v }), ' min'), 'Checks Gmail (read-only) in the background.'),
           ...autoRow('Flag important mail', onOff(A.mail_flag, (v) => autoSet({ mail_flag: v })), null, 'Pop-up + Inbox item for mail that needs you.'),
-          ...autoRow('Find tasks and dates', onOff(A.mail_find_tasks, (v) => autoSet({ mail_find_tasks: v })), null, 'Suggests tasks/events from mail. You approve each one.'),
+          ...autoRow('Find tasks and dates', onOff(A.mail_find_tasks, (v) => autoSet({ mail_find_tasks: v })), null, 'Dates in mail become calendar requests you approve (an event is only added, nothing moves). To-dos go to the Mail page, not Tasks.'),
+          ...autoRow('Sort mail into my labels', onOff(A.mail_organize, (v) => autoSet({ mail_organize: v })), null, 'Picks one of YOUR Gmail labels (chosen below) for new mail. You see a preview on the Mail page and press OK; nothing is deleted.'),
+          ...autoRow('Take sorted mail out of the Inbox', onOff(A.mail_organize_archive, (v) => autoSet({ mail_organize_archive: v })), null, 'Off: mail is only labeled. On: it is also archived (kept in All Mail). Undo puts it back.'),
+          ...autoRow('Labels Rosie may use', labelPicker(), null, 'Tick the labels and add a few words to help (for example "school and class mail"). None are used until you tick them.'),
           ...autoRow('Email in daily brief', onOff(A.mail_digest, (v) => autoSet({ mail_digest: v })), null, 'A short email section in the morning brief.'),
           ...autoRow('Safety: confirm after untrusted text', onOff(A.taint_guard, (v) => autoSet({ taint_guard: v })), null, 'After I read email, web pages or outside files, running commands, writing files or launching agents needs your OK. Recommended ON.'),
           ...autoRow('Weekly project review', onOff(A.weekly_review_on, (v) => autoSet({ weekly_review_on: v })), timeIn(A.weekly_review_time, (v) => autoSet({ weekly_review_time: v })), 'Sundays: which projects are stalled or have no next action.'),

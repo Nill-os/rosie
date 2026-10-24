@@ -24,6 +24,7 @@ import ctxsize
 import gcal
 import memory
 import models
+import plat
 import skills
 import tasks
 import testguard
@@ -674,7 +675,7 @@ class NewReminder(BaseModel):
 def badges():
     import proposals as _pr
     return {"overdue": len(tasks.overdue()), "inbox": inbox.unread_count(), "proposals": _pr.count_pending(),
-            "pages_off": pages_off(), "pages_hidden": config.load().get("hidden_pages") or []}
+            "pages_off": pages_off(), "google_login": plat.google_login(), "gmail_login": plat.google_login("main"), "pages_hidden": config.load().get("hidden_pages") or []}
 
 
 @router.get("/api/inbox")
@@ -721,7 +722,7 @@ def reminder_cancel(rid: int):
     return inbox.cancel_reminder(rid)
 
 
-AUTO_BOOL = ("model_scout", "security_watch", "security_autopatch", "brief_on", "remind_events", "nudge_overdue", "desktop_notify", "mail_on", "mail_flag", "mail_find_tasks", "mail_digest", "taint_guard", "agents_notify", "weekly_review_on", "dictation_on", "dictation_cleanup", "meeting_keep_audio", "ai_on", "ai_orb_on", "ai_speak", "ai_use_selection")
+AUTO_BOOL = ("model_scout", "security_watch", "security_autopatch", "brief_on", "remind_events", "nudge_overdue", "desktop_notify", "mail_on", "mail_flag", "mail_find_tasks", "mail_digest", "mail_organize", "mail_organize_archive", "taint_guard", "agents_notify", "weekly_review_on", "dictation_on", "dictation_cleanup", "meeting_keep_audio", "ai_on", "ai_orb_on", "ai_speak", "ai_use_selection")
 AUTO_TIME = ("brief_time", "nudge_overdue_time", "wrapup_time", "quiet_from", "quiet_to", "weekly_review_time")
 AUTO_MODE = {"scratch_mode": ("off", "nudge", "auto"), "wrapup_mode": ("off", "nudge", "auto"), "dictation_hotkey": ("Control_R", "Alt_R", "Super_R", "Pause", "Scroll_Lock", "Menu", "F8", "F9", "F10", "Shift_L+Super_L+F23", "Shift_L+Super_L+keycode:201", "Shift_L+Super_L+F9"),
              "ai_hotkey": ("Alt_R", "Control_R", "Super_R", "Pause", "Scroll_Lock", "Menu", "F8", "F9", "F10", "Shift_L+Super_L+keycode:201"),
@@ -769,6 +770,7 @@ def automations_test():
 
 # ---------------- mail + proposals ----------------
 import gmail  # noqa: E402
+import mailorganize  # noqa: E402
 import mailwatch  # noqa: E402
 import proposals  # noqa: E402
 
@@ -789,8 +791,63 @@ class DraftReq(BaseModel):
 def mail_home():
     cfg = config.load()
     accts = [{"name": a["name"], "email": a["email"]} for a in gmail.accounts()]
+    try:
+        mailwatch.migrate_email_tasks()                    # once: email-made tasks leave Tasks for the action list (backup first)
+    except Exception:                                      # the page still loads; it tries again next time
+        pass
     return {"accounts": accts, "items": mailwatch.list_items() if accts else [], "digest": mailwatch.digest(24) if accts else None, "last_check": mailwatch.last_check(),
-            "client_ready": gmail.CLIENT_FILE.exists(), "settings": {k: cfg[k] for k in ("mail_on", "mail_check_min", "mail_flag", "mail_find_tasks", "mail_digest")}}
+            "todos": mailwatch.todos(), "organize": mailorganize.enabled(),
+            "client_ready": gmail.CLIENT_FILE.exists(), "settings": {k: cfg[k] for k in ("mail_on", "mail_check_min", "mail_flag", "mail_find_tasks", "mail_digest", "mail_organize", "mail_organize_archive")}}
+
+
+class TodoDone(BaseModel):
+    done: bool = True
+
+
+@router.post("/api/mail/todos/{tid}/done")
+def mail_todo_done(tid: int, p: TodoDone):
+    mailwatch.todo_done(tid, p.done)
+    return {"ok": True}
+
+
+@router.get("/api/mail/labels")
+def mail_labels():
+    try:
+        return {"labels": mailorganize.all_labels()}
+    except gmail.MailLoginExpired as e:
+        return err(str(e), 503)
+    except Exception as e:
+        return err(f"{type(e).__name__}: {e}", 500)
+
+
+@router.post("/api/mail/labels")
+def mail_labels_set(body: dict):
+    chosen = body.get("labels")
+    if not isinstance(chosen, dict):
+        return err("labels must be a list of label names with a short hint each")
+    try:
+        return {"labels": mailorganize.set_allowed(chosen)}
+    except ValueError as e:
+        return err(str(e))
+    except gmail.MailLoginExpired as e:
+        return err(str(e), 503)
+
+
+@router.get("/api/mail/organize")
+def mail_organize_preview():
+    return mailorganize.preview()                         # read-only: what would be labeled
+
+
+@router.post("/api/mail/organize/apply")
+def mail_organize_apply():
+    r = mailorganize.apply()
+    return err(r["error"], 409) if "error" in r else r
+
+
+@router.post("/api/mail/organize/undo")
+def mail_organize_undo():
+    r = mailorganize.undo()
+    return err(r["error"], 409) if "error" in r else r
 
 
 @router.post("/api/mail/check")

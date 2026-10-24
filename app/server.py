@@ -39,6 +39,7 @@ import config
 import corner
 import corner_api
 import hub
+import lifequest_api
 import models
 import a0_api
 import vector_api
@@ -57,6 +58,7 @@ app.include_router(hub.router)
 app.include_router(paper_api.router)
 app.include_router(a0_api.router)
 app.include_router(corner_api.router)
+app.include_router(lifequest_api.router)
 app.include_router(agentdeck_api.router)
 app.include_router(graphview_api.router)
 app.include_router(vector_api.router)
@@ -82,6 +84,9 @@ def _startup():
         a0.relocate()
         a0_api.CONTAINER = skill_sync.CONTAINER = ctxsize.A0_CONTAINER = a0.CONTAINER
         skill_sync.A0_SKILLS = a0_host.usr() / "skills"
+    def _board_link():
+        import board_link
+        board_link.start()
     steps = (("Agent Zero's place", a0_place),
              ("stopped flag", power.clear_flag),         # she is starting: a "stopped on purpose" from Shut down all is over
              ("model", models.load_saved),
@@ -89,6 +94,7 @@ def _startup():
              ("automations", automations.start),
              ("warm-up", lambda: threading.Thread(target=_warm_up, daemon=True).start()),
              ("shared skills", skill_sync.start),        # the same skills for Claude Code, Rosie and Agent Zero
+             ("board link", _board_link),                # the agent board shared with the linked PC (Settings: board_link_repo)
              ("Agent Zero tools", a0_tools),
              ("Vector", vector_pod.start))                 # Rosie as Vector's brain (Settings > Vector; off until set up)
     for what, step in steps:                             # one part failing must not keep Rosie from starting (audit 2026-10-20)

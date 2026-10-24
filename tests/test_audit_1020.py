@@ -167,7 +167,7 @@ def test_an_unreadable_settings_file_is_kept_aside_before_a_save():
     config.PATH.parent.mkdir(parents=True, exist_ok=True)
     config.PATH.write_text('{"owner_notes": "half')
     config.save(config.load())
-    assert config.PATH.with_name("config.json.broken").read_text().startswith('{"owner_notes"')
+    assert config.PATH.with_name("config.json.broken").read_text(encoding="utf-8").startswith('{"owner_notes"')
 
 
 def test_backups_include_the_corners_database(tmp_path):
@@ -197,7 +197,7 @@ def test_a_capture_during_a_sync_is_kept(monkeypatch):
         return {"tasks": [], "notes": [], "ideas": [], "decisions": [], "followups": []}
     monkeypatch.setattr(workflows, "llm_json", slow_sort)
     workflows._sync_scratch([])
-    assert "jotted meanwhile" in workflows.SCRATCH.read_text() and "first thing" not in workflows.SCRATCH.read_text()
+    assert "jotted meanwhile" in workflows.SCRATCH.read_text(encoding="utf-8") and "first thing" not in workflows.SCRATCH.read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------- mail
@@ -222,7 +222,7 @@ def test_the_orchestrator_switch_in_settings():
     import hub
     hub.ORCH.parent.mkdir(parents=True, exist_ok=True)
     assert hub.settings_set(hub.Settings(orchestrator=True))["orchestrator"] is True
-    assert json.loads(hub.ORCH.read_text())["on"] is True
+    assert json.loads(hub.ORCH.read_text(encoding="utf-8"))["on"] is True
     assert hub.settings_set(hub.Settings(orchestrator=False))["orchestrator"] is False
 
 

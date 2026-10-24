@@ -13,6 +13,7 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
 import config
+import plat
 import web
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -67,14 +68,14 @@ def disconnect(name):
 def service(name):
     tp = token_path(name)
     if not tp.exists():
-        raise MailLoginExpired(f"Gmail account '{name}' is not connected. Run ~/assistant/login-gmail.sh {name}")
+        raise MailLoginExpired(f"Gmail account '{name}' is not connected. {plat.google_login(name, cap=True)}")
     granted = json.loads(tp.read_text()).get("scopes") or READ_SCOPES
     creds = Credentials.from_authorized_user_file(str(tp), granted)
     if not creds.valid:
         try:
             creds.refresh(Request())
         except RefreshError as e:
-            raise MailLoginExpired(f"Gmail login for '{name}' expired (about weekly). Run ~/assistant/login-gmail.sh {name}") from e
+            raise MailLoginExpired(f"Gmail login for '{name}' expired (about weekly). {plat.google_login(name, cap=True)}") from e
         testguard.check(tp).write_text(creds.to_json())
         tp.chmod(0o600)
     return build("gmail", "v1", credentials=creds, cache_discovery=False)
@@ -158,6 +159,6 @@ def send_own(name, to: list[str], subject: str, html_body: str, text_body: str, 
         r = (service_fn or service)(name).users().messages().send(userId="me", body={"raw": raw}).execute()
     except Exception as e:
         if "insufficient" in str(e).lower() or "403" in str(e):
-            raise RuntimeError(f"Your Gmail login can't send mail (it's read-only). Run ~/assistant/login-gmail.sh {_safe(name)} once to allow it.") from e
+            raise RuntimeError(f"Your Gmail login can't send mail (it's read-only). {plat.google_login(_safe(name), cap=True)} once to allow it.") from e
         raise
     return r.get("id", "")

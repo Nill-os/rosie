@@ -461,9 +461,9 @@ def test_the_word_list_is_wordnet_with_cmu_pronunciation_and_big_enough_for_a_ye
     assert sum(1 for w in words if w["example"]) > 500 and {w["kind"] for w in words} == {"word", "biz", "tech", "radio"}
     assert all(w["say"] and w["phones"] and w["say"] == paper_fun.respell(w["phones"]) for w in words)   # never a guessed one
     assert all(w["word"][:max(4, len(w["word"]) - 3)].lower() not in w["definition"].lower() for w in words if w["kind"] == "word")
-    head = "\n".join(paper_fun.WORDS.read_text().splitlines()[:3])
-    lic = (paper_fun.WORDS.parent / "paper_words.LICENSE").read_text()
-    cmu = (paper_fun.WORDS.parent / "paper_words.CMUDICT-LICENSE").read_text()
+    head = "\n".join(paper_fun.WORDS.read_text(encoding="utf-8").splitlines()[:3])
+    lic = (paper_fun.WORDS.parent / "paper_words.LICENSE").read_text(encoding="utf-8")
+    cmu = (paper_fun.WORDS.parent / "paper_words.CMUDICT-LICENSE").read_text(encoding="utf-8")
     assert "WordNet 3.0" in head and "CMU Pronouncing" in head and "Princeton University" in lic and "Carnegie Mellon University" in cmu
     by = {w["word"]: w for w in words}
     assert by["ADAMANT"]["definition"] == "impervious to pleas, persuasion, requests, reason" and by["ADAMANT"]["say"] == "AD-uh-muhnt"
@@ -570,7 +570,7 @@ def test_the_quote_list_is_real_sourced_cited_and_broad():
         assert q["url"].startswith("https://en.wikiquote.org/wiki/") and q["role"]
         assert not tool.SKIP_HEAD.search(q["section"]) and not tool.SKIP_CITE.search(q["citation"]), q   # never disputed / misattributed
         assert 30 <= len(q["quote"]) <= 200 and tool.good_quote(q["quote"]), q                          # fits the headline slot
-    lic = (Path(paper_fun.__file__).parent / "paper_quotes.LICENSE").read_text()
+    lic = (Path(paper_fun.__file__).parent / "paper_quotes.LICENSE").read_text(encoding="utf-8")
     assert "CC BY-SA" in lic and "wikiquote" in lic.lower()
 
 

@@ -23,6 +23,7 @@ if (-not (Test-Path $uv)) {
 }
 Invoke-WebRequest "$Raw/launcher.py" -OutFile "$Root\launcher.py"
 Invoke-WebRequest "$Raw/Rosie.bat" -OutFile "$Root\Rosie.bat"
+Invoke-WebRequest "$Raw/Rosie%20Google%20Sign-in.bat" -OutFile "$Root\Rosie Google Sign-in.bat"
 if ($Repo -ne 'Nill-os/rosie') { Set-Content "$Root\update.json" (@{ repo = $Repo } | ConvertTo-Json) -Encoding UTF8 }
 & $uv python install 3.12
 if ($LASTEXITCODE -ne 0) { throw 'Could not set up Python.' }
@@ -45,13 +46,14 @@ if (-not (Test-Path "$Root\slots\A\.venv")) {
     if ($LASTEXITCODE -ne 0) { throw 'Could not install Rosie.' }
 } else { Write-Host '     Already installed: Rosie updates herself.' }
 
-Write-Host '5/6  Model and Agent Zero'
+Write-Host '5/6  Model and Agent Zero (starts Ollama and Docker Desktop if they are closed; this can take a few minutes)'
 Launcher --setup
 
 Write-Host '6/6  Shortcuts'
 $sh = New-Object -ComObject WScript.Shell
 foreach ($dir in @([Environment]::GetFolderPath('Desktop'), [Environment]::GetFolderPath('Programs'))) {
     $s = $sh.CreateShortcut("$dir\Rosie.lnk"); $s.TargetPath = "$Root\Rosie.bat"; $s.WorkingDirectory = $Root; $s.WindowStyle = 7; $s.Save()
+    $s = $sh.CreateShortcut("$dir\Rosie Google Sign-in.lnk"); $s.TargetPath = "$Root\Rosie Google Sign-in.bat"; $s.WorkingDirectory = $Root; $s.Save()
 }
 $s = $sh.CreateShortcut([Environment]::GetFolderPath('Startup') + '\Rosie.lnk'); $s.TargetPath = "$Root\Rosie.bat"; $s.WorkingDirectory = $Root
 $s.Arguments = '--no-browser'; $s.WindowStyle = 7; $s.Save()

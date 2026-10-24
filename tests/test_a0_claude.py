@@ -15,7 +15,7 @@ def test_agent_zero_gets_the_plan_and_verify_rules_in_its_own_prompt_file(tmp_pa
     monkeypatch.setattr(a0, "include_text", lambda: "rules")
     monkeypatch.setattr(a0, "tools_text", lambda: "tools")
     a0.write_include()
-    text = (tmp_path / "claude.promptinclude.md").read_text()
+    text = (tmp_path / "claude.promptinclude.md").read_text(encoding="utf-8")
     assert "plan_with_claude" in text and "ask_claude_to_solve" in text and "/host/home" in text and "until it passes" in text
     assert "sort -h | head` shows the SMALLEST" in text and "never / " in text
     assert len(text) < 7000                                                          # Agent Zero's 2,000-token cap per file
@@ -52,7 +52,7 @@ def test_both_tools_are_rosie_tools_in_the_plan_group_and_count_as_outside_text(
 
 def test_agent_deck_sections_can_be_reordered_and_the_board_is_back():
     deck = Path(__file__).resolve().parent.parent / "static" / "deck"
-    js, html = (deck / "deck.js").read_text(), (deck / "index.html").read_text()
+    js, html = (deck / "deck.js").read_text(encoding="utf-8"), (deck / "index.html").read_text(encoding="utf-8")
     assert 'data-sec="board"' in html and "drawMiniBoard" in js
     assert "SET.order" in js and "draggable: 'true'" in js and "moveSection" in js
 
@@ -270,10 +270,10 @@ def test_rosie_installs_the_loop_into_agent_zero_and_keeps_it_current(tmp_path, 
     monkeypatch.setattr(a0, "EXT_DIR", ext_dir)
     a0.install_extensions()
     dst = ext_dir / "tool_execute_before" / "_30_claude_check.py"
-    assert dst.read_text() == EXT.read_text()
+    assert dst.read_text(encoding="utf-8") == EXT.read_text(encoding="utf-8")
     dst.write_text("old")
     a0.install_extensions()
-    assert dst.read_text() == EXT.read_text()
+    assert dst.read_text(encoding="utf-8") == EXT.read_text(encoding="utf-8")
 
 
 # --- when Claude can't be used (owner 2026-10-21: "make a handler for when i run out of tokens") ---------------------------
@@ -538,7 +538,7 @@ def test_agent_zero_knows_to_ask_the_other_ais_and_to_use_its_own_terminal():
     assert "ask_other_ais" in agent.TOOLS and agent.GROUPS["ask_other_ais"] == "plan" and "ask_other_ais" in agent.UNTRUSTED
     assert "ask_other_ais" in a0.CLAUDE_RULES and "code_execution_tool" in a0.CLAUDE_RULES
     assert "asks_owner" in claude_plan.VERIFY_SCHEMA["required"]
-    src = Path(a0_mcp.__file__).read_text()
+    src = Path(a0_mcp.__file__).read_text(encoding="utf-8")
     assert "use your own terminal (code_execution_tool)" in src and "a0.write_include()" in src
 
 
@@ -551,7 +551,7 @@ def test_agent_zero_notes_which_chat_a_marked_rosie_message_landed_in(ext, tmp_p
     ag = a0_agent([item("user", "[Rosie turn 0123456789abcdef]\n\nmove my photos"), item("agent", "thinking")])
     ag.context.id = "ctxA"
     asyncio.run(mod.RosieTurn(ag).execute())
-    assert (tmp_path / "turns" / "0123456789abcdef").read_text() == "ctxA"
+    assert (tmp_path / "turns" / "0123456789abcdef").read_text(encoding="utf-8") == "ctxA"
     helper = a0_agent([item("user", "[Rosie turn fedcba9876543210]\n\nhi")], number=1)
     helper.context.id = "ctxB"
     asyncio.run(mod.RosieTurn(helper).execute())                                    # helper agents share the chat: only agent 0 notes it
@@ -586,7 +586,7 @@ def test_a_writing_job_that_misses_is_written_by_claude_saved_and_sent(ext, monk
     out = run(ext, a0_agent([item("user", ask), item("text_editor", "questions.md 165 lines >>> 1 # Old draft")], iteration=4),
               "# Old draft\n1. Would you buy it?")
     assert out.startswith("# Questions\n1. Tell me about the last time") and f"Written by Claude" in out and f"Saved to {target}" in out
-    assert (job / "questions.md").read_text().startswith("# Questions")
+    assert (job / "questions.md").read_text(encoding="utf-8").startswith("# Questions")
     sent = calls[-1][1]
     assert calls[-1][0] == "/write" and "30-key keypad" in sent["material"] and "Old draft" in sent["draft"]
     assert "hypothetical" in sent["problems"]
@@ -611,7 +611,7 @@ def test_claudes_text_is_saved_only_in_agent_zeros_own_job_files(ext, monkeypatc
     (root / "notes.md").write_text("Agent Zero's own note")
     assert ext.save(str(root / "jobs" / "mesh" / "out.md"), "text") == str(root / "jobs" / "mesh" / "out.md")
     assert ext.save(str(root / "new.md"), "text") == str(root / "new.md")                  # a new file in its work folder
-    assert ext.save(str(root / "notes.md"), "text") == "" and (root / "notes.md").read_text() == "Agent Zero's own note"
+    assert ext.save(str(root / "notes.md"), "text") == "" and (root / "notes.md").read_text(encoding="utf-8") == "Agent Zero's own note"
     assert ext.save(str(root / "rosie.promptinclude.md"), "x") == "" and ext.save("/host/home/notes.md", "x") == ""
     assert ext.save(str(root / "jobs" / ".." / ".." / "escape.md"), "x") == "" and ext.save(str(root / "run.sh"), "x") == ""
     assert "Not saved: /host/home/a.md" in ext.written_note({"by": "claude", "path": "/host/home/a.md"}, "")

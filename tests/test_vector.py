@@ -554,7 +554,7 @@ def test_connect_adopts_an_escape_pod_robot_that_takes_rosies_token(monkeypatch)
     assert "Vector-U4H6 (2.0.1.6076ep) at 192.168.1.130 is yours." in msg
     c = config.load()
     assert c["vector_escapepod"] and c["vector_robots"] == [{"esn": ESN, "ip": "192.168.1.130", "name": "Vector-U4H6", "firmware": "2.0.1.6076ep"}]
-    assert (vector_pod.DIR / f"robot-{ESN}.pem").read_text() == "PEM"
+    assert (vector_pod.DIR / f"robot-{ESN}.pem").read_text(encoding="utf-8") == "PEM"
 
 
 # --- quiet when idle: muted except while he talks ---------------------------------------------------------------------

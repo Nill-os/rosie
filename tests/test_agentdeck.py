@@ -98,6 +98,7 @@ def deck(tmp_path, monkeypatch):
     monkeypatch.setattr(agentdeck, "CLAUDE", claude)                         # never the real transcripts
     monkeypatch.setattr(agentdeck, "live_slot", lambda: tmp_path)              # nor the real board, config or corner database
     monkeypatch.setattr(agentdeck, "A0_CHATS", tmp_path / "a0-chats")            # nor Agent Zero's chats
+    monkeypatch.setattr(agentdeck, "_a0_chats", lambda: tmp_path / "a0-chats")
     monkeypatch.setattr(agentdeck, "_counter", tokens.TokenCounter(str(claude / "projects")))
     monkeypatch.setattr(agentdeck, "_tok_thread", {"t": "off"})            # no background reader under tests
     monkeypatch.setattr(agentdeck, "_containers", lambda: {})
@@ -148,5 +149,5 @@ def test_the_page_is_served_and_rosie_lists_it(deck):
     server, c = deck
     page = c.get("/deck/index.html")
     assert page.status_code == 200 and "deck.js" in page.text
-    js = Path(server.STATIC / "app.js").read_text()
+    js = Path(server.STATIC / "app.js").read_text(encoding="utf-8")
     assert "['deck', '◫', 'Agent Deck']" in js and "/deck/index.html" in js

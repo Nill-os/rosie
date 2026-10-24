@@ -74,15 +74,12 @@ def test_mail_triage_runs_off_the_tick(monkeypatch):
     assert automations._mail["running"] is False
 
 
-def test_tomorrow_in_an_email_means_the_day_after_it_was_sent(monkeypatch):
+def test_tomorrow_in_an_email_means_the_day_after_it_was_sent():
     import mailwatch
-    import proposals
-    got = []
-    monkeypatch.setattr(proposals, "add", lambda kind, title, payload, **k: got.append(payload) or 1)
     sent = dt.datetime(2026, 10, 23, 9, 0, tzinfo=gcal.TZ)
     msg = {"id": "m1", "from": "Sam <sam@example.com>", "subject": "Report", "ts": int(sent.timestamp())}
     mailwatch._propose("me", msg, {"tasks": [{"title": "Send the report", "when": "tomorrow"}], "events": []}, {})
-    assert got[0]["due"] == "2026-10-24"
+    assert mailwatch.todos()[0]["due"] == "2026-10-24"          # on the Mail page's action list now, not in Tasks
 
 
 def test_llm_json_answers_have_a_length_cap(monkeypatch):

@@ -12,6 +12,20 @@ IS_WIN = sys.platform == "win32"
 ROOT = Path(__file__).resolve().parent.parent
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)     # a helper program never flashes a console window
 
+
+def pick(linux, windows):
+    """One text or value per system, so a message names the command that exists on this PC."""
+    return windows if IS_WIN else linux
+
+
+def google_login(account: str | None = None, cap: bool = False) -> str:
+    """What to do to sign in to Google, as a phrase ("run ~/assistant/login.sh"). login.sh and login-gmail.sh are bash scripts, so Windows has
+    a shortcut that does both (tools/windows/Rosie Google Sign-in.bat). account: the Gmail account name; None means Calendar."""
+    text = pick("run " + ("~/assistant/login.sh" if account is None else f"~/assistant/login-gmail.sh {account}"),
+                "open Rosie Google Sign-in (the shortcut on your desktop)")
+    return text[0].upper() + text[1:] if cap else text
+
+
 def ps_encode(script: str) -> str:
     """PowerShell -EncodedCommand text: no quoting problems, whatever the script contains."""
     return base64.b64encode(script.encode("utf-16-le")).decode()

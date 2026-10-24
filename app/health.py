@@ -10,9 +10,11 @@ from pathlib import Path
 import backup
 import config
 import phone
+import plat
 
 ROOT = Path(__file__).resolve().parent.parent
 DATES = ROOT / "data" / "login_dates.json"
+BACKUP_FIX = plat.pick("~/assistant/backup-data.sh", "")     # the nightly backup is a Linux timer; Windows has no script for it yet
 LOGIN_WARN_DAYS = 5                                   # Google logins for an app in "Testing" mode stop working after 7 days
 _cache: dict = {"at": 0.0, "rows": []}
 
@@ -60,7 +62,7 @@ def check_ollama():
     try:
         tags = httpx.get("http://127.0.0.1:11434/api/tags", timeout=3).json()
     except Exception as e:
-        return _row("Language model", "bad", f"Ollama is not answering ({type(e).__name__})", "sudo systemctl restart ollama")
+        return _row("Language model", "bad", f"Ollama is not answering ({type(e).__name__})", plat.pick("sudo systemctl restart ollama", "start Ollama from the Start menu"))
     names = [m["name"] for m in tags.get("models", [])]
     if agent.MODEL not in names:
         return _row("Language model", "bad", f"{agent.MODEL} is not installed", f"ollama pull {agent.MODEL}")
@@ -78,10 +80,10 @@ def check_calendar():
     try:
         gcal.service().calendarList().list(maxResults=1).execute()
     except gcal.LoginExpired as e:
-        return _row("Google Calendar", "bad", str(e), "run ~/assistant/login.sh")
+        return _row("Google Calendar", "bad", str(e), plat.google_login())
     except Exception as e:
         return _row("Google Calendar", "warn", f"could not reach Google ({type(e).__name__})", "check the internet connection")
-    return _aging("Google Calendar", "google", "Calendar", "run ~/assistant/login.sh") or _row("Google Calendar", "ok", "connected")
+    return _aging("Google Calendar", "google", "Calendar", plat.google_login()) or _row("Google Calendar", "ok", "connected")
 
 
 def check_gmail():
@@ -91,12 +93,12 @@ def check_gmail():
         try:
             gmail.service(a["name"]).users().getProfile(userId="me").execute()
         except gmail.MailLoginExpired as e:
-            rows.append(_row(f"Gmail ({a['email']})", "bad", str(e), f"run ~/assistant/login-gmail.sh {a['name']}"))
+            rows.append(_row(f"Gmail ({a['email']})", "bad", str(e), plat.google_login(a['name'])))
             continue
         except Exception as e:
             rows.append(_row(f"Gmail ({a['email']})", "warn", f"could not reach Gmail ({type(e).__name__})", ""))
             continue
-        rows.append(_aging(f"Gmail ({a['email']})", f"gmail:{a['name']}", "Gmail", f"run ~/assistant/login-gmail.sh {a['name']}") or _row(f"Gmail ({a['email']})", "ok", "connected"))
+        rows.append(_aging(f"Gmail ({a['email']})", f"gmail:{a['name']}", "Gmail", plat.google_login(a['name'])) or _row(f"Gmail ({a['email']})", "ok", "connected"))
     return rows or [_row("Gmail", "off", "not connected")]
 
 
@@ -110,6 +112,8 @@ def check_phone():
 
 
 def check_user_services():
+    if not shutil.which("systemctl"):               # Windows (and any system without systemd): these two are Linux services
+        return [_row(label, "off", "not available on this system (Linux only)") for label in ("Voice keys (dictation / Copilot key)", "Octopus overlay")]
     import pc_tools
     env = pc_tools.user_bus_env()                  # the user bus is enough for systemctl --user (no desktop session needed)
     rows = []
@@ -134,24 +138,28 @@ def _unit_result(unit: str) -> str:
 
 
 def check_backup():
+    if plat.IS_WIN and not backup.status().get("exists"):
+        return _row("Backup", "off", "not set up on Windows yet")
     res = _unit_result("rosie-backup.service")     # includes the push to the off-PC copy, which the files below can't show (audit pass 2)
     if res not in ("success", ""):
         return _row("Backup", "bad", f"the last nightly backup run failed ({res}); the off-PC copy may be out of date",
                     "systemctl --user start rosie-backup.service")   # running the unit itself also clears its failed result
     s = backup.status()
     if not s.get("exists"):
-        return _row("Backup", "bad", "no backup yet", "~/assistant/backup-data.sh")
+        return _row("Backup", "bad", "no backup yet", BACKUP_FIX)
     if s.get("verified") is False:
-        return _row("Backup", "bad", "the last backup did not pass its check: " + "; ".join(s.get("problems", [])), "~/assistant/backup-data.sh")
+        return _row("Backup", "bad", "the last backup did not pass its check: " + "; ".join(s.get("problems", [])), BACKUP_FIX)
     h = s["age_hours"]
     if h > 36:
-        return _row("Backup", "bad", f"newest backup is {h:.0f} hours old", "~/assistant/backup-data.sh")
+        return _row("Backup", "bad", f"newest backup is {h:.0f} hours old", BACKUP_FIX)
     if h > 26:
         return _row("Backup", "warn", f"newest backup is {h:.0f} hours old")
     return _row("Backup", "ok", f"{s['count']} kept, newest {h:.0f} h ago, verified")
 
 
 def check_repo():
+    if plat.IS_WIN:                                 # the daily GitHub sync is a Linux timer; Rosie's Windows copy updates itself (launcher.py)
+        return _row("Code backup (GitHub)", "off", "not used on Windows: Rosie updates herself")
     try:
         dirty = subprocess.run(["git", "-C", str(ROOT), "status", "--porcelain"], capture_output=True, text=True, timeout=10).stdout.strip().splitlines()
         last = int(subprocess.run(["git", "-C", str(ROOT), "log", "-1", "--format=%ct"], capture_output=True, text=True, timeout=10).stdout.strip() or 0)
@@ -180,8 +188,10 @@ def check_containers():
     """Agent Zero (her brain), the memory graph's database, and Agent Zero's line to Rosie's tools (a0_mcp on docker0). A container left
     stopped by Shut down all, or a line that failed to start before docker was up, used to show nothing here (audit 2026-10-23)."""
     import socket
+
+    import a0_host
     rows = []
-    for name, label in (("agent-zero", "Agent Zero (her brain)"), ("rosie-graph", "Memory graph database")):
+    for name, label in ((a0_host.container(), "Agent Zero (her brain)"), ("rosie-graph", "Memory graph database")):
         try:
             st = subprocess.run(["docker", "inspect", "-f", "{{.State.Status}}", name], capture_output=True, text=True, timeout=10)
             state = st.stdout.strip() if st.returncode == 0 else ("not found" if "No such" in st.stderr else "unknown: " + st.stderr.strip()[:80])

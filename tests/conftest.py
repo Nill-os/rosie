@@ -41,7 +41,7 @@ import testguard  # noqa: E402
 testguard.block_network()                                    # from collection on, also for imports and module-level fixtures
 
 # (module, attribute, stand-in name under tmp_path). Modules marked lazy are only patched when something already imported them.
-PATCHES = [("config", "PATH", "config.json"), ("tasks", "DB", "tasks.db"), ("inbox", "DB", "inbox.db"), ("chats", "DB", "chats.db"),
+PATCHES = [("config", "PATH", "config.json"), ("tasks", "DB", "tasks.db"), ("lifequest", "DB", "lifequest.db"), ("inbox", "DB", "inbox.db"), ("chats", "DB", "chats.db"),
            ("memory", "DB", "memory.db"), ("lessons", "DB", "lessons.db"), ("mind", "DB", "mind.db"),
            ("proposals", "DB", "proposals.db"), ("skills", "DIR", "skills"), ("pc_tools", "LOG", "audit.log"),
            ("server", "VOICE_CHAT", "voice_chat.json"), ("server", "SECRETS", "secrets"), ("server", "VOICE_DIR", "voices"),
@@ -53,7 +53,7 @@ PATCHES = [("config", "PATH", "config.json"), ("tasks", "DB", "tasks.db"), ("inb
            ("overlay", "CONFIG", "config.json"), ("terminals", "CONF", "tmux.conf"), ("selfdev", "OPS", "rosie-ops"),
            ("slots", "OPS", "rosie-ops"), ("slots", "STATE", "rosie-ops/state.json"), ("autopilot", "OPS", "rosie-ops"),
            ("autopilot", "CHATS", "chats.db"), ("backup", "BACKUPS", "backups"), ("backup", "CONF", "backup-conf"),
-           ("mailclean", "UNDO", "mail_undo.json"), ("usertools", "DIR", "user_tools"), ("usertools", "SITE", "user_tools/site"),
+           ("mailclean", "UNDO", "mail_undo.json"), ("mailorganize", "UNDO", "mail_organize_undo.json"), ("board_link", "STATE", "board_link.json"), ("mailwatch", "BACKUPS", "email_task_backups"), ("usertools", "DIR", "user_tools"), ("usertools", "SITE", "user_tools/site"),
            ("meetings", "DIR", "meetings"), ("meetings", "ACTIVE", "meetings/active.json"), ("health", "DATES", "login_dates.json"),
            ("dictation", "LOG", "dictation.log"), ("dictation", "STATUS", "dictation.status.json"), ("dictation", "STATUS_AI", "ai.status.json"),
            ("dictation", "LOCK", "dictation.lock"), ("corner", "DIR", "corner"),
@@ -66,7 +66,7 @@ PATCHES = [("config", "PATH", "config.json"), ("tasks", "DB", "tasks.db"), ("inb
            ("server", "VECTOR_CHAT", "vector_chat.json"), ("vector_pod", "DIR", "vector"), ("vector_pod", "CERT", "vector/cert.pem"), ("vector_pod", "KEY", "vector/key.pem"),
            ("vector_pod", "DOCS", "vector/jdocs.json"), ("vector_pod", "TOKEN", "vector/client_token"), ("vector_pod", "SSH_KEY", "vector/ssh_root_key"), ("vector_pod", "WIREPOD", "wire-pod"), ("vector_pod", "EP_CERT", "vector/ep.crt"), ("vector_pod", "EP_KEY", "vector/ep.key"), ("vector_pod", "HEY_ROSIE", "vector/hey_rosie_1-5.ppn"), ("vector_pod", "LAST_HEARD", "vector/last_heard.wav")]
 ALWAYS = ("config", "tasks", "inbox", "chats", "memory", "lessons", "proposals", "skills", "pc_tools", "server",
-          "briefs", "projects", "mailwatch", "gcal", "gmail", "workflows", "corner_graph", "a0", "paper", "agentboard", "skill_sync", "vector_pod")
+          "briefs", "projects", "mailwatch", "mailorganize", "gcal", "gmail", "workflows", "corner_graph", "a0", "paper", "agentboard", "skill_sync", "vector_pod", "lifequest", "board_link")
 
 
 # Linux-only parts (owner 2026-10-23, the Windows copy): on Windows these features are off (hub.pages_off) or replaced, so their tests
@@ -75,6 +75,20 @@ LINUX_ONLY = ["test_agentdeck.py", "test_backup.py", "test_slots.py", "test_self
               "test_audit_1020.py", "test_vector.py", "test_terminals.py", "test_dictation.py", "test_overlay.py", "test_meetings.py",
               "test_power.py", "test_security_watch.py"]
 collect_ignore = LINUX_ONLY if sys.platform == "win32" else []
+
+
+def _symlinks_work() -> bool:
+    """Windows makes a symlink only with administrator rights or Developer Mode; tests that need one skip when it can't be made."""
+    d = Path(tempfile.mkdtemp(prefix="rosie-link-", dir=_SANDBOX))
+    try:
+        (d / "target").write_text("x", encoding="utf-8")
+        (d / "link").symlink_to(d / "target")
+        return True
+    except (OSError, NotImplementedError):
+        return False
+
+
+needs_symlinks = pytest.mark.skipif(not _symlinks_work(), reason="this system can't make symlinks (Windows without Developer Mode)")
 
 
 class NetworkBlocked(Exception):

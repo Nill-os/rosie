@@ -73,7 +73,7 @@ def test_the_owners_own_notes_go_into_both_prompts_only_when_set(tmp_path, monke
     r = c.post("/api/settings", json={"owner_name": "  Sam ", "owner_notes": "Short answers, please.\nOne step at a time."})
     assert r.status_code == 200 and r.json()["owner_name"] == "Sam"
     assert "ABOUT THE USER (their own words): Short answers, please. One step at a time.\n" in agent.system_prompt()
-    assert "# About the owner (their own words)\nShort answers, please. One step at a time.\n" in a0.include_text() and a0.INCLUDE.read_text() == a0.include_text()
+    assert "# About the owner (their own words)\nShort answers, please. One step at a time.\n" in a0.include_text() and a0.INCLUDE.read_text(encoding="utf-8") == a0.include_text()
     assert c.post("/api/settings", json={"owner_notes": "x" * 601}).status_code >= 400
 
 
@@ -262,7 +262,7 @@ def test_rosies_notes_for_agent_zero_fit_its_prompt_budget_and_are_rewritten_onl
     a0.write_include()
     first = a0.INCLUDE.stat().st_mtime_ns
     a0.write_include()
-    assert a0.INCLUDE.read_text() == text and a0.INCLUDE.stat().st_mtime_ns == first
+    assert a0.INCLUDE.read_text(encoding="utf-8") == text and a0.INCLUDE.stat().st_mtime_ns == first
 
 
 def test_the_mcp_listener_needs_the_token():

@@ -45,7 +45,7 @@ def test_unedited_old_defaults_are_replaced_and_save_recipe_retires(monkeypatch,
     monkeypatch.setitem(skills.OLD_DEFAULTS, "save-recipe", {hashlib.sha256(old.encode()).hexdigest()[:16]})
     skills.init()
     assert not (tmp_path / "save-recipe.md").exists()
-    assert (tmp_path / "plan-my-day.md").read_text() == "my own edited plan\n"              # the owner's own edit stays
+    assert (tmp_path / "plan-my-day.md").read_text(encoding="utf-8") == "my own edited plan\n"              # the owner's own edit stays
     (tmp_path / "keep.md").write_text("x")
     (tmp_path / "save-recipe.md").write_text("my own recipe playbook\n")
     skills.init()

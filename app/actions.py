@@ -70,6 +70,15 @@ def add_event(title, start, end, location="", double_book=False, _confirmed=Fals
     return {"status": "done", "event": gcal.add_event(title, s, e, location=location)}
 
 
+def add_all_day_event(title, day):
+    """An all-day event from an email that named a day but no time. Adds only: never moves or changes an existing event."""
+    d = dt.date.fromisoformat(day)
+    for ex in gcal.list_events(dt.datetime.combine(d, dt.time(0, 0), tzinfo=gcal.TZ), dt.datetime.combine(d, dt.time(23, 59), tzinfo=gcal.TZ), gcal.write_calendar_id()):
+        if ex["all_day"] and ex["title"].strip().lower() == title.strip().lower():
+            return {"status": "done", "event": ex, "note": "That event was already on the calendar, so I did not add it again."}
+    return {"status": "done", "event": gcal.add_all_day_event(title, d)}
+
+
 def resolve_event(ref):
     """Turn what the model gave (a real id, or a title/description) into a real event on the calendar we write to. Returns (event, error)."""
     cal = gcal.write_calendar_id()

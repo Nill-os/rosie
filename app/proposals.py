@@ -16,6 +16,8 @@ def _db():
     c.execute("""CREATE TABLE IF NOT EXISTS proposals (id INTEGER PRIMARY KEY AUTOINCREMENT, created TEXT NOT NULL, kind TEXT NOT NULL,
                  title TEXT NOT NULL, detail TEXT NOT NULL DEFAULT '', payload TEXT NOT NULL, source TEXT NOT NULL DEFAULT '',
                  status TEXT NOT NULL DEFAULT 'pending', key TEXT UNIQUE)""")
+    if "ref" not in [r["name"] for r in c.execute("PRAGMA table_info(proposals)")]:
+        c.execute("ALTER TABLE proposals ADD COLUMN ref TEXT NOT NULL DEFAULT ''")   # what approving made, e.g. 'task:12'
     return c
 
 
@@ -92,8 +94,10 @@ def _approve(pid, p):
         if pl.get("project_id"):
             tasks.set_project(t["id"], pl["project_id"])
         result = {"task": t["title"], "due": t["due"]}
+        with _db() as c:
+            c.execute("UPDATE proposals SET ref=? WHERE id=?", (f"task:{t['id']}", pid))
     elif p["kind"] == "event":
-        result = actions.add_event(pl["title"], pl["start"], pl["end"])
+        result = actions.add_all_day_event(pl["title"], pl["day"]) if pl.get("all_day") else actions.add_event(pl["title"], pl["start"], pl["end"])
         if isinstance(result, dict) and result.get("status") in actions.NOT_DONE:   # a clash: nothing was added, so it stays waiting
             with _db() as c:
                 c.execute("UPDATE proposals SET status='pending' WHERE id=?", (pid,))

@@ -51,7 +51,7 @@ To use a different model, run `ROSIE_MODEL=<name> ./setup.sh`, or pick one later
 
 ## Optional extras
 
-- **Google Calendar and Gmail:** run `./login.sh` and `./login-gmail.sh main`. You need your own Google Cloud OAuth client in `secrets/google_client.json`.
+- **Google Calendar and Gmail:** run `./login.sh` and `./login-gmail.sh main` (on Windows, open **Rosie Google Sign-in** from your desktop). You need your own Google Cloud OAuth client in `secrets/google_client.json`.
 - **The phone app and access away from home:** install Tailscale, then run `sudo tailscale up` and `sudo tailscale serve --bg 8765`. Build the app with `android/build.sh`.
 - **Reddit in the newspaper:** create a free Reddit "script" app, then save its keys in `secrets/reddit.json` as `{"client_id": "...", "client_secret": "...", "user": "your_reddit_name"}`.
 - **Your town in the newspaper:** add your local news site's RSS feed in **Settings** > **Newspaper**. Event calendars differ in every town, so Rosie doesn't ship an events reader, and the paper leaves out its "week ahead" when there are no events.

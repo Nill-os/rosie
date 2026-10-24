@@ -303,3 +303,22 @@ body.look-compact #view{padding:10px}body.look-compact .grid{gap:8px}body.look-c
 body.look-compact .kv{row-gap:2px}body.look-compact .btn{min-height:32px}
 body.look-roomy #view{padding:22px}body.look-roomy .grid{gap:20px}body.look-roomy .card{padding:20px}body.look-roomy .kv{row-gap:10px}
 .menu-pick{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:4px 12px}.menu-pick label{display:flex;align-items:center;gap:6px;cursor:pointer}
+
+/* ---------- Life Quest ---------- */
+.lq-grid{grid-template-columns:repeat(auto-fit,minmax(min(100%,310px),1fr))}
+.lq-hero{border-top:3px solid var(--pur);display:flex;flex-direction:column;gap:10px}
+.lq-lvl{display:flex;align-items:center;gap:14px}
+.lq-n{font-size:calc(44px*var(--ts,1));font-weight:700;line-height:1;color:var(--acc);text-shadow:0 0 18px #00f0ff55;min-width:1.2em;text-align:center}
+.lq-t{font-size:calc(18px*var(--ts,1));font-weight:700;color:#fff;text-transform:capitalize}
+.lq-bar{height:12px;border-radius:6px}.lq-bar i{background:linear-gradient(90deg,var(--acc),var(--pur));box-shadow:0 0 12px #9d00ff66}
+.lq-chips{display:flex;flex-wrap:wrap;gap:8px}
+.lq-chip{flex:1 1 90px;display:flex;flex-direction:column;padding:6px 10px;border:1px solid var(--line);border-radius:8px;background:var(--card2);min-width:0}
+.lq-chip b{font-size:calc(16px*var(--ts,1));color:#FFD23F}.lq-chip span{font-size:calc(11px*var(--ts,1));letter-spacing:.1em;text-transform:uppercase;color:var(--mute)}
+.lq-days{display:flex;gap:4px;flex-wrap:wrap}.lq-days i{width:12px;height:12px;border-radius:3px;background:var(--line)}.lq-days i.on{background:var(--ok);box-shadow:0 0 6px #22e58a88}.lq-days i.today{outline:1px solid var(--acc);outline-offset:1px}
+.lq-soft{font-size:calc(12px*var(--ts,1))}.lq-sub{font-size:calc(12px*var(--ts,1))}
+.lq-pick{display:flex;flex-wrap:wrap;gap:6px}
+.lq-tag{--c:var(--acc);border:1px solid var(--c);background:transparent;color:var(--c);border-radius:999px;padding:6px 12px;min-height:34px;font-size:calc(13px*var(--ts,1));font-weight:700}
+.lq-tag.on{background:var(--c);color:#000;box-shadow:0 0 10px var(--c)}
+.lq-xp{font-weight:700;color:#FFD23F;white-space:nowrap}
+.lq-stat{border-left:3px solid var(--c)}.lq-row{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.lq-edit{margin-bottom:6px}.lq-edit select{flex:none;max-width:140px}.lq-edit.off{opacity:.55}

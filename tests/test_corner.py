@@ -23,6 +23,7 @@ import sys
 import pytest
 from fastapi.testclient import TestClient
 
+from conftest import needs_symlinks
 import corner
 import corner_browse
 import corner_layout
@@ -135,7 +136,7 @@ FORBIDDEN = {"agent", "gmail", "gcal", "tasks", "pc_tools", "terminals", "phone"
 
 def _imports(path):
     names = set()
-    for node in ast.walk(ast.parse(Path(path).read_text())):
+    for node in ast.walk(ast.parse(Path(path).read_text(encoding="utf-8"))):
         if isinstance(node, ast.Import):
             names |= {a.name.split(".")[0] for a in node.names}
         elif isinstance(node, ast.ImportFrom):
@@ -154,7 +155,7 @@ def test_the_browsing_agent_imports_nothing_private():
 
 def test_the_only_web_tools_are_read_a_page_and_search_the_web_or_github():
     assert set(corner_browse.TOOLS) == {"fetch_page", "search_web", "search_github"}
-    src = (ROOT / "app" / "corner_browse.py").read_text()
+    src = (ROOT / "app" / "corner_browse.py").read_text(encoding="utf-8")
     assert ".post(" not in src.replace("c.post(OLLAMA_GENERATE", "").replace('c.stream("POST", OLLAMA_CHAT', "")   # no POST anywhere but local Ollama
     assert "web.fetch_url(" not in src and "web.get_public(" in src
     for name in ("find_recipe", "weather", "subprocess", "os.system", "open(", "write_text", "unlink"):
@@ -162,10 +163,10 @@ def test_the_only_web_tools_are_read_a_page_and_search_the_web_or_github():
 
 
 def test_pictures_only_ever_run_the_virus_scanner():
-    tree = ast.parse((ROOT / "app" / "corner_pics.py").read_text())
+    tree = ast.parse((ROOT / "app" / "corner_pics.py").read_text(encoding="utf-8"))
     calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and isinstance(n.func.value, ast.Name) and n.func.value.id == "subprocess"]
     assert len(calls) == 1 and calls[0].func.attr == "run"
-    assert "clamscan" in (ROOT / "app" / "corner_pics.py").read_text()
+    assert "clamscan" in (ROOT / "app" / "corner_pics.py").read_text(encoding="utf-8")
 
 
 def test_she_uses_rosies_chat_model_at_the_live_context_size():
@@ -1164,6 +1165,7 @@ def test_the_disk_safety_stop_comes_on_top_of_the_storage_budget(fresh, monkeypa
     assert corner_pics.check_and_keep([{"bytes": png(120, 100)}])[0] == {"ok": False, "why": "less than 5 GB free on the disk"}
 
 
+@needs_symlinks
 def test_the_paper_window_comes_from_the_timer_and_pauses_nonstop(tmp_path, monkeypatch):
     import datetime as dt
     timer = tmp_path / "rosie-paper-print.timer"
@@ -1188,6 +1190,7 @@ def test_the_paper_window_comes_from_the_timer_and_pauses_nonstop(tmp_path, monk
     assert corner.pause_reason(day.replace(hour=5, minute=40)) is None and corner.status()["paper_window"] == ""
 
 
+@needs_symlinks
 def test_the_paper_window_follows_the_newspaper_settings_first(tmp_path, monkeypatch):
     import config
     timer = tmp_path / "rosie-paper-print.timer"
