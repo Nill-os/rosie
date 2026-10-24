@@ -305,11 +305,42 @@ function taskRow(tk, onChange) {
   return h('div', { class: 'item' + (tk.done ? ' done' : '') + (late ? ' over' : '') },
     h('button', { class: 'check' + (tk.done ? ' on' : ''), 'aria-label': tk.done ? 'Mark not done' : 'Mark done', onclick: async () => {
       try { Object.assign(tk, await post(`/api/tasks/${tk.id}/done`, { done: !tk.done })); onChange(); } catch (e) { toast(e.message, 1); } } }, tk.done ? '✓' : ''),
-    h('div', { class: 'tx', title: 'Double-click to rename', ondblclick: async () => { const v = prompt('Rename task:', tk.title); if (!v) return; try { await post(`/api/tasks/${tk.id}/rename`, { title: v }); onChange(); } catch (e) { toast(e.message, 1); } } }, tk.title),
+    h('div', { class: 'tx', role: 'button', tabindex: '0', title: 'Details', style: 'cursor:pointer', onclick: () => taskDetails(tk, onChange),
+      onkeydown: (e) => { if (e.key === 'Enter') taskDetails(tk, onChange); } }, tk.title),
     h('button', { class: 'chip' + (late ? ' bad' : ''), title: 'Change due date', onclick: async () => {
       const v = prompt('Move to (today, tomorrow, friday, or 2026-10-09):', tk.due); if (!v) return;
       try { await post(`/api/tasks/${tk.id}/move`, { due: v }); onChange(); } catch (e) { toast(e.message, 1); } } }, tk.due === todayISO() ? 'today' : tk.due),
     h('button', { class: 'x', 'aria-label': 'Delete task', onclick: async () => { if (!confirm('Delete this task?')) return; await del(`/api/tasks/${tk.id}`); onChange(); } }, '✕'));
+}
+// A task's details (owner 2026-10-24: one only said "Accept or decline invitation" with nothing about it): notes, dates, project, and
+// the suggestion or email it came from. The title, due date and notes can be changed here.
+async function taskDetails(tk, onChange) {
+  let d;
+  try { d = await J(`/api/tasks/${tk.id}`); } catch (e) { toast(e.message, 1); return; }
+  const title = h('textarea', { rows: 2, 'aria-label': 'Title', style: 'width:100%;resize:vertical' });
+  title.value = d.title;
+  const due = h('input', { value: d.due || '', 'aria-label': 'Due', placeholder: 'today, friday, 2026-10-09', style: 'width:100%' });
+  const notes = h('textarea', { rows: 4, 'aria-label': 'Notes', placeholder: 'Notes: what this is about, links, who it is for…', style: 'width:100%;resize:vertical' });
+  notes.value = d.notes || '';
+  const label = (t) => h('div', { class: 'muted', style: 'margin:10px 0 4px;font-size:calc(12px*var(--ts,1));letter-spacing:.1em;text-transform:uppercase' }, t);
+  const o = d.origin, em = o && o.email;
+  const origin = o ? h('div', { class: 'card', style: 'margin-top:4px;white-space:normal' },
+    h('div', {}, o.from_email ? 'Suggested from an email' : 'Suggested by Rosie', h('span', { class: 'muted' }, ' · ' + (o.suggested || '').slice(0, 16).replace('T', ' '))),
+    em && (em.from || em.subject) ? h('div', { style: 'margin-top:6px' }, h('div', {}, h('span', { class: 'muted' }, 'From: '), em.from || '?'), h('div', {}, h('span', { class: 'muted' }, 'Subject: '), em.subject || '(none)')) : null,
+    em && em.summary ? h('div', { class: 'muted', style: 'margin-top:6px' }, em.summary) : (o.detail && !(em && em.subject) ? h('div', { class: 'muted', style: 'margin-top:6px' }, o.detail) : null),
+    em && em.link ? h('a', { href: em.link, target: '_blank', rel: 'noopener noreferrer', class: 'btn sm dim', style: 'margin-top:8px;display:inline-flex;align-items:center;text-decoration:none' }, 'Open in Gmail') : null) : null;
+  const body = h('div', { style: 'white-space:normal' }, label('Title'), title, label('Due'), due, label('Notes'), notes,
+    d.project ? h('div', { style: 'margin-top:10px' }, h('span', { class: 'muted' }, 'Project: '), h('a', { href: '#', style: 'color:var(--acc)', onclick: (e) => { e.preventDefault(); document.querySelector('.modalbg')?.remove(); go('projects'); } }, d.project.name)) : null,
+    o ? label('Where it came from') : null, origin,
+    h('div', { class: 'muted', style: 'margin-top:10px;font-size:calc(12px*var(--ts,1))' }, 'Added ' + (d.created || '').slice(0, 16).replace('T', ' ') + (d.done_at ? ' · done ' + d.done_at.slice(0, 16).replace('T', ' ') : '')));
+  if (!await modal('Task', body, { ok: 'Save', cancel: 'Close' })) return;
+  try {
+    const t = title.value.replace(/\s+/g, ' ').trim();
+    if (t && t !== d.title) await post(`/api/tasks/${tk.id}/rename`, { title: t });
+    if (due.value.trim() && due.value.trim() !== (d.due || '')) await post(`/api/tasks/${tk.id}/move`, { due: due.value });
+    if (notes.value !== (d.notes || '')) await post(`/api/tasks/${tk.id}/notes`, { notes: notes.value });
+    toast('Saved'); onChange();
+  } catch (e) { toast(e.message, 1); }
 }
 function taskAdd(onChange, placeholder) {
   const title = h('input', { placeholder: placeholder || 'New task…', 'aria-label': 'New task' }), due = h('input', { placeholder: 'due (today)', style: 'max-width:140px;flex:none', 'aria-label': 'Due' });
@@ -399,7 +430,8 @@ VIEWS.inbox = async () => {
     pr.proposals.length ? h('div', { class: 'card', style: 'border-color:var(--warn);margin-bottom:14px' }, h('h3', { style: 'color:var(--warn)' }, 'Needs your OK · ' + pr.proposals.length),
       h('div', { class: 'muted', style: 'margin-bottom:8px' }, 'Suggestions from me or from your mail. Nothing is added until you approve.'),
       h('div', { class: 'list' }, pr.proposals.map((p) => h('div', { class: 'item', style: 'align-items:flex-start' }, h('span', { style: 'width:24px' }, p.kind === 'event' ? '▦' : p.kind === 'plan' ? '🧭' : '✓'),
-        h('div', { class: 'tx' }, h('div', { style: 'color:#fff' }, p.title), p.detail ? h('div', { class: 'muted md', style: 'font-size:calc(13px*var(--ts,1))' }, p.detail) : null, p.source.startsWith('email:') ? h('span', { class: 'chip' }, 'from email') : null),
+        h('div', { class: 'tx' }, h('div', { style: 'color:#fff' }, p.title), p.detail ? h('div', { class: 'muted md', style: 'font-size:calc(13px*var(--ts,1))' }, p.detail) : null, p.source.startsWith('email:') ? (p.email && p.email.link ? h('a', { class: 'chip', href: p.email.link, target: '_blank', rel: 'noopener noreferrer', title: [p.email.from, p.email.subject].filter(Boolean).join(' · ') }, 'from email: open it') : h('span', { class: 'chip' }, 'from email')) : null,
+          p.email && (p.email.from || p.email.subject) ? h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1))' }, [p.email.from, p.email.subject].filter(Boolean).join(' · ')) : null),
         btn(p.kind === 'event' ? 'Add to calendar' : 'Approve', 'sm ok', async () => { try { await post(`/api/proposals/${p.id}/approve`); toast('Done'); again(); } catch (e) { toast(e.message, 1); } }),
         btn(p.kind === 'event' ? 'Skip' : 'Dismiss', 'sm dim', async () => { await post(`/api/proposals/${p.id}/dismiss`); again(); }))))) : null,
     h('div', { class: 'card' }, h('h3', {}, 'Reminders'), remindForm(again),
@@ -688,7 +720,7 @@ VIEWS.tasks = async () => {
   const d = await J('/api/tasks');
   const again = async () => { await keepScroll(() => VIEWS.tasks()); refreshSide(); };
   const sec = (title, list, cls) => list.length ? h('div', { style: 'margin-top:16px' }, h('div', { class: 'dayhead ' + (cls || '') }, `${title} · ${list.length}`), h('div', { class: 'list' }, list.map((x) => taskRow(x, again)))) : null;
-  show(h('div', { class: 'pagehead' }, h('h2', {}, 'Tasks'), h('span', { class: 'muted' }, 'Tip: double-click a title to rename; tap the date to move it')),
+  show(h('div', { class: 'pagehead' }, h('h2', {}, 'Tasks'), h('span', { class: 'muted' }, 'Tip: tap a task for its details and notes; tap the date to move it')),
     h('div', { class: 'card' }, taskAdd(again, 'Add a task… (due can be: tomorrow, friday, 2026-10-09)')),
     sec('Overdue', d.overdue, 'today'), sec('Today', d.due_today), sec('Upcoming', d.upcoming), sec('Done recently', d.done_recent),
     !(d.overdue.length + d.due_today.length + d.upcoming.length) ? h('div', { class: 'empty', style: 'margin-top:16px' }, 'Nothing open. Add one above, or just tell the assistant.') : null);

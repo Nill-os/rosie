@@ -136,6 +136,41 @@ def add_task(t: NewTask):
     return _task(tasks.add(t.title.strip()[:200], workflows.resolve_due(t.due) if t.due.strip() else None))
 
 
+class NotesPatch(BaseModel):
+    notes: str
+
+
+@router.get("/api/tasks/{task_id}")
+def task_details(task_id: int):
+    """Everything about one task, for its details panel: notes, dates, project, and where it came from (owner 2026-10-24)."""
+    import proposals
+    t = tasks.get(task_id)
+    if not t:
+        return err("No such task", 404)
+    out = {**_task(t), "notes": t.get("notes") or "", "created": t["created"], "done_at": t.get("done_at"), "project": None, "origin": None}
+    if t.get("project_id"):
+        p = projects.get(t["project_id"])
+        out["project"] = {"id": p["id"], "name": p["name"]} if p else None
+    o = proposals.origin_of_task(t)
+    if o:
+        src = o.get("source") or ""
+        out["origin"] = {"title": o["title"], "detail": o.get("detail") or "", "suggested": o["created"], "from_email": src.startswith("email:"), "email": None}
+        if src.startswith("email:") and src.count(":") >= 2:
+            _, acct, mid = src.split(":", 2)
+            try:
+                out["origin"]["email"] = mailwatch.email_info(acct, mid)
+            except Exception:
+                pass
+    return out
+
+
+@router.post("/api/tasks/{task_id}/notes")
+def task_notes(task_id: int, p: NotesPatch):
+    if not tasks.get(task_id):
+        return err("No such task", 404)
+    return {**_task(tasks.set_notes(task_id, p.notes)), "notes": tasks.get(task_id)["notes"]}
+
+
 @router.post("/api/tasks/{task_id}/done")
 def task_done(task_id: int, p: DonePatch):
     if not tasks.get(task_id):
@@ -887,7 +922,17 @@ def mail_disconnect(name: str):
 
 @router.get("/api/proposals")
 def proposals_list():
-    return {"proposals": proposals.list_("pending")}
+    out = proposals.list_("pending")
+    for p in out:                                                  # "from email" opens that email, so a request is never a bare yes/no
+        src = p.get("source") or ""
+        if src.startswith("email:") and src.count(":") >= 2:
+            _, acct, mid = src.split(":", 2)
+            try:
+                info = mailwatch.email_info(acct, mid) or {}
+            except Exception:
+                info = {}
+            p["email"] = {k: info.get(k, "") for k in ("from", "subject", "link")}
+    return {"proposals": out}
 
 
 @router.post("/api/proposals/{pid}/approve")

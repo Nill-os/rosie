@@ -90,7 +90,7 @@ def _approve(pid, p):
     import workflows
     pl = p["payload"]
     if p["kind"] == "task":
-        t = tasks.add(pl["title"], workflows.resolve_due(pl.get("due", "")) if pl.get("due") else None)
+        t = tasks.add(pl["title"], workflows.resolve_due(pl.get("due", "")) if pl.get("due") else None, notes=p.get("detail") or "")
         if pl.get("project_id"):
             tasks.set_project(t["id"], pl["project_id"])
         result = {"task": t["title"], "due": t["due"]}
@@ -114,3 +114,14 @@ def _approve(pid, p):
     import inbox
     inbox.mark_read_key(f"prop:{pid}")                  # its "Approve? ..." Inbox entry is done too (audit P5)
     return {"status": "approved", "result": result}
+
+
+def origin_of_task(task: dict) -> dict | None:
+    """The suggestion a task came from: the one whose approval made it, or (older tasks, made before 'ref' was kept) an approved task
+    suggestion with the same title. For the task's details (owner 2026-10-24: a task only said "Accept or decline invitation")."""
+    with _db() as c:
+        r = c.execute("SELECT * FROM proposals WHERE ref=? ORDER BY id DESC LIMIT 1", (f"task:{task['id']}",)).fetchone()
+        if not r:
+            r = c.execute("SELECT * FROM proposals WHERE kind='task' AND status='approved' AND title=? AND ref='' AND created<=? ORDER BY id DESC LIMIT 1",
+                          (task["title"], (task.get("created") or "9999")[:19])).fetchone()
+    return dict(r) if r else None

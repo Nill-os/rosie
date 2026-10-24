@@ -13,8 +13,11 @@ def _db():
     c.execute("""CREATE TABLE IF NOT EXISTS tasks (
         id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL,
         due TEXT, done INTEGER NOT NULL DEFAULT 0, created TEXT NOT NULL, done_at TEXT)""")
-    if "project_id" not in [r["name"] for r in c.execute("PRAGMA table_info(tasks)")]:
+    have = [r["name"] for r in c.execute("PRAGMA table_info(tasks)")]
+    if "project_id" not in have:
         c.execute("ALTER TABLE tasks ADD COLUMN project_id INTEGER")
+    if "notes" not in have:                                        # the details a task's title leaves out (owner 2026-10-24)
+        c.execute("ALTER TABLE tasks ADD COLUMN notes TEXT NOT NULL DEFAULT ''")
     return c
 
 
@@ -22,10 +25,10 @@ def _today():
     return dt.date.today().isoformat()
 
 
-def add(title, due=None):
+def add(title, due=None, notes=""):
     with _db() as c:
-        cur = c.execute("INSERT INTO tasks(title,due,created) VALUES(?,?,?)",
-                        (title.strip(), due or _today(), dt.datetime.now().isoformat()))
+        cur = c.execute("INSERT INTO tasks(title,due,created,notes) VALUES(?,?,?,?)",
+                        (title.strip(), due or _today(), dt.datetime.now().isoformat(), (notes or "").strip()[:4000]))
         new_id = cur.lastrowid
     return get(new_id)
 
@@ -105,3 +108,9 @@ def for_project(project_id, include_done=False):
     with _db() as c:
         q = "SELECT * FROM tasks WHERE project_id=?" + ("" if include_done else " AND done=0") + " ORDER BY done, due, id"
         return [dict(r) for r in c.execute(q, (project_id,))]
+
+
+def set_notes(task_id, notes):
+    with _db() as c:
+        c.execute("UPDATE tasks SET notes=? WHERE id=?", ((notes or "").strip()[:4000], task_id))
+    return get(task_id)
