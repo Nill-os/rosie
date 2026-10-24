@@ -158,3 +158,16 @@ def test_power_status_reaches_the_users_units(monkeypatch, tmp_path):
     monkeypatch.setattr(power, "SCRIPT", script)
     monkeypatch.setattr(power.subprocess, "run", lambda cmd, **k: (seen.update(k), subprocess.CompletedProcess(cmd, 0, "rosie active\n", ""))[1])
     assert power.status() == {"rosie": "active"} and seen["env"]["DBUS_SESSION_BUS_ADDRESS"]
+
+
+def test_settings_voice_status_works_without_systemctl(monkeypatch):
+    """Windows has no systemctl: Settings' dictation status said HTTP 500 on the partner's PC (2026-10-23)."""
+    import hub
+    import pc_tools
+    monkeypatch.setattr(pc_tools, "gui_env", lambda: {})         # what it gives on Windows (no user bus to ask)
+
+    def no_systemctl(*a, **k):
+        raise FileNotFoundError("systemctl")
+    monkeypatch.setattr("subprocess.run", no_systemctl)
+    st = hub.dictation_status()
+    assert st["service"] == "unavailable" and st["overlay"] == "unavailable"

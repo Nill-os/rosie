@@ -603,6 +603,7 @@ def test_answers_play_in_rosies_voice_with_control_taken_first(pod, monkeypatch)
     monkeypatch.setattr(vector_pod, "robot", lambda: bot)
     monkeypatch.setattr(vector_pod, "tts", lambda text: (np.zeros(24000, dtype=np.float32), 24000))
     monkeypatch.setattr(vector_pod.vector_dev, "listen", lambda ip: listened.append(ip) or True)
+    monkeypatch.setattr(vector_pod, "ONE_MOMENT_S", 60)   # a busy PC (staging, CI) can take over 3 s: no "One moment." in this test
     pod.heard["text"] = "Tell me a joke"
     [r] = _ask(pod.ch)
     assert r.response_type == cpb.INTENT and r.intent_result.action == vector_pod.ROSIE_SPEAKS_INTENT and order[0] == "control"

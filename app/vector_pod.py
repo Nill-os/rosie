@@ -621,6 +621,7 @@ def interrupt_talk():
     global _talk_gen
     _talk_gen += 1
 _followup_until = 0.0
+ONE_MOMENT_S = 3.0                                   # no first words by then: he says "One moment."
 TOOL_CUES = re.compile(r"\b(calendar|schedule|appointments?|meetings?|events?|remind(?:er|ers)?|tasks?|to-?dos?|lists?|text|message|sms|"
                        r"call|phone|e-?mails?|mail|inbox|notes?|projects?|alarm|weather|search|look up|google|news|paper|"
                        r"plan|order|price|buy|tomorrow|tonight|next week|monday|tuesday|wednesday|thursday|friday|saturday|"
@@ -697,7 +698,7 @@ def _converse(text: str, bot, ctl):
     threading.Thread(target=produce, daemon=True, name="vector-talk").start()
     try:
         try:
-            first = pcm_q.get(timeout=3.0)
+            first = pcm_q.get(timeout=ONE_MOMENT_S)
         except queue.Empty:                              # a slow (tool) answer: say so instead of sitting in silence
             audio, sr = tts("One moment.")
             with _voice_lock:

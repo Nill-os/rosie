@@ -71,6 +71,27 @@ def test_probe_rejects_a_retried_load(monkeypatch):
     assert ctxsize.probe("m", 65536, 99)["ok"] is True
 
 
+
+def test_probe_rejects_a_model_bigger_than_the_card_even_when_windows_says_it_fits(monkeypatch):
+    """Windows spills into shared memory instead of failing: Ollama reports 14 GB "on the GPU" of an 8 GB card (2026-10-23)."""
+    class R:
+        def __init__(self, d):
+            self.d = d
+
+        def json(self):
+            return self.d
+    gib = 2 ** 30
+    monkeypatch.setattr(ctxsize, "unload_all", lambda: None)
+    monkeypatch.setattr(ctxsize, "load_retried", lambda since: False)
+    monkeypatch.setattr(ctxsize.httpx, "post", lambda *a, **k: R({"response": "hi"}))
+    monkeypatch.setattr(ctxsize, "gpu_used_mb", lambda: 7861)
+    monkeypatch.setattr(ctxsize, "gpu_total_mb", lambda: 8188)
+    monkeypatch.setattr(ctxsize.httpx, "get", lambda *a, **k: R({"models": [{"name": "m", "size": 14 * gib, "size_vram": 14 * gib}]}))
+    r = ctxsize.probe("m", 262144, 99)
+    assert r["ok"] is False and "shared memory" in r["why"]
+    monkeypatch.setattr(ctxsize.httpx, "get", lambda *a, **k: R({"models": [{"name": "m", "size": 7 * gib, "size_vram": 7 * gib}]}))
+    assert ctxsize.probe("m", 32768, 99)["ok"] is True
+
 def test_an_untuned_model_uses_the_safe_default():
     assert ctxsize.options("new:7b") == {"num_ctx": ctxsize.DEFAULT_CTX}
 

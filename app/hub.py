@@ -1119,9 +1119,15 @@ def dictation_status():
     import subprocess
     cfg = config.load()
     env = _user_env()
-    active = subprocess.run(["systemctl", "--user", "is-active", "assistant-dictation"], capture_output=True, text=True, env=env, timeout=5).stdout.strip()
+
+    def unit_state(name):            # no systemctl on Windows or macOS: report it, don't break Settings (the partner's PC, 2026-10-23)
+        try:
+            return subprocess.run(["systemctl", "--user", "is-active", name], capture_output=True, text=True, env=env, timeout=5).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            return "unavailable"
+    active = unit_state("assistant-dictation")
     installed = (Path.home() / ".config/systemd/user/assistant-dictation.service").exists()
-    overlay = subprocess.run(["systemctl", "--user", "is-active", "assistant-overlay"], capture_output=True, text=True, env=env, timeout=5).stdout.strip()
+    overlay = unit_state("assistant-overlay")
     st = {}
     sp = ROOT / "data" / "dictation.status.json"
     if sp.exists():

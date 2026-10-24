@@ -114,10 +114,16 @@ def probe(model, num_ctx, num_gpu) -> dict:
     on_gpu = loaded.get("size") and loaded.get("size_vram", 0) >= loaded["size"]
     used, total = gpu_used_mb(), gpu_total_mb()
     room = total is not None and used is not None and used <= total - MARGIN_MB
+    # Windows doesn't refuse a model bigger than the card: its driver moves the rest into shared system memory, and Ollama still reports
+    # it all as on the GPU while the card itself looks full but not over (2026-10-23: 14 GB at 262144 tokens on an 8 GB RTX 4060 passed,
+    # and ran slowly). The model has to fit in the card's own memory.
+    over = bool(total) and loaded.get("size_vram", 0) / 2 ** 20 > total - MARGIN_MB
     retried = load_retried(started)
-    why = ("part of it ran on the CPU" if not on_gpu else f"only {total - used if total and used else '?'} MB of video memory left" if not room
+    why = ("part of it ran on the CPU" if not on_gpu
+           else f"it needs {loaded['size_vram'] // 2 ** 20} MB, more than the card's {total} MB (the rest went to shared memory)" if over
+           else f"only {total - used if total and used else '?'} MB of video memory left" if not room
            else "it ran out of video memory and only loaded on a retry" if retried else "")
-    return {"ok": bool(on_gpu and room and not retried), "vram_mb": used, "on_gpu": bool(on_gpu), "why": why}
+    return {"ok": bool(on_gpu and not over and room and not retried), "vram_mb": used, "on_gpu": bool(on_gpu), "why": why}
 
 
 def tune(model=None, log=print) -> dict:
