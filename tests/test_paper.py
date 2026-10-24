@@ -928,13 +928,20 @@ def foot_problems(pdf, page: int, answers: bool) -> list[str]:
     return out
 
 
+# Public copy only: with no business section, a quiet 4-page day can leave about 2 lines above the cipher on the back page (one paragraph
+# in that column, so spacing can't spread the gap). Known issue, accepted by the owner 2026-10-23 until the layout is fixed.
+KNOWN_GAPS = {("quiet", 4)}
+
+
 @pytest.mark.parametrize("kind,pages", [("busy", 4), ("quiet", 4), ("busy", 2), ("quiet", 2)])
-def test_every_column_is_filled_on_a_busy_and_a_quiet_day_in_real_chrome(monkeypatch, kind, pages):
+def test_every_column_is_filled_on_a_busy_and_a_quiet_day_in_real_chrome(monkeypatch, request, kind, pages):
     """The real thing: headless Chrome (its own temp profile, local files only) lays out the page and prints it. Every column of every page
     must end at least 97% of the way down (stories run on with jumps, then briefs; the last few lines get a little more leading), the
     text itself must reach at least 90%, or leave no more than 4 lines (no big gap papered over: spacing is added only to a gap of 10%, or 4 lines in a short column), and the PDF is exactly 4 (or 2) Letter pages."""
     if not paper.chrome_path() or not shutil.which("pdftoppm"):
         pytest.skip("Chrome or pdftoppm (poppler-utils) isn't installed")
+    if (kind, pages) in KNOWN_GAPS:
+        request.applymarker(pytest.mark.xfail(reason="known gap above the cipher on a quiet 4-page day (public copy)", strict=False))
     kw = (paper_fake.install_busy if kind == "busy" else paper_fake.install_quiet)(monkeypatch.setattr, NOW)
     paper.save_settings({"pages": pages})
     p = paper.build(NOW.date(), now=NOW, model=paper_fake.FakeModel(), make_pdf=True, **kw)

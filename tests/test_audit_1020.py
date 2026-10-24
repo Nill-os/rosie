@@ -230,8 +230,8 @@ def test_planning_is_off_by_default_in_the_public_copy():
     import re
     src = open(config.__file__).read()
     assert re.search(r'"claude_planning": False', src)                             # the owner turns it on in their own copy only
-    line = next(l for l in src.splitlines() if 'DEFAULTS["claude_planning"] = True' in l)
-    assert "<private-line>" in line
+    line = next((l for l in src.splitlines() if 'DEFAULTS["claude_planning"] = True' in l), None)
+    assert line is None or "<private-line>" in line                                 # the public export deletes the owner's line
 
 
 # ---------------------------------------------------------------- pass 2 (2026-10-20)

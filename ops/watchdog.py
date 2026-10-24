@@ -2,6 +2,7 @@
 """Runs every minute from a systemd timer, OUTSIDE both code slots. After a switch it watches the new version for 30 minutes; if it stops answering, it switches back by itself."""
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -32,8 +33,11 @@ def publish_if_due(st: dict):
     (slots.OPS / "publish.json").write_text(json.dumps(pub, indent=1))
     script = live / "ops" / "publish_public.py"
     if script.exists():
-        subprocess.Popen([str(live / ".venv" / "bin" / "python"), str(script)], cwd=live, stdin=subprocess.DEVNULL,
-                         stdout=open(slots.OPS / "publish.log", "a"), stderr=subprocess.STDOUT, start_new_session=True)
+        cmd = [str(live / ".venv" / "bin" / "python"), str(script)]
+        if shutil.which("systemd-run"):     # its own unit: systemd ends this oneshot's whole cgroup when it returns (it killed the publish)
+            cmd = ["systemd-run", "--user", "--collect", "--quiet", "--unit", f"rosie-publish-{int(time.time())}", f"--working-directory={live}", *cmd]
+        subprocess.Popen(cmd, cwd=live, stdin=subprocess.DEVNULL, stdout=open(slots.OPS / "publish.log", "a"), stderr=subprocess.STDOUT,
+                         start_new_session=True)
 
 
 def main():
