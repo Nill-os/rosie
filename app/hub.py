@@ -356,6 +356,7 @@ class Settings(BaseModel):
     write_target: str | None = None
     brief_time: str | None = None
     brain: str | None = None
+    a0_chat_ui: bool | None = None
     claude_planning: bool | None = None
     orchestrator: bool | None = None
     owner_name: str | None = None
@@ -423,6 +424,8 @@ def settings_set(s: Settings):
         if s.brain not in ("rosie", "agent_zero"):
             return err("brain must be rosie or agent_zero")
         cfg["brain"] = s.brain
+    if s.a0_chat_ui is not None:
+        cfg["a0_chat_ui"] = bool(s.a0_chat_ui)
     if s.claude_planning is not None:
         cfg["claude_planning"] = bool(s.claude_planning)
     if s.orchestrator is not None and orchestrator(bool(s.orchestrator)) is None:

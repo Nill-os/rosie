@@ -586,6 +586,7 @@ def test_notes_are_hers_and_the_paper_handoff(fresh, monkeypatch):
 
 # ================================================================ 5. pictures: fail closed, the checks in order
 def test_pictures_are_off_without_the_virus_scanner(monkeypatch):
+    monkeypatch.setattr(corner_pics.plat, "IS_WIN", False)              # the Linux wording (Windows adds install steps: test_windows_fixes)
     monkeypatch.setattr(corner_pics, "scanner", lambda: None)
     assert corner_pics.ready() == (False, "Pictures are off until the virus scanner is installed.")
     r = corner_pics.check_and_keep([{"bytes": png(100, 100), "src_url": "https://a.example/p.png"}])

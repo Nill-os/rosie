@@ -322,3 +322,11 @@ body.look-roomy #view{padding:22px}body.look-roomy .grid{gap:20px}body.look-room
 .lq-xp{font-weight:700;color:#FFD23F;white-space:nowrap}
 .lq-stat{border-left:3px solid var(--c)}.lq-row{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}
 .lq-edit{margin-bottom:6px}.lq-edit select{flex:none;max-width:140px}.lq-edit.off{opacity:.55}
+
+/* ---------- Chat as Agent Zero's own page (a0_proxy.py): the frame fills the chat area, Rosie's composer steps aside ---------- */
+#a0box{display:none}
+body.in-chat.a0-chat #chatview>*{display:none}
+body.in-chat.a0-chat #chatview>#a0box{display:flex;flex:1;min-height:0;max-width:none;margin:0}
+body.a0-chat #newchat{display:none}
+#a0frame{flex:1;width:100%;height:100%;border:0;background:#04070c}
+.a0note{margin:16px;align-self:flex-start;max-width:560px}

@@ -35,6 +35,7 @@ def test_a_crashing_check_becomes_a_red_row_not_a_crash(monkeypatch):
 
 
 def test_backup_check_levels(monkeypatch):
+    monkeypatch.setattr(health.plat, "IS_WIN", False)                  # the Linux backup jobs (Windows rows: test_windows_fixes)
     for status, level in (({"exists": False}, "bad"),
                           ({"exists": True, "verified": False, "problems": ["x"], "age_hours": 1, "count": 1}, "bad"),
                           ({"exists": True, "verified": True, "age_hours": 50, "count": 3}, "bad"),
@@ -131,6 +132,7 @@ def test_containers_and_agent_zeros_line_are_checked(monkeypatch):
 
 
 def test_code_backup_and_backup_rows_follow_their_jobs_results(monkeypatch):
+    monkeypatch.setattr(health.plat, "IS_WIN", False)                  # the Linux backup jobs (Windows rows: test_windows_fixes)
     import subprocess
     results = {"rosie-sync.service": "exit-code", "rosie-backup.service": "exit-code"}
 

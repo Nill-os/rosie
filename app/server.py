@@ -75,6 +75,9 @@ def _startup():
     def a0_tools():
         import a0_mcp
         a0_mcp.start()                                   # Rosie's tools for Agent Zero, on the Docker bridge only
+    def a0_page():
+        import a0_proxy
+        a0_proxy.start()                                 # Agent Zero's own page behind Rosie's login, for the Chat page
     def a0_place():
         import a0
         import a0_api
@@ -96,6 +99,7 @@ def _startup():
              ("shared skills", skill_sync.start),        # the same skills for Claude Code, Rosie and Agent Zero
              ("board link", _board_link),                # the agent board shared with the linked PC (Settings: board_link_repo)
              ("Agent Zero tools", a0_tools),
+             ("Agent Zero page", a0_page),
              ("Vector", vector_pod.start))                 # Rosie as Vector's brain (Settings > Vector; off until set up)
     for what, step in steps:                             # one part failing must not keep Rosie from starting (audit 2026-10-20)
         try:

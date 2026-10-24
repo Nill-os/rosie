@@ -1208,8 +1208,8 @@ const BIG = [['⏱ What now?', () => whatnow()], ['🏃 Running late', () => sen
 $('#btns').replaceChildren(...BIG.map(([l, f]) => h('button', { type: 'button', onclick: f }, l)));
 const GREETING = "Hi, I'm Rosie. Tell me what you need: type, or tap TALK and speak. Type / for commands. I'll tell you straight if something won't work.";
 function add(txt, cls) { const d = document.createElement('div'); d.className = 'm ' + cls; if (cls.includes('bot')) d.innerHTML = fmt(String(txt)); else d.textContent = txt; log.appendChild(d); log.scrollTop = log.scrollHeight; return d; }
-function setChatHeader() { setHeader(chatTitle + (chatSpace ? '  [' + chatSpace + ']' : ''), chatId ? [btn('✎', 'sm dim', async () => { const v = prompt('Rename chat:', chatTitle); if (!v) return; await patch('/api/chats/' + chatId, { title: v }); chatTitle = v; setChatHeader(); refreshSide(); }),
-  btn('🗑', 'sm bad', async () => { if (!confirm('Delete this chat for good?')) return; await del('/api/chats/' + chatId); newChat(); refreshSide(); })] : []); }
+function setChatHeader() { setHeader(chatTitle + (chatSpace ? '  [' + chatSpace + ']' : ''), [...(a0Usable(a0Chat) ? [btn('Agent Zero', 'sm pur', () => { store.set('a0_classic', false); go('#/chat'); })] : []), ...chatId ? [btn('✎', 'sm dim', async () => { const v = prompt('Rename chat:', chatTitle); if (!v) return; await patch('/api/chats/' + chatId, { title: v }); chatTitle = v; setChatHeader(); refreshSide(); }),
+  btn('🗑', 'sm bad', async () => { if (!confirm('Delete this chat for good?')) return; await del('/api/chats/' + chatId); newChat(); refreshSide(); })] : []]); }
 function resetLog() { log.innerHTML = ''; add(GREETING, 'bot'); }
 async function api(p, b) {
   if (['/api/chat', '/api/command', '/api/slash'].includes(p)) { b = { ...b, chat_id: chatId }; if (!chatId && chatSpace) b.space = chatSpace; }
@@ -1229,7 +1229,42 @@ async function loadChat(id) {
   d.messages.forEach((m) => add(m.text, m.role === 'user' ? 'me' : 'bot'));
   log.scrollTop = log.scrollHeight; return true;
 }
+// Agent Zero's own page as the Chat (a0_proxy.py): used when the brain is Agent Zero, it answers, and this device hasn't chosen classic chat
+let a0Chat = null, a0ChatAt = 0, classicOnce = false;
+const a0Classic = () => store.get('a0_classic', false) === true;
+async function a0ChatInfo() {
+  if (a0Chat && Date.now() - a0ChatAt < 8000) return a0Chat;
+  try { a0Chat = await J('/api/a0/proxy'); } catch (e) { a0Chat = null; }
+  a0ChatAt = Date.now(); return a0Chat;
+}
+const a0Usable = (m) => !!(m && m.brain === 'agent_zero' && m.chat_ui && m.on && m.answers);
+async function showA0Chat(m) {
+  document.body.classList.add('a0-chat');
+  const url = `${location.protocol}//${location.hostname}:${m.port}/`;
+  const classic = btn('Classic chat', 'sm dim', () => { store.set('a0_classic', true); route(); });
+  setHeader('Agent Zero', [btn('⟳', 'sm dim', () => { const f = $('#a0frame'); if (f) f.src = f.src; }), classic]);
+  let box = $('#a0box');
+  if (!box) { box = h('div', { id: 'a0box' }); $('#chatview').appendChild(box); }
+  if (box.dataset.url === url && $('#a0frame')) return;           // the page stays loaded while you visit other pages
+  box.dataset.url = url; box.replaceChildren();
+  const ok = await new Promise((res) => {                           // can this device reach the port? (the phone needs the Tailscale step)
+    const c = new AbortController(); const tm = setTimeout(() => c.abort(), 4000);
+    fetch(url, { mode: 'no-cors', credentials: 'omit', cache: 'no-store', signal: c.signal }).then(() => { clearTimeout(tm); res(true); }, () => { clearTimeout(tm); res(false); });
+  });
+  if (!ok) {
+    box.dataset.url = '';
+    box.appendChild(h('div', { class: 'card a0note' }, h('h3', {}, 'This device can\'t reach Agent Zero\'s page yet'),
+      h('div', { class: 'muted' }, m.phone_served === false ? 'On the PC, run this once so Tailscale serves the page over HTTPS, then reload:' : 'Agent Zero\'s page is on port ' + m.port + '. If this is your phone, run this once on the PC, then reload:'),
+      h('pre', { class: 'a0-log' }, m.phone_command),
+      h('div', { class: 'form' }, btn('Classic chat', 'sm pur', () => { store.set('a0_classic', true); route(); }), btn('Try again', 'sm', () => { box.dataset.url = ''; showA0Chat(m); }))));
+    return;
+  }
+  box.appendChild(h('iframe', { id: 'a0frame', src: url, title: 'Agent Zero: chat with all its tools, projects and settings', allow: 'clipboard-read; clipboard-write; microphone' }));
+}
 async function showChat(arg) {
+  const m = await a0ChatInfo(), once = classicOnce; classicOnce = false;
+  if (!arg && !once && !a0Classic() && a0Usable(m)) return showA0Chat(m);
+  document.body.classList.remove('a0-chat');
   if (arg) {
     const id = +arg;
     if (id !== chatId || !log.children.length) { const ok = await loadChat(id); if (!ok) { toast('That chat no longer exists', 1); newChat(); return; } }
@@ -1239,6 +1274,7 @@ async function showChat(arg) {
 function newChat(space) {
   if (talking) stopTalk();
   chatId = null; chatSpace = space || null; chatTitle = 'New chat'; store.del('chat_id'); pendingConf = null;
+  classicOnce = !!space;                                           // a space's chat is Rosie's own (spaces live in classic chat)
   resetLog(); setChatHeader(); go('#/chat'); setTimeout(() => t.focus(), 50);
 }
 function confirmBox(p) {
@@ -1513,6 +1549,7 @@ VIEWS.agentzero = async () => {
     try { const r = await post('/api/a0/' + what, {}); if (!r.ok) throw new Error(r.error || 'It did not work.'); toast(label + ': done'); } catch (e) { toast(e.message, 1); }
     draw();
   };
+  const setChatUi = async (v) => { try { await post('/api/settings', { a0_chat_ui: v }); a0Chat = null; toast(v ? 'Chat shows Agent Zero\'s page' : 'Chat is Rosie\'s own again'); } catch (e) { toast(e.message, 1); } draw(); };
   let busy = false;
   const typingNote = () => {                                   // only a half-written note holds the redraw (an empty, focused box must not freeze the page)
     const el = document.activeElement;
@@ -1543,6 +1580,14 @@ VIEWS.agentzero = async () => {
         up ? btn('Stop', 'sm bad', () => act('stop', 'Stopping Agent Zero', 'Stop Agent Zero? Rosie answers chat herself until it runs again.')) : btn('Start', 'sm ok', () => act('start', 'Starting Agent Zero'))),
       h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1));margin-top:6px' }, 'Rosie\'s chat is the one place to type: Agent Zero answers there, with all of Rosie\'s tools. A turn stops by itself after 50 steps.'));
     const t = d.turn;
+    const px = await J('/api/a0/proxy').catch(() => null);
+    const chatCard = !px ? null : h('div', { class: 'card' }, h('h3', {}, 'Agent Zero as the Chat'),
+      h('dl', { class: 'kv' },
+        row('Its page', px.on ? h('span', { class: 'chip ok' }, 'served on port ' + px.port) : h('span', { class: 'chip bad' }, 'off')),
+        row('Use as Chat', h('div', { class: 'seg' }, h('button', { class: px.chat_ui ? 'on' : '', onclick: () => setChatUi(true) }, 'On'), h('button', { class: px.chat_ui ? '' : 'on', onclick: () => setChatUi(false) }, 'Off'))),
+        row('Phone', px.phone_served === true ? h('span', { class: 'chip ok' }, 'ready') : h('span', { class: 'chip bad' }, px.phone_served === false ? 'one step left' : 'needs Tailscale'))),
+      h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1));margin:6px 0' }, 'Chat shows Agent Zero\'s own page (its tool steps, files, projects, scheduler, memory and settings) while the brain is Agent Zero. Rosie\'s login guards it. Classic chat stays one click away. To open it on your phone, run this once on the PC:'),
+      h('pre', { class: 'a0-log' }, px.phone_command));
     const now = h('div', { class: 'card' }, h('h3', {}, 'Working now'),
       t ? h('div', {},
         h('div', {}, h('b', {}, '“' + t.text + '”')),
@@ -1590,7 +1635,7 @@ VIEWS.agentzero = async () => {
     if (typingNote()) return;                                        // never redraw under the owner's half-written note
     const y = $('#view').scrollTop;
     show(h('div', { class: 'pagehead' }, h('h2', {}, 'Agent Zero'), h('span', { class: 'muted' }, 'Rosie\'s brain for chat, voice and the phone app. Updates every few seconds.')),
-      h('div', { class: 'grid' }, status, now, board, calls, log));
+      h('div', { class: 'grid' }, status, chatCard, now, board, calls, log));
     $('#view').scrollTop = y;
   };
   clearInterval(a0Timer);

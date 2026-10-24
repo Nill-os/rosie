@@ -18,6 +18,8 @@ DEFAULTS = {
     "board_link_pc": "",            # this PC's short name on the shared board (default: its host name)
     "claude_planning": False,        # planning requests go to Claude (your Claude Code login), then Rosie carries out the plan (Settings > Planning; claude_plan.py). Off unless you turn it on: it sends your week to Anthropic
     "brain": "rosie",                # who answers chat: "rosie" = her own tool loop, "agent_zero" = Agent Zero with her tools (Settings > Brain; a0.py)
+    "a0_chat_ui": True,              # Chat shows Agent Zero's own page when the brain is Agent Zero (a0_proxy.py; Settings > Agent Zero)
+    "a0_proxy_port": 8771,           # the port that page is served on, behind Rosie's login
     "write_target": "test",          # "test" = Assistant Test calendar, "primary" = your real calendar
     "test_calendar_id": None,
     "max_changes_without_confirm": 3,

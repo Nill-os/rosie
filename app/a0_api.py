@@ -16,6 +16,7 @@ import httpx
 from fastapi import APIRouter
 
 import a0
+import a0_proxy
 import agentboard
 import config
 import ctxsize
@@ -103,6 +104,15 @@ def chats() -> int | None:
         return int(r.stdout.strip()) if r.returncode == 0 else None
     except (OSError, subprocess.SubprocessError, ValueError):
         return None
+
+
+@router.get("/api/a0/proxy")
+def a0_proxy_status():
+    """For the Chat page and Settings: is Agent Zero's own page served (behind the login), and what the phone needs."""
+    cfg = config.load()
+    on = a0_proxy.listening()
+    return {"port": a0_proxy.port(), "on": on, "answers": on and reachable(), "brain": cfg.get("brain"), "chat_ui": bool(cfg.get("a0_chat_ui", True)),
+            "phone_command": a0_proxy.phone_command(), "phone_served": _cached("phone_served", 30, a0_proxy.phone_served)}
 
 
 @router.get("/api/a0/status")

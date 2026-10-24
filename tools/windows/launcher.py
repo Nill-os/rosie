@@ -45,6 +45,7 @@ LOG = ROOT / "update.log"
 SETTINGS = ROOT / "update.json"
 SHARED = ("data", "secrets", "vault")          # one copy in ROOT, linked into each slot
 PORT, STAGE_PORT = 8765, 8766
+PROXY_PORT = 8771                                      # a0_proxy_port's default
 CHECK_EVERY_S = 6 * 3600
 PROBATION_S = 30 * 60
 IDLE_TO_SWITCH_S = 15 * 60                     # an update waits until nobody has touched the PC this long (or the night window)
@@ -425,6 +426,8 @@ def phone_address() -> str | None:
         return None
     try:
         subprocess.run([ts, "serve", "--bg", str(PORT)], capture_output=True, timeout=20)
+        proxy = PROXY_PORT                             # Agent Zero's page in Rosie's Chat (a0_proxy.py) needs its own HTTPS port
+        subprocess.run([ts, "serve", "--bg", f"--https={proxy}", f"http://127.0.0.1:{proxy}"], capture_output=True, timeout=20)
         name = json.loads(subprocess.run([ts, "status", "--json"], capture_output=True, text=True, timeout=20).stdout)["Self"]["DNSName"]
         return "https://" + name.rstrip(".")
     except (OSError, ValueError, KeyError, subprocess.SubprocessError):
@@ -706,7 +709,7 @@ def google_login(account: str = "main") -> int:
     for name, code in GOOGLE_STEPS:
         print(f"\n  {name}: a browser window opens. Pick your Google account and allow access.", flush=True)
         r = subprocess.run([str(venv_python(slot)), "-c", "import sys; sys.path.insert(0, '.'); " + code, account], cwd=slot_dir(slot) / "app",
-                           env={**_env(), "ROSIE_SLOT": slot})
+                           env={**_env(), "ROSIE_SLOT": slot, "ROSIE_HOST": settings()["host"]})
         print(f"  {name}: " + ("connected." if r.returncode == 0 else "did not connect (see above). Run this again to retry."))
         failed += bool(r.returncode)
     return 1 if failed else 0
