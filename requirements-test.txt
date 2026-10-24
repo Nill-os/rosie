@@ -3,6 +3,7 @@ pytest
 httpx
 fastapi
 uvicorn
+websockets
 python-multipart
 pydantic
 requests
