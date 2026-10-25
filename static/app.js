@@ -112,6 +112,34 @@ const NAV = [['-', 'My day'], ['home', '⌂', 'Home'], ['inbox', '🔔', 'Inbox'
 const TABS = { brief: [['brief', 'Daily Brief'], ['paper', 'Morning Paper']], memory: [['memory', 'Memory'], ['graph', 'Memory graph']],
   deck: [['deck', 'Agent Deck'], ['servers', 'Servers'], ['tokens', 'Tokens'], ['terminal', 'Terminal']] };
 const TAB_GROUP = {}; for (const [g, list] of Object.entries(TABS)) for (const [k] of list) TAB_GROUP[k] = g;
+// Own menu order (owner 2026-10-25: "allow me to reorganize the menu of rosie how i want"). menuLayout comes from the server (Settings > Menu):
+// [{label, pages: [keys]}], empty = the built-in NAV. A page with a tab bar moves as ONE entry. Pages the layout doesn't know (new features, the
+// private-line page) join the group they are in by default, or the last group when that group is gone; pages that no longer exist are dropped.
+let menuLayout = [];
+function menuGroups(nav, layout) {
+  const def = [], known = new Set(), home = {};
+  for (const n of nav) { if (n[0] === '-') def.push({ label: n[1], pages: [] }); else { def[def.length - 1].pages.push(n[0]); known.add(n[0]); home[n[0]] = def[def.length - 1].label; } }
+  if (!Array.isArray(layout) || !layout.length) return def;
+  const seen = new Set(), groups = layout.map((g) => ({ label: String(g.label || ''), pages: (g.pages || []).filter((k) => known.has(k) && !seen.has(k) && seen.add(k)) }));
+  for (const k of known) {
+    if (seen.has(k)) continue;
+    const g = groups.find((x) => x.label === home[k]) || groups[groups.length - 1], at = k === 'settings' ? -1 : g.pages.indexOf('settings');
+    if (at < 0) g.pages.push(k); else g.pages.splice(at, 0, k);
+  }
+  return groups;
+}
+function menuFlat(groups, nav) {
+  const info = {}; for (const n of nav) if (n[0] !== '-') info[n[0]] = n;
+  return groups.flatMap((g) => [['-', g.label], ...g.pages.map((k) => info[k])]);
+}
+const navEff = () => menuFlat(menuGroups(NAV, menuLayout), NAV);
+// Moves a page to the group at index gi, in front of page `before` (null = at the end). Works on a copy of the groups.
+function menuMove(groups, key, gi, before) {
+  const out = groups.map((g) => ({ label: g.label, pages: g.pages.filter((k) => k !== key) }));
+  const to = out[gi].pages, at = before ? to.indexOf(before) : -1;
+  if (at < 0) to.push(key); else to.splice(at, 0, key);
+  return out;
+}
 function renderTabs(name) {
   const g = TAB_GROUP[name], box = $('#tabs');
   box.replaceChildren(...(g ? TABS[g].filter(([k]) => k === name || !(pagesOff.includes(k) || pagesHidden.includes(k))).map(([k, label]) => h('button', { type: 'button', class: 'tab' + (k === name ? ' on' : ''), 'aria-current': k === name ? 'page' : null,
@@ -164,9 +192,75 @@ function menuBox(again) {
     const hidden = on ? pagesHidden.filter((x) => x !== k) : [...pagesHidden, k];
     try { const r = await post('/api/settings', { hidden_pages: hidden }); if (r.error) throw new Error(r.error); pagesHidden = r.hidden_pages || hidden; renderNav('settings'); } catch (e) { toast(e.message, 1); }
   };
-  return h('div', {}, h('div', { class: 'menu-pick' }, [...NAV, ...Object.values(TABS).flat().filter(([k]) => !NAV.some((n) => n[0] === k)).map(([k, l]) => [k, '↳', l])].filter(([k]) => k !== '-' && k !== 'settings' && !pagesOff.includes(k)).map(([k, ic, label]) =>
-    h('label', {}, h('input', { type: 'checkbox', checked: !pagesHidden.includes(k), onchange: (e) => save(k, e.target.checked) }), ' ' + ic + ' ' + label))),
-    h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1));margin-top:4px' }, 'Untick a page to leave it out of the menu. Its features keep working; tick it again to get it back.'));
+  // The editor (owner 2026-10-25: "allow me to reorganize the menu of rosie how i want"): a card per group, a row per page. Drag a row's
+  // handle, or use the buttons (Up, Down, Move to), which also work on a phone. Changes save by themselves after a short pause.
+  let groups = menuGroups(NAV, menuLayout), timer = null, drag = null;
+  const status = h('span', { class: 'muted mg-status', role: 'status', 'aria-live': 'polite' }, '');
+  const list = h('div', { class: 'mg-list' });
+  const payload = () => groups.map((g, i) => ({ label: g.label.trim().slice(0, 30) || (i === groups.length - 1 && g.pages.includes('settings') ? '' : 'Group ' + (i + 1)), pages: g.pages }));
+  const push = async (layout) => {
+    status.textContent = 'Saving…';
+    try { const r = await post('/api/settings', { menu_layout: layout }); if (r.error) throw new Error(r.error); menuLayout = r.menu_layout || layout; renderNav('settings'); status.textContent = 'Saved'; }
+    catch (e) { status.textContent = 'Not saved'; toast(e.message, 1); }
+  };
+  const changed = () => { status.textContent = ''; clearTimeout(timer); timer = setTimeout(() => push(payload()), 600); };
+  const label = (g) => g.label.trim() || 'Settings group';
+  const lastKey = (fk) => { const e = list.querySelector('[data-f="' + fk + '"]'); if (e) e.focus(); };
+  const edit = (next, fk) => { groups = next; draw(); if (fk) lastKey(fk); changed(); };
+  const rowOf = (g, gi, k) => {
+    const n = NAV.find((x) => x[0] === k), i = g.pages.indexOf(k), f = (w) => 'p:' + k + ':' + w, dis = (on) => (on ? 'true' : null);
+    const stepBtn = (txt, tip, fk, off, fn) => h('button', { type: 'button', class: 'btn dim sm', title: tip, 'aria-label': tip + ' ' + n[2], 'aria-disabled': dis(off), 'data-f': fk, onclick: () => { if (!off) fn(); } }, txt);
+    const sel = h('select', { 'aria-label': 'Move ' + n[2] + ' to', 'data-f': f('to'), onchange: (e) => edit(menuMove(groups, k, Number(e.target.value), null), f('to')) },
+      h('option', { value: '' }, 'Move to…'), ...groups.map((x, j) => h('option', { value: String(j), disabled: j === gi }, label(x))));
+    const row = h('div', { class: 'mg-row', draggable: 'true', 'data-key': k,
+      ondragstart: (e) => { drag = k; row.classList.add('mg-drag'); if (e.dataTransfer) { e.dataTransfer.effectAllowed = 'move'; try { e.dataTransfer.setData('text/plain', k); } catch (x) { /* some browsers refuse */ } } },
+      ondragend: () => { drag = null; list.querySelectorAll('.mg-over,.mg-drag').forEach((x) => x.classList.remove('mg-over', 'mg-drag')); },
+      ondragover: (e) => { if (drag && drag !== k) { e.preventDefault(); e.stopPropagation(); row.classList.add('mg-over'); } },
+      ondragleave: () => row.classList.remove('mg-over'),
+      ondrop: (e) => { if (!drag || drag === k) return; e.preventDefault(); e.stopPropagation(); edit(menuMove(groups, drag, gi, k)); } },
+      h('span', { class: 'mg-handle', 'aria-hidden': 'true', title: 'Drag to move' }, '⠿'),
+      k === 'settings' ? h('span', { class: 'mg-name' }, h('span', { class: 'mg-ic' }, n[1]), n[2])
+        : h('label', { class: 'mg-name' }, h('input', { type: 'checkbox', checked: !pagesHidden.includes(k), 'aria-label': 'Show ' + n[2] + ' in the menu', onchange: (e) => save(k, e.target.checked) }), h('span', { class: 'mg-ic' }, n[1]), n[2]),
+      h('span', { class: 'mg-btns' },
+        stepBtn('↑', 'Move up', f('up'), i === 0, () => edit(menuMove(groups, k, gi, g.pages[i - 1]), f('up'))),
+        stepBtn('↓', 'Move down', f('down'), i === g.pages.length - 1, () => edit(menuMove(groups, k, gi, g.pages[i + 2] || null), f('down'))), sel));
+    return row;
+  };
+  const cardOf = (g, gi) => {
+    const f = (w) => 'g:' + gi + ':' + w, swap = (a, b) => { const x = groups.map((y) => y); [x[a], x[b]] = [x[b], x[a]]; return x; };
+    const shown = g.pages.filter((k) => !pagesOff.includes(k));
+    const isLast = gi === groups.length - 1 && g.pages.includes('settings');
+    const name = h('input', { type: 'text', class: 'mg-title', value: g.label, maxlength: '30', placeholder: isLast ? 'No name' : 'Group name', 'aria-label': 'Group ' + (gi + 1) + ' name',
+      oninput: (e) => { g.label = e.target.value; changed(); }, onchange: () => draw() });
+    const gb = (txt, tip, fk, off, fn) => h('button', { type: 'button', class: 'btn dim sm', title: tip, 'aria-label': tip + ' ' + label(g), 'aria-disabled': off ? 'true' : null, 'data-f': fk, onclick: () => { if (!off) fn(); } }, txt);
+    const remove = () => {
+      if (groups.length < 2) return;
+      const to = gi > 0 ? gi - 1 : 1;
+      if (g.pages.length && !confirm('Remove the group "' + label(g) + '"? Its ' + g.pages.length + ' page' + (g.pages.length > 1 ? 's' : '') + ' move to "' + label(groups[to]) + '".')) return;
+      if (!g.pages.length && !confirm('Remove the empty group "' + label(g) + '"?')) return;
+      const next = groups.map((x, j) => (j === to ? { label: x.label, pages: gi > 0 ? [...x.pages, ...g.pages] : [...g.pages, ...x.pages] } : x)).filter((x, j) => j !== gi);
+      edit(next);
+    };
+    return h('div', { class: 'mg-card', 'data-group': String(gi),
+      ondragover: (e) => { if (drag) { e.preventDefault(); } },
+      ondrop: (e) => { if (!drag) return; e.preventDefault(); edit(menuMove(groups, drag, gi, null)); } },
+      h('div', { class: 'mg-head' }, name, h('span', { class: 'mg-btns' },
+        gb('↑', 'Move group up', f('up'), gi === 0, () => edit(swap(gi, gi - 1), f('up'))),
+        gb('↓', 'Move group down', f('down'), gi === groups.length - 1, () => edit(swap(gi, gi + 1), f('down'))),
+        gb('Remove', 'Remove group', f('rm'), groups.length < 2, remove))),
+      shown.length ? shown.map((k) => rowOf(g, gi, k)) : h('div', { class: 'muted mg-empty' }, 'Empty. Drag a page here, or use Move to on a page.'));
+  };
+  function draw() {
+    list.replaceChildren(...groups.map(cardOf), h('div', { class: 'mg-foot' },
+      btn('Add group', 'sm', () => { const at = groups.length && groups[groups.length - 1].pages.includes('settings') ? groups.length - 1 : groups.length; const next = [...groups]; next.splice(at, 0, { label: 'New group', pages: [] }); edit(next); }),
+      btn('Reset to default', 'dim sm', () => { if (!confirm('Put the menu back in its built-in order?')) return; clearTimeout(timer); groups = menuGroups(NAV, []); draw(); push([]); }), status));
+  }
+  draw();
+  const tabKids = Object.values(TABS).flat().filter(([k]) => !NAV.some((n) => n[0] === k) && !pagesOff.includes(k));
+  return h('div', {}, list,
+    tabKids.length ? h('div', { class: 'mg-tabs' }, h('div', { class: 'muted', style: 'margin:8px 0 4px' }, 'Tabs inside a page'), h('div', { class: 'menu-pick' }, tabKids.map(([k, l]) =>
+      h('label', {}, h('input', { type: 'checkbox', checked: !pagesHidden.includes(k), onchange: (e) => save(k, e.target.checked) }), ' ↳ ' + l)))) : null,
+    h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1));margin-top:4px' }, 'Drag a page by its handle, or use the arrows and Move to. Name a group to rename it. Untick a page to leave it out of the menu; its features keep working. A page with tabs moves as one. Saved by itself.'));
 }
 function lookBox(again) {
   const v = look(), set = (p) => { setLook(p); again(); };
@@ -189,7 +283,7 @@ let navFolded = store.get('nav.folded', ['Advanced']);
 const navRail = () => matchMedia('(min-width:600px) and (max-width:899px)').matches && !document.body.classList.contains('side-open');   // icons only: nothing folds
 function navShown(active) {
   const out = new Set([...pagesOff, ...pagesHidden]);
-  const items = NAV.filter(([k]) => k === '-' || !out.has(k));
+  const items = navEff().filter(([k]) => k === '-' || !out.has(k));
   const kept = items.filter(([k], i) => k !== '-' || (items[i + 1] && items[i + 1][0] !== '-'));
   if (navRail()) return kept;
   let head = '';
@@ -240,7 +334,7 @@ async function route() {
 async function refreshSide() {
   try { sideData = await J('/api/chats'); } catch (e) { $('#dot').className = 'off'; return; }
   $('#dot').className = '';
-  try { const b = await J('/api/badges'); overdueCount = b.overdue; unreadCount = b.inbox; studyDue = b.study_due || 0; if (b.ui_theme && b.ui_theme !== installTheme) { installTheme = b.ui_theme; store.set('rosie.theme.default', installTheme); applyLook(look()); } pagesOff = b.pages_off || []; loginHint = b.google_login || loginHint; gmailHint = b.gmail_login || gmailHint; pagesHidden = b.pages_hidden || []; } catch (e) { /* badges only */ }
+  try { const b = await J('/api/badges'); overdueCount = b.overdue; unreadCount = b.inbox; studyDue = b.study_due || 0; if (b.ui_theme && b.ui_theme !== installTheme) { installTheme = b.ui_theme; store.set('rosie.theme.default', installTheme); applyLook(look()); } pagesOff = b.pages_off || []; loginHint = b.google_login || loginHint; gmailHint = b.gmail_login || gmailHint; pagesHidden = b.pages_hidden || []; menuLayout = b.menu_layout || []; } catch (e) { /* badges only */ }
   renderNav(navActive());
   renderTabs((location.hash.replace(/^#\/?/, '') || 'home').split('/')[0]);   // hidden pages are known only now
   drawChats();
@@ -1421,7 +1515,6 @@ VIEWS.settings = async (arg) => {
     h('div', { class: 'grid' },
       h('div', { class: 'card' }, h('h3', {}, 'System'), h('dl', { class: 'kv' },
         row('Display', lookBox(again)),
-        row('Menu', menuBox(again)),
         row('AI model', modelPicker(md, s.model, again)),
         row('Context window', ctxBox(cx, again)),
         row('Security', secBox(sw, again)),
@@ -1432,6 +1525,7 @@ VIEWS.settings = async (arg) => {
         row('Google Calendar', s.google.ok ? 'connected' : h('span', { style: 'color:var(--bad)' }, (s.google.error || 'login needed') + ' · ' + loginHint)),
         row('Phone address', s.tailscale.name ? s.tailscale.name : (s.tailscale.error || 'Tailscale not running')),
         row('Disk free', s.disk_free_gb + ' GB'))),
+      h('div', { class: 'card', style: 'grid-column:1/-1' }, h('h3', {}, 'Menu'), menuBox(again)),
       h('div', { class: 'card' }, h('h3', {}, 'Health'),
         hl.rows.length ? h('div', { class: 'list' }, hl.rows.map(healthRow)) : h('div', { class: 'muted' }, 'Checking everything… open this page again in a few seconds.'),
         h('div', { class: 'form', style: 'margin-top:10px' }, btn('Check again', 'sm', async () => { toast('Checking…'); await J('/api/health?fresh=true'); again(); }))),

@@ -397,6 +397,7 @@ class Settings(BaseModel):
     owner_name: str | None = None
     owner_notes: str | None = None
     hidden_pages: list[str] | None = None
+    menu_layout: list[dict] | None = None
 
 
 def pages_off() -> list[str]:
@@ -475,6 +476,12 @@ def settings_set(s: Settings):
         if len(s.hidden_pages) > 40 or not all(isinstance(k, str) and re.fullmatch(r"[a-z0-9]{1,20}", k) for k in s.hidden_pages):
             return err("hidden_pages must be a list of page names")
         cfg["hidden_pages"] = [k for k in dict.fromkeys(s.hidden_pages) if k != "settings"]     # Settings always stays reachable
+    if s.menu_layout is not None:
+        # Own menu order (owner 2026-10-25: "allow me to reorganize the menu of rosie how i want"). The client drops keys it doesn't know.
+        lay, why = _clean_menu_layout(s.menu_layout)
+        if why:
+            return err(why)
+        cfg["menu_layout"] = lay
     if s.owner_notes is not None:
         if len(s.owner_notes) > 600:
             return err("Keep the notes under 600 characters")
@@ -484,7 +491,37 @@ def settings_set(s: Settings):
         import a0
         a0.write_include()                                     # Agent Zero's copy of the rules picks up the notes
     return {"write_target": cfg["write_target"], "brief_time": cfg["brief_time"], "brain": cfg["brain"], "planning": claude_plan.status(), "orchestrator": orchestrator(),
-            "owner_name": cfg.get("owner_name", ""), "owner_notes": cfg.get("owner_notes", ""), "hidden_pages": cfg.get("hidden_pages") or []}
+            "owner_name": cfg.get("owner_name", ""), "owner_notes": cfg.get("owner_notes", ""), "hidden_pages": cfg.get("hidden_pages") or [], "menu_layout": cfg.get("menu_layout") or []}
+
+
+def _clean_menu_layout(raw):
+    """(layout, problem): groups of page keys. Settings always stays in the menu: it is added to the last group when missing."""
+    if not isinstance(raw, list) or len(raw) > 20:
+        return None, "menu_layout must be a list of at most 20 groups"
+    out, seen = [], set()
+    for g in raw:
+        if not isinstance(g, dict) or not isinstance(g.get("label"), str) or not isinstance(g.get("pages"), list):
+            return None, "each menu group needs a label and a list of pages"
+        label = g["label"].strip()
+        if len(label) > 30:
+            return None, "a group name can have at most 30 letters"
+        pages = []
+        for k in g["pages"]:
+            if not isinstance(k, str) or not re.fullmatch(r"[a-z0-9_-]{1,30}", k):
+                return None, "menu pages must be page names"
+            if k in seen:
+                return None, f"{k} is in the menu twice"
+            seen.add(k)
+            pages.append(k)
+        out.append({"label": label, "pages": pages})
+    if raw and "settings" not in seen:
+        if not out:
+            out.append({"label": "", "pages": []})
+        out[-1]["pages"].append("settings")
+    for i, g in enumerate(out):                              # a nameless group is only the last one, the one that holds Settings
+        if not g["label"] and not (i == len(out) - 1 and "settings" in g["pages"]):
+            return None, "only the last group, the one with Settings, can have no name"
+    return out, None
 
 
 @router.get("/api/ctx")
@@ -666,7 +703,7 @@ def status():
     return {"model": _cached("model", 10, _model_info), "gpu": _cached("gpu", 15, _gpu), "google": google,
             "tailscale": _cached("ts", 60, _tailscale), "disk_free_gb": free, "write_target": cfg["write_target"],
             "brief_time": cfg["brief_time"], "spaces": cfg["spaces"], "brain": cfg["brain"], "planning": claude_plan.status(), "orchestrator": orchestrator(),
-            "owner_name": cfg.get("owner_name", ""), "owner_notes": cfg.get("owner_notes", ""), "hidden_pages": cfg.get("hidden_pages") or []}
+            "owner_name": cfg.get("owner_name", ""), "owner_notes": cfg.get("owner_notes", ""), "hidden_pages": cfg.get("hidden_pages") or [], "menu_layout": cfg.get("menu_layout") or []}
 
 
 @router.post("/api/signout-all")
@@ -725,7 +762,7 @@ def badges():
     import proposals as _pr
     import study
     return {"overdue": len(tasks.overdue()), "inbox": inbox.unread_count(), "proposals": _pr.count_pending(), "study_due": study.due_count(), "ui_theme": config.load().get("ui_theme") or "aurora",
-            "pages_off": pages_off(), "google_login": plat.google_login(), "gmail_login": plat.google_login("main"), "pages_hidden": config.load().get("hidden_pages") or []}
+            "pages_off": pages_off(), "google_login": plat.google_login(), "gmail_login": plat.google_login("main"), "pages_hidden": config.load().get("hidden_pages") or [], "menu_layout": config.load().get("menu_layout") or []}
 
 
 @router.get("/api/canvas")

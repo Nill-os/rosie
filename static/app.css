@@ -510,3 +510,18 @@ html[data-theme="aurora"] .pp-wrap,html[data-theme="aurora"] .gstage{border-radi
 .tk-legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px}
 .tk-scroll{overflow-x:auto}.tk-tbl th,.tk-tbl td{padding:6px 8px;text-align:left;white-space:nowrap}.tk-tbl .num{text-align:right}
 @media(max-width:700px){.tk-val{display:none}.tk-chart{height:150px;gap:2px}}
+
+/* Settings > Menu editor (owner 2026-10-25: "allow me to reorganize the menu of rosie how i want"); colors come from the theme variables */
+.mg-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,340px),1fr));gap:8px;align-items:start}.mg-foot{grid-column:1/-1}
+.mg-card{margin-bottom:0;border:1px solid var(--line);border-radius:6px;background:var(--bg);padding:8px;min-width:0}
+.mg-head,.mg-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0}
+.mg-head{margin-bottom:6px}.mg-title{flex:1 1 140px;min-width:0;font-weight:700}
+.mg-row{padding:4px 6px;border:1px solid transparent;border-radius:6px;background:var(--card);margin-top:4px}
+.mg-row.mg-over{border-color:var(--acc);box-shadow:0 0 0 1px var(--acc)}.mg-row.mg-drag{opacity:.5}
+.mg-name{flex:1 1 130px;display:flex;align-items:center;gap:6px;min-width:0;cursor:pointer}
+.mg-ic{width:1.4em;text-align:center}.mg-handle{color:var(--mute);cursor:grab;user-select:none}
+.mg-btns{display:inline-flex;gap:4px;align-items:center;flex-wrap:wrap}.mg-btns select{width:auto;min-width:0;max-width:130px;min-height:32px;padding:2px 6px;font-size:calc(12px*var(--ts,1))}
+.mg-btns .btn[aria-disabled=true]{opacity:.4;cursor:default}
+.mg-btns .btn:focus-visible,.mg-name input:focus-visible,.mg-btns select:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+.mg-empty{padding:8px;border:1px dashed var(--line);border-radius:6px}
+.mg-foot{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:4px}

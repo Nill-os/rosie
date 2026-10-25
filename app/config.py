@@ -17,6 +17,7 @@ DEFAULTS = {
     "owner_name": "",               # what Rosie calls you in her own prompts (her corner); empty = "your owner"
     "study_calendar": "Study Plan",  # the Google calendar whose next event the Study page plans for (read only)
     "ui_theme": "aurora",           # the look for devices that have not picked their own (Settings > Display > Theme): aurora, cyberdeck or jetsons
+    "menu_layout": [],              # the menu's groups and order (Settings > Menu): [{"label": "My day", "pages": ["home", ...]}]; empty = the built-in order
     "hidden_pages": [],             # pages left out of the menu (Settings > Menu), like ["vector"]
     "owner_notes": "",              # how you like help, added to her and Agent Zero's prompts (Settings > About you)
     "board_link_repo": "",          # "owner/repo": share the agent board with another PC through issue board_link_issue (board_link.py)
