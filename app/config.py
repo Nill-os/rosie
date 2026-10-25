@@ -18,6 +18,7 @@ DEFAULTS = {
     "board_link_repo": "",          # "owner/repo": share the agent board with another PC through issue board_link_issue (board_link.py)
     "board_link_issue": 1,
     "board_link_pc": "",            # this PC's short name on the shared board (default: its host name)
+    "board_link_dir": "",           # a folder both PCs share (Syncthing): the board goes through it instead of GitHub (board_link.py)
     "claude_planning": False,        # planning requests go to Claude (your Claude Code login), then Rosie carries out the plan (Settings > Planning; claude_plan.py). Off unless you turn it on: it sends your week to Anthropic
     "brain": "rosie",                # who answers chat: "rosie" = her own tool loop, "agent_zero" = Agent Zero with her tools (Settings > Brain; a0.py)
     "a0_chat_ui": True,              # Chat shows Agent Zero's own page when the brain is Agent Zero (a0_proxy.py; Settings > Agent Zero)
