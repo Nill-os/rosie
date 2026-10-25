@@ -149,10 +149,11 @@ def fake_a0(monkeypatch):
     port = _free_port()
     srv = uvicorn.Server(uvicorn.Config(Starlette(routes=[WebSocketRoute("/ws", echo)]), host="127.0.0.1", port=port, log_level="error", loop="asyncio"))
     threading.Thread(target=srv.run, daemon=True).start()
-    for _ in range(100):
+    for _ in range(400):                                         # up to 20 s: a stage check on a busy PC was slower than 5 s (2026-10-25)
         if srv.started:
             break
         time.sleep(0.05)
+    assert srv.started, "the fake Agent Zero did not start"
     monkeypatch.setattr(a0_host, "url", lambda: f"http://127.0.0.1:{port}")
     monkeypatch.setattr(a0_proxy, "_allowed", lambda cookie: cookie == "good")
     yield got, port

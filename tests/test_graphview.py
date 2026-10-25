@@ -136,7 +136,7 @@ def test_rosie_lists_the_page_and_it_never_inserts_html(client):
     server, _ = client
     js = Path(server.STATIC / "graph.js").read_text(encoding="utf-8")
     assert "innerHTML" not in js and "'html'" not in js
-    assert "['graph', '⌬', 'Memory graph']" in Path(server.STATIC / "app.js").read_text(encoding="utf-8")
+    assert "['graph', 'Memory graph']" in Path(server.STATIC / "app.js").read_text(encoding="utf-8")      # now a tab of the Memory entry
     assert '<script src="/graph.js"></script>' in Path(server.STATIC / "index.html").read_text(encoding="utf-8")
 
 

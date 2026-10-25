@@ -16,7 +16,7 @@ code{background:var(--card2);color:var(--acc);padding:1px 6px;border-radius:4px;
 /* ---------- sidebar ---------- */
 #side{background:#04070a;border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0;overflow-y:auto}   /* the whole column scrolls: on a phone nothing falls off the bottom */
 #side .brand{padding:14px 16px 10px;display:flex;align-items:center;gap:10px}
-#side .brand b{color:var(--acc);letter-spacing:.14em;text-shadow:0 0 12px #00f0ff55}
+#side .brand b{color:var(--acc);text-transform:uppercase;letter-spacing:.14em;text-shadow:0 0 12px #00f0ff55}
 #side .brand b::before{content:"> ";color:var(--pur)}
 #side .brand i{width:8px;height:8px;border-radius:50%;background:var(--ok);box-shadow:0 0 8px var(--ok);margin-left:auto}
 #side .brand i.off{background:var(--bad);box-shadow:0 0 8px var(--bad)}
@@ -352,7 +352,7 @@ html[data-theme="jetsons"] body::before{opacity:min(1,var(--glow,1));filter:none
   radial-gradient(70vmax 50vmax at 100% 0%,#24447a,transparent 70%),radial-gradient(60vmax 40vmax at 0% 100%,#1f3a66,transparent 70%),#10203E}
 html[data-theme="jetsons"] #side{background:#0F1D38;border-right:2px solid var(--line)}
 html[data-theme="jetsons"] body.side-open #side{background:#0F1D38}
-html[data-theme="jetsons"] #side .brand b{color:var(--pur);font-size:calc(20px*var(--ts,1))}
+html[data-theme="jetsons"] #side .brand b{color:var(--pur);text-transform:none;font-size:calc(20px*var(--ts,1))}
 html[data-theme="jetsons"] #side .brand b::before{content:"";display:inline-block;vertical-align:-5px;margin-right:8px;width:26px;height:26px;background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 26 26'%3E%3Cg fill='none' stroke='%236FE3D8' stroke-width='1.6'%3E%3Cellipse cx='13' cy='13' rx='12' ry='4.5'/%3E%3Cellipse cx='13' cy='13' rx='12' ry='4.5' transform='rotate(60 13 13)'/%3E%3Cellipse cx='13' cy='13' rx='12' ry='4.5' transform='rotate(120 13 13)'/%3E%3C/g%3E%3Ccircle cx='13' cy='13' r='3' fill='%23FFB454'/%3E%3C/svg%3E") center/contain no-repeat}
 html[data-theme="jetsons"] #side .brand i{box-shadow:none}
 html[data-theme="jetsons"] .nav{font-size:calc(16px*var(--ts,1));color:var(--fg)}
@@ -382,3 +382,113 @@ html[data-theme="jetsons"] .modal{background:#182A50;border:2px solid var(--pur)
 html[data-theme="jetsons"] .menu,html[data-theme="jetsons"] #toast div,html[data-theme="jetsons"] #slash{background:#182A50}
 html[data-theme="jetsons"] .me{background:#24406E}
 html[data-theme="jetsons"] *{scrollbar-color:var(--line) transparent}
+
+/* ---------- Page tabs (a menu entry that holds several pages): a small segmented bar above the page ---------- */
+.tabs{display:flex;gap:4px;flex-wrap:wrap;padding:8px 16px 0}
+.tabs[hidden]{display:none}
+.tabs .tab{border:1px solid var(--line);background:var(--card);color:var(--mute);border-radius:999px;padding:0 14px;min-height:34px;font-size:calc(13px*var(--ts,1));font-weight:700;transition:background .12s,color .12s,border-color .12s}
+.tabs .tab:hover{color:var(--fg)}
+.tabs .tab.on{background:var(--acc);color:#000;border-color:var(--acc)}
+@media (max-width:599px){.tabs{padding:8px 12px 0}}
+
+/* ---------- Aurora theme (owner 2026-10-24: "remake the rosie ui with the new ui skills and just keep the colors"): the same colors as
+   Cyberdeck in a modern shape. One family (Space Grotesk, bundled), type scale 1.25 from 13 px, sentence-case labels, one glass level,
+   no neon text glow, no blinking cursor. The aurora behind it stays still. Monospace stays for code and the terminal. ---------- */
+@font-face{font-family:"Space Grotesk";src:url(/vendor/fonts/space-grotesk.ttf) format("truetype");font-weight:300 700;font-style:normal;font-display:swap}
+html[data-theme="aurora"]{--bg:#04070c;--card:rgba(12,18,28,.58);--card2:rgba(255,255,255,.06);--line:rgba(255,255,255,.08);--fg:#E8E8F0;--mute:#8696AE;
+  --acc:#00F0FF;--pur:#C58AFF;--pur-fill:#9D00FF;--ok:#22E58A;--warn:#FFD23F;--bad:#FF6B84;--pink:#FF4FDA;--claude:#FF9A5A;
+  --sans:"Space Grotesk",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --t0:calc(13px*var(--ts,1));--t1:calc(15px*var(--ts,1));--t2:calc(18px*var(--ts,1));--t3:calc(22px*var(--ts,1));--t4:calc(28px*var(--ts,1));--t5:calc(35px*var(--ts,1));
+  --pop:rgba(10,16,26,.98);background:#04070c}
+html[data-theme="aurora"] body{font:var(--t1)/1.5 var(--sans);font-variant-numeric:tabular-nums}
+html[data-theme="aurora"] button,html[data-theme="aurora"] input,html[data-theme="aurora"] select,html[data-theme="aurora"] textarea{font-family:var(--sans)}
+html[data-theme="aurora"] code,html[data-theme="aurora"] pre,html[data-theme="aurora"] .xterm,html[data-theme="aurora"] kbd,html[data-theme="aurora"] .a0-log{font-family:var(--mono)}
+html[data-theme="aurora"] *{text-shadow:none!important;letter-spacing:normal!important;text-transform:none!important}
+html[data-theme="aurora"] b,html[data-theme="aurora"] strong{color:var(--fg);font-weight:600}
+html[data-theme="aurora"] code{border-radius:6px}
+html[data-theme="aurora"] *{scrollbar-color:rgba(255,255,255,.18) transparent}
+/* every control: hover lift, press, focus ring */
+html[data-theme="aurora"] :focus-visible{outline:2px solid var(--acc);outline-offset:2px;border-radius:8px}
+html[data-theme="aurora"] .btn,html[data-theme="aurora"] .nav,html[data-theme="aurora"] .tabs .tab,html[data-theme="aurora"] .seg button,html[data-theme="aurora"] .item,
+html[data-theme="aurora"] .card,html[data-theme="aurora"] .chip{transition:transform 120ms ease,background-color 120ms ease,border-color 120ms ease,color 120ms ease}
+html[data-theme="aurora"] .btn:hover,html[data-theme="aurora"] .tabs .tab:hover{transform:translateY(-1px)}
+html[data-theme="aurora"] .btn:active,html[data-theme="aurora"] .nav:active,html[data-theme="aurora"] .tabs .tab:active,html[data-theme="aurora"] .seg button:active,html[data-theme="aurora"] #bar button:active{transform:scale(.97)}
+/* sidebar: calm, active = cyan text on a soft cyan pill */
+html[data-theme="aurora"] #side{background:rgba(6,10,16,.72);border-right:1px solid var(--line)}
+html[data-theme="aurora"] body.side-open #side{background:rgba(6,10,16,.98)}
+html[data-theme="aurora"] #side .brand{padding:16px 16px 12px}
+html[data-theme="aurora"] #side .brand b{color:var(--fg);text-transform:none;font-size:var(--t2);font-weight:600}
+html[data-theme="aurora"] #side .brand b::before{content:none}
+html[data-theme="aurora"] #side .brand i{width:8px;height:8px;box-shadow:0 0 6px var(--ok)}
+html[data-theme="aurora"] #side .brand i.off{box-shadow:0 0 6px var(--bad)}
+html[data-theme="aurora"] #side nav{gap:2px;padding:0 8px}
+html[data-theme="aurora"] .nav{border:0;border-radius:12px;padding:8px 12px;font-size:var(--t1);color:var(--fg);min-height:40px}
+html[data-theme="aurora"] .nav:hover{background:rgba(255,255,255,.06)}
+html[data-theme="aurora"] .nav.on{background:rgba(0,240,255,.12);color:var(--acc);font-weight:600}
+html[data-theme="aurora"] .navhead,html[data-theme="aurora"] .sp-h,html[data-theme="aurora"] .fgrp{font-size:var(--t0);font-weight:600;color:var(--mute);padding:12px 12px 4px}
+html[data-theme="aurora"] .sp-h{margin-top:8px;padding:4px 8px}
+html[data-theme="aurora"] button.navhead:hover{color:var(--fg)}
+html[data-theme="aurora"] .nav .cnt{background:var(--bad);color:#000!important;font-variant-numeric:tabular-nums}
+html[data-theme="aurora"] .chat{border-left:0;border-radius:12px}
+html[data-theme="aurora"] .chat.on{background:rgba(0,240,255,.12)}
+html[data-theme="aurora"] .chat.on .t{color:var(--acc);font-weight:600}
+html[data-theme="aurora"] #side .foot{font-size:var(--t0);letter-spacing:normal}
+/* header */
+html[data-theme="aurora"] #top{border-bottom:1px solid var(--line);padding:14px 16px 12px}
+html[data-theme="aurora"] #ttl{color:var(--fg);font-size:var(--t3);font-weight:600;letter-spacing:-.01em!important}
+html[data-theme="aurora"] #ttl::before,html[data-theme="aurora"] #ttl::after{content:none;animation:none}
+/* cards: one glass level, concentric radii (card 16, control 12, pill 999) */
+html[data-theme="aurora"] .card{background:var(--card);border:1px solid var(--line);border-radius:16px;box-shadow:none;padding:16px}
+html[data-theme="aurora"] .card:hover{border-color:rgba(255,255,255,.14)}
+html[data-theme="aurora"] .card h3{font-size:var(--t0);font-weight:600;color:var(--mute);margin:0 0 12px}
+html[data-theme="aurora"] .card h3::before{content:none}
+html[data-theme="aurora"] .card h3 a{font-size:var(--t0);letter-spacing:normal}
+html[data-theme="aurora"] .grid{gap:16px}
+html[data-theme="aurora"] .pagehead h2{color:var(--fg);font-size:var(--t3);font-weight:600}
+html[data-theme="aurora"] .dayhead{color:var(--mute);font-size:var(--t0);font-weight:600}
+html[data-theme="aurora"] .dayhead.today{color:var(--acc)}
+html[data-theme="aurora"] .item{background:rgba(255,255,255,.04);border:1px solid var(--line);border-radius:12px;padding:10px 12px}
+html[data-theme="aurora"] .item:hover{border-color:rgba(255,255,255,.16)}
+html[data-theme="aurora"] .item.over{border-left:1px solid var(--line);box-shadow:inset 3px 0 0 var(--bad)}
+html[data-theme="aurora"] .chip{background:rgba(255,255,255,.05);border-color:var(--line);color:var(--mute)}
+html[data-theme="aurora"] .pill{font-size:var(--t0)}
+html[data-theme="aurora"] .empty{color:var(--mute)}
+/* buttons: quiet outline, fills on hover */
+html[data-theme="aurora"] .btn,html[data-theme="aurora"] #bar button,html[data-theme="aurora"] #btns button,html[data-theme="aurora"] .conf button,html[data-theme="aurora"] #slash button{
+  border:1px solid color-mix(in srgb,var(--b) 55%,transparent);background:rgba(255,255,255,.04);color:var(--b);border-radius:12px;font-weight:600;font-size:var(--t0);padding:0 16px}
+html[data-theme="aurora"] .btn:hover,html[data-theme="aurora"] #bar button:hover,html[data-theme="aurora"] #btns button:hover,html[data-theme="aurora"] .conf button:hover{background:var(--b);border-color:var(--b);color:#000}
+html[data-theme="aurora"] .btn.pur{--b:var(--pur)}html[data-theme="aurora"] .btn.pur:hover{color:#000}
+html[data-theme="aurora"] .btn.dim{--b:var(--mute)}html[data-theme="aurora"] .btn.dim:hover{color:#000}
+html[data-theme="aurora"] .btn.sm{min-height:32px;padding:0 12px;border-radius:999px}
+html[data-theme="aurora"] #bar button[type=submit]{--b:var(--pur-fill);background:var(--pur-fill);border-color:var(--pur-fill);color:#fff}
+html[data-theme="aurora"] #bar button[type=submit]:hover{background:var(--pur);border-color:var(--pur);color:#000}
+html[data-theme="aurora"] #talk{border-radius:16px;font-size:var(--t2);font-weight:600;box-shadow:none}
+/* inputs */
+html[data-theme="aurora"] input[type=text],html[data-theme="aurora"] input[type=date],html[data-theme="aurora"] input[type=time],html[data-theme="aurora"] input[type=number],
+html[data-theme="aurora"] input[type=password],html[data-theme="aurora"] input[type=email],html[data-theme="aurora"] input[type=url],html[data-theme="aurora"] input[type=search],
+html[data-theme="aurora"] input[type=tel],html[data-theme="aurora"] input:not([type]),html[data-theme="aurora"] select,html[data-theme="aurora"] textarea{
+  background:rgba(4,7,12,.55);border:1px solid rgba(255,255,255,.12);border-radius:12px;font-size:var(--t1)}
+html[data-theme="aurora"] input:focus,html[data-theme="aurora"] select:focus,html[data-theme="aurora"] textarea:focus{border-color:var(--acc);box-shadow:0 0 0 3px rgba(0,240,255,.2)}
+html[data-theme="aurora"] ::placeholder{color:#7C8CA3}
+/* segmented controls and page tabs */
+html[data-theme="aurora"] .seg{border:1px solid var(--line);border-radius:999px;background:rgba(255,255,255,.04);padding:2px;gap:2px}
+html[data-theme="aurora"] .seg button{background:none;border-radius:999px;font-size:var(--t0);font-weight:600;color:var(--mute);padding:6px 14px}
+html[data-theme="aurora"] .seg button:hover{color:var(--fg)}
+html[data-theme="aurora"] .seg button.on{background:rgba(0,240,255,.16);color:var(--acc)}
+html[data-theme="aurora"] .tabs{padding:12px 16px 0}
+html[data-theme="aurora"] .tabs .tab{display:inline-flex;align-items:center;font-size:var(--t0);font-weight:600;background:rgba(255,255,255,.04);border-color:var(--line)}
+html[data-theme="aurora"] .tabs .tab.on{background:rgba(0,240,255,.16);border-color:rgba(0,240,255,.4);color:var(--acc)}
+/* over the page: almost solid */
+html[data-theme="aurora"] .modal{background:var(--pop);border:1px solid rgba(255,255,255,.12);border-radius:16px;box-shadow:0 24px 60px rgba(0,0,0,.5)}
+html[data-theme="aurora"] .modal .mh{color:var(--fg);font-size:var(--t2);font-weight:600}
+html[data-theme="aurora"] .modalbg{background:rgba(0,0,0,.6)}
+html[data-theme="aurora"] .menu,html[data-theme="aurora"] #toast div,html[data-theme="aurora"] #slash{background:var(--pop);border:1px solid rgba(255,255,255,.12);border-radius:12px;box-shadow:0 12px 32px rgba(0,0,0,.45)}
+html[data-theme="aurora"] .menu button{border-bottom:0;border-radius:8px}
+html[data-theme="aurora"] .menu button:hover{background:rgba(0,240,255,.12);color:var(--acc)}
+html[data-theme="aurora"] .conf>b{color:var(--warn);font-size:var(--t0)}
+html[data-theme="aurora"] .me{background:rgba(157,0,255,.12);border-right:0;border-radius:16px}
+html[data-theme="aurora"] .me::before{content:"You";font-size:var(--t0)}
+html[data-theme="aurora"] .bar{border-radius:999px}html[data-theme="aurora"] .bar i{border-radius:999px}
+html[data-theme="aurora"] .pp-wrap,html[data-theme="aurora"] .gstage{border-radius:16px}
+@media (prefers-reduced-motion:reduce){html[data-theme="aurora"] *,html[data-theme="aurora"] *::before,html[data-theme="aurora"] *::after{transition:none!important;animation:none!important}
+  html[data-theme="aurora"] .btn:hover,html[data-theme="aurora"] .tabs .tab:hover{transform:none}}

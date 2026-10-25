@@ -102,18 +102,28 @@ function show(...nodes) { $('#view').replaceChildren(h('div', { class: 'page' },
 // The menu (owner 2026-10-24: "reorganize the tabs and rosie so everything is much more user friendly"): groups by what she is doing,
 // Settings on its own at the end. A group folds away when its name is tapped (each device remembers; Advanced starts folded).
 const NAV = [['-', 'My day'], ['home', '⌂', 'Home'], ['inbox', '🔔', 'Inbox'], ['calendar', '▦', 'Calendar'], ['tasks', '✓', 'Tasks'], ['mail', '📧', 'Mail'],
-  ['-', 'Learn and grow'], ['study', '📚', 'Study'], ['lifequest', '★', 'Life Quest'], ['brief', '☀', 'Daily Brief'], ['paper', '📰', 'Morning Paper'],
+  ['-', 'Learn and grow'], ['study', '📚', 'Study'], ['lifequest', '★', 'Life Quest'], ['brief', '☀', 'Morning'],
   ['-', 'Work'], ['projects', '🧭', 'Projects'], ['meetings', '🎙', 'Meetings'], ['notes', '✎', 'Notes'],
-  ['-', 'Rosie and helpers'], ['agentzero', '🧠', 'Agent Zero'], ['deck', '◫', 'Agent Deck'], ['corner', '❀', "Rosie's corner"], ['memory', '◈', 'Memory'],
-  ['skills', '✦', 'Skills'], ['vector', '🤖', 'Vector'],
-  ['-', 'Advanced'], ['graph', '⌬', 'Memory graph'], ['servers', '🖧', 'Servers'], ['terminal', '⌨', 'Terminal'],
+  ['-', 'Rosie and helpers'], ['agentzero', '🧠', 'Agent Zero'], ['corner', '❀', "Rosie's corner"], ['memory', '◈', 'Memory'], ['skills', '✦', 'Skills'], ['vector', '🤖', 'Vector'],
+  ['-', 'System'], ['deck', '◫', 'System'],
   ['-', ''], ['settings', '⚙', 'Settings']];
+// Pages that share one menu entry show a small tab bar at the top (owner 2026-10-24: "reorganize and combine anything"). Old links such as
+// #/paper or #/graph still open their page and light up the group's entry.
+const TABS = { brief: [['brief', 'Daily Brief'], ['paper', 'Morning Paper']], memory: [['memory', 'Memory'], ['graph', 'Memory graph']],
+  deck: [['deck', 'Agent Deck'], ['servers', 'Servers'], ['terminal', 'Terminal']] };
+const TAB_GROUP = {}; for (const [g, list] of Object.entries(TABS)) for (const [k] of list) TAB_GROUP[k] = g;
+function renderTabs(name) {
+  const g = TAB_GROUP[name], box = $('#tabs');
+  box.replaceChildren(...(g ? TABS[g].filter(([k]) => k === name || !(pagesOff.includes(k) || pagesHidden.includes(k))).map(([k, label]) => h('button', { type: 'button', class: 'tab' + (k === name ? ' on' : ''), 'aria-current': k === name ? 'page' : null,
+    onclick: () => go('#/' + k) }, label)) : []));
+  box.hidden = !g;
+}
 // Display (owner 2026-10-21: "add a setting for ui scale"; 2026-10-23: the Agent Deck's display settings "to the main settings and make it
 // control the whole ui"): zoom, text size, spacing and background light for every page, the Agent Deck frame included (it reads the same
 // rosie.look). This device only, so the phone and the PC each keep their own.
 const GLOW = { off: 0, low: 0.45, medium: 1, high: 1.6 };
-const THEMES = [['cyberdeck', 'Cyberdeck'], ['jetsons', 'Jetsons (easy to read)']];
-let installTheme = store.get('rosie.theme.default', 'cyberdeck');   // this Rosie's default (Settings > Display > Use on every device)
+const THEMES = [['aurora', 'Aurora (modern)'], ['cyberdeck', 'Cyberdeck'], ['jetsons', 'Jetsons (easy to read)']];
+let installTheme = store.get('rosie.theme.default', 'aurora');   // this Rosie's default (Settings > Display > Use on every device)
 function look() {
   const v = store.get('rosie.look', null);
   if (v && typeof v === 'object') return { zoom: 1, text: 100, density: 'normal', glow: 'medium', ...v };
@@ -154,7 +164,7 @@ function menuBox(again) {
     const hidden = on ? pagesHidden.filter((x) => x !== k) : [...pagesHidden, k];
     try { const r = await post('/api/settings', { hidden_pages: hidden }); if (r.error) throw new Error(r.error); pagesHidden = r.hidden_pages || hidden; renderNav('settings'); } catch (e) { toast(e.message, 1); }
   };
-  return h('div', {}, h('div', { class: 'menu-pick' }, NAV.filter(([k]) => k !== '-' && k !== 'settings' && !pagesOff.includes(k)).map(([k, ic, label]) =>
+  return h('div', {}, h('div', { class: 'menu-pick' }, [...NAV, ...Object.values(TABS).flat().filter(([k]) => !NAV.some((n) => n[0] === k)).map(([k, l]) => [k, '↳', l])].filter(([k]) => k !== '-' && k !== 'settings' && !pagesOff.includes(k)).map(([k, ic, label]) =>
     h('label', {}, h('input', { type: 'checkbox', checked: !pagesHidden.includes(k), onchange: (e) => save(k, e.target.checked) }), ' ' + ic + ' ' + label))),
     h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1));margin-top:4px' }, 'Untick a page to leave it out of the menu. Its features keep working; tick it again to get it back.'));
 }
@@ -188,8 +198,9 @@ function navShown(active) {
 function navFold(label) {
   navFolded = navFolded.includes(label) ? navFolded.filter((x) => x !== label) : [...navFolded, label];
   store.set('nav.folded', navFolded);
-  renderNav((location.hash.replace(/^#\/?/, '') || 'home').split('/')[0].replace('chat', ''));
+  renderNav(navActive());
 }
+const navActive = () => { const n = (location.hash.replace(/^#\/?/, '') || 'home').split('/')[0].replace('chat', ''); return TAB_GROUP[n] || n; };
 function renderNav(active) {
   $('#nav').replaceChildren(...navShown(active).map(([k, ic, label]) => k === '-' ? (ic && !navRail()
     ? h('button', { class: 'navhead', 'aria-expanded': String(!navFolded.includes(ic)), title: navFolded.includes(ic) ? 'Show this group' : 'Fold this group away', onclick: () => navFold(ic) },
@@ -215,7 +226,8 @@ async function route() {
   if (name !== 'terminal') closeTerm();
   if (name !== 'meetings') clearInterval(meetTimer);
   if (name !== 'study') walkStop();
-  renderNav(inChat ? '' : name);
+  renderNav(inChat ? '' : TAB_GROUP[name] || name);
+  renderTabs(inChat ? '' : name);
   try {
     if (inChat) await showChat(arg); else await (VIEWS[name] || VIEWS.home)(arg);
   } catch (e) {
@@ -229,7 +241,8 @@ async function refreshSide() {
   try { sideData = await J('/api/chats'); } catch (e) { $('#dot').className = 'off'; return; }
   $('#dot').className = '';
   try { const b = await J('/api/badges'); overdueCount = b.overdue; unreadCount = b.inbox; studyDue = b.study_due || 0; if (b.ui_theme && b.ui_theme !== installTheme) { installTheme = b.ui_theme; store.set('rosie.theme.default', installTheme); applyLook(look()); } pagesOff = b.pages_off || []; loginHint = b.google_login || loginHint; gmailHint = b.gmail_login || gmailHint; pagesHidden = b.pages_hidden || []; } catch (e) { /* badges only */ }
-  renderNav((location.hash.replace(/^#\/?/, '') || 'home').split('/')[0].replace('chat', ''));
+  renderNav(navActive());
+  renderTabs((location.hash.replace(/^#\/?/, '') || 'home').split('/')[0]);   // hidden pages are known only now
   drawChats();
 }
 function drawChats() {
@@ -396,7 +409,7 @@ VIEWS.home = async () => {
     h('div', { class: 'form', style: 'margin-top:10px' },
       btn('☀ Start my day', '', () => { newChat(); runCmd('start'); }), btn('🔄 Sync notes', 'dim', () => runRoutine('sync', 'Sync')),
       btn('🌙 Wrap up', 'dim', () => runRoutine('wrap-up', 'Wrap up')), btn('🗣 Talk', 'ok', () => { newChat(); toggleTalk(); })));
-  const briefCard = h('div', { class: 'card wide' }, h('h3', {}, "Today's brief", h('a', { href: '#/brief' }, 'ALL BRIEFS →')),
+  const briefCard = h('div', { class: 'card wide' }, h('h3', {}, "Today's brief", h('a', { href: '#/brief' }, 'All briefs →')),
     d.brief ? [mdNode(d.brief.text), h('div', { class: 'form', style: 'margin-top:10px' }, btn('Discuss in chat', 'sm', () => go('#/chat/' + d.brief.chat_id)),
       btn('Regenerate', 'sm dim', async () => { try { await post('/api/briefs/generate', { force: true }); refreshSide(); again(); } catch (e) { toast(e.message, 1); } }))]
       : [h('div', { class: 'empty' }, 'No brief yet today. It is made automatically each morning; you can make it now.'),
@@ -405,32 +418,32 @@ VIEWS.home = async () => {
     d.calendar_error ? h('div', { class: 'err' }, d.calendar_error) : [
       h('div', {}, h('span', { class: 'muted' }, 'NOW  '), d.right_now.length ? d.right_now.join(', ') : 'nothing scheduled'),
       h('div', { style: 'margin-top:6px' }, h('span', { class: 'muted' }, 'NEXT '), d.next.length ? d.next.map((n) => `${n.time} ${n.title}`).join('  ·  ') : 'nothing else today')]);
-  const inboxCard = h('div', { class: 'card' }, h('h3', {}, 'Inbox & reminders', d.inbox_unread ? h('span', { class: 'chip', style: 'color:var(--pur);border-color:var(--pur)' }, d.inbox_unread + ' new') : null, h('a', { href: '#/inbox' }, 'OPEN →')),
+  const inboxCard = h('div', { class: 'card' }, h('h3', {}, 'Inbox & reminders', d.inbox_unread ? h('span', { class: 'chip', style: 'color:var(--pur);border-color:var(--pur)' }, d.inbox_unread + ' new') : null, h('a', { href: '#/inbox' }, 'Open →')),
     d.inbox_items.length ? h('div', { class: 'list' }, d.inbox_items.map((i) => h('button', { class: 'item', style: 'text-align:left;cursor:pointer;background:var(--bg);border-left:3px solid var(--pur)', onclick: () => go(i.link || '#/inbox') }, h('span', { class: 'tx' }, i.title)))) : h('div', { class: 'empty' }, 'All caught up.'),
     d.reminders.length ? h('div', { style: 'margin-top:8px' }, h('div', { class: 'muted' }, 'UPCOMING REMINDERS'), d.reminders.map((r) => h('div', {}, h('span', { class: 'time' }, r.due.slice(11, 16)), ' ', r.text))) : null,
     h('div', { style: 'margin-top:10px' }, remindForm(again)));
-  const projCard = h('div', { class: 'card' }, h('h3', {}, 'Projects: next actions', h('a', { href: '#/projects' }, 'OPEN →')),
+  const projCard = h('div', { class: 'card' }, h('h3', {}, 'Projects: next actions', h('a', { href: '#/projects' }, 'Open →')),
     d.projects.length ? h('div', { class: 'list' }, d.projects.map((p) => h('button', { class: 'item', style: 'text-align:left;cursor:pointer;background:var(--bg)', onclick: () => go('#/projects') },
       h('span', { class: 'tx' }, h('b', {}, p.project), h('span', { class: 'muted' }, '  ' + p.next_action)), p.stalled ? h('span', { class: 'chip bad' }, 'quiet ' + p.quiet_days + 'd') : null)))
       : h('div', { class: 'empty' }, 'No project next actions yet. Open Projects to import your folders and set one next step each.'));
   const tl = [...d.overdue, ...d.tasks_today];
-  const tasksCard = h('div', { class: 'card' }, h('h3', {}, 'Tasks', h('a', { href: '#/tasks' }, 'OPEN →')),
+  const tasksCard = h('div', { class: 'card' }, h('h3', {}, 'Tasks', h('a', { href: '#/tasks' }, 'Open →')),
     tl.length ? h('div', { class: 'list' }, tl.slice(0, 8).map((x) => taskRow(x, again))) : h('div', { class: 'empty' }, 'Nothing due. Nice.'), tl.length > 8 ? h('div', { class: 'muted' }, `+${tl.length - 8} more`) : null,
     h('div', { style: 'margin-top:10px' }, taskAdd(again)));
-  const calCard = h('div', { class: 'card' }, h('h3', {}, 'Calendar today', h('a', { href: '#/calendar' }, 'WEEK →')),
+  const calCard = h('div', { class: 'card' }, h('h3', {}, 'Calendar today', h('a', { href: '#/calendar' }, 'Week →')),
     d.calendar_error ? h('div', { class: 'err' }, d.calendar_error) : [
       d.all_day.length ? h('div', { style: 'margin-bottom:6px' }, d.all_day.map((a) => h('span', { class: 'chip' }, a))) : null,
       d.calendar_today.length ? h('div', { class: 'list' }, d.calendar_today.map((e) => h('div', { class: 'item' }, h('span', { class: 'time' }, e.time), h('span', { class: 'tx' }, e.title)))) : h('div', { class: 'empty' }, 'Nothing scheduled today.')]);
-  const wf = h('div', { class: 'card' }, h('h3', {}, 'Waiting on / focus', h('a', { href: '#/notes/memory.md' }, 'EDIT →')),
+  const wf = h('div', { class: 'card' }, h('h3', {}, 'Waiting on / focus', h('a', { href: '#/notes/memory.md' }, 'Edit →')),
     d.waiting_on.length ? h('div', { class: 'list' }, d.waiting_on.slice(0, 6).map((w) => h('div', { class: 'item' }, h('span', { class: 'tx' }, w)))) : h('div', { class: 'empty' }, 'Nothing you are waiting on.'),
     d.focus.length ? h('div', { style: 'margin-top:8px' }, h('div', { class: 'muted' }, 'FOCUS'), d.focus.slice(0, 3).map((w) => h('div', {}, '• ' + w))) : null);
   const cap = h('input', { placeholder: 'Jot a thought…', 'aria-label': 'Quick capture' });
-  const scratch = h('div', { class: 'card' }, h('h3', {}, 'Scratch pad', h('a', { href: '#/notes/' + encodeURIComponent('Scratch Pad.md') }, 'OPEN →')),
+  const scratch = h('div', { class: 'card' }, h('h3', {}, 'Scratch pad', h('a', { href: '#/notes/' + encodeURIComponent('Scratch Pad.md') }, 'Open →')),
     h('form', { class: 'form', onsubmit: async (e) => { e.preventDefault(); if (!cap.value.trim()) return; try { await post('/api/capture', { text: cap.value }); toast('Saved to scratch pad'); again(); } catch (er) { toast(er.message, 1); } } }, cap, btn('Add', 'pur', null, 'submit')),
     h('div', { class: 'muted', style: 'margin-top:8px' }, d.scratch.lines ? `${d.scratch.lines} unsorted note${d.scratch.lines === 1 ? '' : 's'}. Run Sync to turn them into tasks.` : 'Empty. Everything is sorted.'));
   const recent = h('div', { class: 'card' }, h('h3', {}, 'Recent chats'),
     d.chats.length ? h('div', { class: 'list' }, d.chats.map((c) => h('button', { class: 'item', style: 'text-align:left;cursor:pointer;background:var(--bg)', onclick: () => go('#/chat/' + c.id) }, h('span', { class: 'tx' }, c.title), c.space ? h('span', { class: 'chip' }, c.space) : null))) : h('div', { class: 'empty' }, 'No chats yet.'));
-  const sys = h('div', { class: 'card', id: 'syscard' }, h('h3', {}, 'System', h('a', { href: '#/settings' }, 'SETTINGS →')), h('div', { class: 'muted' }, 'checking…'));
+  const sys = h('div', { class: 'card', id: 'syscard' }, h('h3', {}, 'System', h('a', { href: '#/settings' }, 'Settings →')), h('div', { class: 'muted' }, 'checking…'));
   const healthCard = d.health && d.health.bad && d.health.bad.length ? h('div', { class: 'card', style: 'border-color:var(--bad)' }, h('h3', {}, '⚠ Needs attention'), h('div', {}, d.health.bad.join(' · ')), h('div', { class: 'form', style: 'margin-top:10px' }, btn('See details', 'sm bad', () => go('#/settings')))) : null;
   show(h('div', { class: 'grid' }, healthCard, hero, briefCard, nowNext, inboxCard, projCard, tasksCard, calCard, wf, scratch, recent, sys));
   J('/api/status').then((s) => { const c = $('#syscard'); if (!c) return;
@@ -1213,7 +1226,7 @@ VIEWS.memory = async () => {
       d.kinds.filter((k) => byKind[k]).map((k) => h('div', { class: 'card' }, h('h3', {}, k), h('div', { class: 'list' }, byKind[k].map((n) => h('div', { class: 'item' }, h('span', { class: 'tx' }, n.content), h('span', { class: 'chip' }, n.created.slice(0, 10)),
         h('button', { class: 'x', 'aria-label': 'Forget', title: 'Forget this', onclick: async () => { await del('/api/memory/' + n.id); again(); } }, '✕')))))),
       !d.notes.length ? h('div', { class: 'card' }, h('div', { class: 'empty' }, 'Nothing saved yet. Tell the assistant facts about you, or add one above.')) : null,
-      h('div', { class: 'card wide' }, h('h3', {}, 'Working memory', h('a', { href: '#/notes/memory.md' }, 'EDIT FILE →')),
+      h('div', { class: 'card wide' }, h('h3', {}, 'Working memory', h('a', { href: '#/notes/memory.md' }, 'Edit file →')),
         h('div', { class: 'grid' }, W.map(([k, label]) => h('div', {}, h('div', { class: 'muted' }, label.toUpperCase()), d.working[k].length ? d.working[k].map((x) => h('div', {}, '• ' + x)) : h('div', { class: 'empty' }, '—')))))));
 };
 
@@ -1826,7 +1839,7 @@ async function refreshBadges() {
   try {
     const b = await J('/api/badges'); const changed = b.overdue !== overdueCount || b.inbox !== unreadCount;
     overdueCount = b.overdue; unreadCount = b.inbox;
-    if (changed) { renderNav((location.hash.replace(/^#\/?/, '') || 'home').split('/')[0].replace('chat', '')); if (location.hash.startsWith('#/inbox') && !dirty) keepScroll(() => VIEWS.inbox()); }
+    if (changed) { renderNav(navActive()); if (location.hash.startsWith('#/inbox') && !dirty) keepScroll(() => VIEWS.inbox()); }
   } catch (e) { $('#dot').className = 'off'; }
 }
 setInterval(() => { if (!document.hidden) refreshBadges(); }, 45000);

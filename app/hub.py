@@ -717,7 +717,7 @@ class NewReminder(BaseModel):
 def badges():
     import proposals as _pr
     import study
-    return {"overdue": len(tasks.overdue()), "inbox": inbox.unread_count(), "proposals": _pr.count_pending(), "study_due": study.due_count(), "ui_theme": config.load().get("ui_theme") or "cyberdeck",
+    return {"overdue": len(tasks.overdue()), "inbox": inbox.unread_count(), "proposals": _pr.count_pending(), "study_due": study.due_count(), "ui_theme": config.load().get("ui_theme") or "aurora",
             "pages_off": pages_off(), "google_login": plat.google_login(), "gmail_login": plat.google_login("main"), "pages_hidden": config.load().get("hidden_pages") or []}
 
 
@@ -747,8 +747,8 @@ def canvas_sync():
 def look_theme(body: dict):
     """This Rosie's default theme, for every device that has not picked its own (Settings > Display)."""
     t = str(body.get("theme") or "")
-    if t not in ("cyberdeck", "jetsons"):
-        return err("Pick cyberdeck or jetsons")
+    if t not in ("aurora", "cyberdeck", "jetsons"):
+        return err("Pick aurora, cyberdeck or jetsons")
     cfg = config.load()
     cfg["ui_theme"] = t
     config.save(cfg)

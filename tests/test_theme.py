@@ -59,7 +59,7 @@ def test_the_theme_is_plain_to_read_and_ships_its_own_font():
 
 
 def test_the_install_default_theme_is_a_setting_and_reaches_the_page(client):
-    assert client.get("/api/badges").json()["ui_theme"] == "cyberdeck"
+    assert client.get("/api/badges").json()["ui_theme"] == "aurora"
     assert client.post("/api/look/theme", json={"theme": "jetsons"}).json()["ui_theme"] == "jetsons"
     assert config.load()["ui_theme"] == "jetsons" and client.get("/api/badges").json()["ui_theme"] == "jetsons"
     assert client.post("/api/look/theme", json={"theme": "neon<script>"}).status_code == 400
@@ -94,6 +94,41 @@ def test_the_menu_groups_pages_by_what_she_is_doing_and_settings_stands_alone():
     js = (ROOT / "static" / "app.js").read_text()
     nav = re.search(r"const NAV = \[.*?\]\];", js, re.S).group(0)      # the public copy has no private line after it: find the list's own end
     heads = re.findall(r"\['-', '([^']*)'\]", nav)
-    assert heads == ["My day", "Learn and grow", "Work", "Rosie and helpers", "Advanced", ""]
+    assert heads == ["My day", "Learn and grow", "Work", "Rosie and helpers", "System", ""]
     assert nav.index("'study'") < nav.index("'lifequest'") < nav.index("'-', 'Work'") and nav.rstrip().endswith("['settings', '⚙', 'Settings']];")
     assert "store.get('nav.folded', ['Advanced'])" in js and "navRail()" in js      # Advanced starts folded; the icon rail never folds
+
+
+def test_aurora_is_the_default_and_every_text_color_is_readable_on_its_glass():
+    block = re.search(r'html\[data-theme="aurora"\]\{(--bg:[^}]*)\}', CSS).group(1)
+    var = dict(re.findall(r"--([\w-]+):(#[0-9A-Fa-f]{6})", block))
+    def over(top, a, under):                                           # a glass layer over what the still aurora paints behind it
+        t = [int(top[i:i + 2], 16) for i in (1, 3, 5)]
+        u = [int(under[i:i + 2], 16) for i in (1, 3, 5)]
+        return "#%02x%02x%02x" % tuple(round(a * x + (1 - a) * y) for x, y in zip(t, u))
+    page = var["bg"]
+    lights = [page] + [over(c, a, page) for c, a in (("#00F0FF", .34), ("#9D00FF", .38), ("#FF2BD6", .18))]    # the page and the three aurora peaks
+    glass = [over("#0C121C", .58, x) for x in lights]                  # cards
+    assert min(_contrast(var["fg"], g) for g in glass + [page]) >= 7                  # body text
+    for k in ("mute", "acc", "pur", "ok", "warn", "bad", "pink", "claude"):
+        assert min(_contrast(var[k], g) for g in glass) >= 4.5, k
+    assert _contrast("#E8E8F0", "#0A101A") >= 7 and _contrast(var["mute"], "#0A101A") >= 4.5     # menus and dialogs (98% solid)
+    assert _contrast(var["acc"], over("#00F0FF", .12, "#060A10")) >= 4.5                         # active menu item: cyan on its soft pill
+    for k in ("acc", "ok", "warn", "bad", "pink", "claude"):
+        assert _contrast("#000000", var[k]) >= 4.5, k                                             # dark text on a filled button or badge
+    assert _contrast("#000000", var["pur"]) >= 4.5 and _contrast("#FFFFFF", var["pur-fill"]) >= 4.5
+    js = (ROOT / "static" / "app.js").read_text()
+    assert "THEMES = [['aurora', 'Aurora (modern)']" in js and "store.get('rosie.theme.default', 'aurora')" in js
+    assert 'transition' in CSS and 'prefers-reduced-motion' in CSS
+    assert (ROOT / "static" / "vendor" / "fonts" / "space-grotesk.ttf").stat().st_size > 10000
+    assert "SIL Open Font License" in (ROOT / "static" / "vendor" / "fonts" / "space-grotesk.LICENSE").read_text()
+
+
+def test_pages_that_share_a_menu_entry_get_a_tab_bar_and_old_links_keep_working():
+    js = (ROOT / "static" / "app.js").read_text()
+    for group, pages in (("brief", ("brief", "paper")), ("memory", ("memory", "graph")), ("deck", ("deck", "servers", "terminal"))):
+        assert re.search(rf"\b{group}: \[(\[.*?\],? ?)+\]", js), group
+        for p in pages:
+            assert f"['{p}', '" in js.split("const TABS")[1].split("const TAB_GROUP")[0], p
+    assert "TAB_GROUP[name] || name" in js and "renderTabs(" in js and "'aria-current'" in js
+    assert 'id="tabs"' in (ROOT / "static" / "index.html").read_text()

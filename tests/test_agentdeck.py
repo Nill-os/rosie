@@ -150,4 +150,4 @@ def test_the_page_is_served_and_rosie_lists_it(deck):
     page = c.get("/deck/index.html")
     assert page.status_code == 200 and "deck.js" in page.text
     js = Path(server.STATIC / "app.js").read_text(encoding="utf-8")
-    assert "['deck', '◫', 'Agent Deck']" in js and "/deck/index.html" in js
+    assert "['deck', '◫', 'System']" in js and "/deck/index.html" in js

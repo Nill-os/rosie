@@ -62,7 +62,7 @@ def test_the_paper_page_renders_at_desktop_and_phone_width(ui):
     for name in ("desktop", "phone"):
         v = ui[name]
         assert v["errors"] == [], (name, v["errors"])
-        assert v["title"] == "Morning Paper" and "📰Morning Paper" in v["nav"]
+        assert v["title"] == "Morning Paper" and "☀Morning" in v["nav"]      # Morning Paper is a tab of the Morning entry
         assert v["frame"]["src"] == f"/api/paper/view?day={ui['day']}&look=cyberdeck"
         assert "allow-scripts" not in v["frame"]["sandbox"] and "allow-same-origin" in v["frame"]["sandbox"]
         assert {"Print", "Email it to me", "Add to my paper", "Cyberdeck", "Newsprint", "Plain", "4 pages", "2 pages", "> THE ROSIE TIMES", "Blackletter"} <= set(v["buttons"])
