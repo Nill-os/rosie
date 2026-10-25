@@ -36,7 +36,7 @@ def vector_status():
             "escapepod": bool(cfg.get("vector_escapepod")), "port_rule": "" if vector_pod.port_open_to_users(vector_pod.EP_PORT) else vector_pod.PORT_RULE, "check_port": cfg.get("vector_check_port"), "robots": robots,
             "online": bool(bot and bot.get("ip") and vector_bot.reachable(bot["ip"])),
             "held": bool(vector_pod._robot_obj and vector_pod._robot_obj.held),
-            "last": vector_pod.status["last"], "error": vector_pod.status["error"],
+            "last": vector_pod.status["last"], "history": vector_pod.status.get("history", [])[-20:], "error": vector_pod.status["error"],
             "personality": cfg.get("vector_personality", ""), "commands": cfg.get("vector_commands") or [],
             "built_in": vector_intents.DEFAULT_COMMANDS, "face_panels": cfg.get("vector_face_panels") or [], "face_seconds": cfg.get("vector_face_seconds") or 15,
             "quiet_idle": bool(cfg.get("vector_quiet_idle")), "wake_word": cfg.get("vector_wake_word") or "hey vector", "backpack": cfg.get("vector_backpack") or "own", "voice": cfg.get("vector_voice") or "rosie", "eyes": cfg.get("vector_eyes") or "rosie",

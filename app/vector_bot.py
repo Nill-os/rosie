@@ -21,11 +21,11 @@ CONNECT_S = 6
 # reactions still win (and control comes back by itself after). At OVERRIDE_BEHAVIORS his wake word was heard but thrown
 # away ("PendingTriggerNotCleared ... forcing a clear"), so "Hey Rosie" did nothing while he sat (WireOS 3.0.2.34d, 2026-10-21).
 SIT_PRIORITY = behavior_pb2.ControlRequest.DEFAULT
-# His face menu (vector_menu.py) holds at OVERRIDE_BEHAVIORS so more backpack button presses don't start his listening.
-MENU_PRIORITY = behavior_pb2.ControlRequest.OVERRIDE_BEHAVIORS
-# Driving with the controller: at DEFAULT his own reactions (unexpected movement and the like) took the wheels back
-# mid-drive, "like he is fighting the tracks" (owner 2026-10-24).
-DRIVE_PRIORITY = behavior_pb2.ControlRequest.OVERRIDE_BEHAVIORS
+# His face menu and controller driving hold at DEFAULT too. At OVERRIDE_BEHAVIORS his wake word is dropped
+# ("trigger_word.dropped"), and twice that left his engine waiting forever for the wake word animation
+# (WaitingForTriggerWordGetInToFinish): "Hey Rosie" did nothing until his services restarted (2026-10-21 sit, 2026-10-24 14:56).
+MENU_PRIORITY = SIT_PRIORITY
+DRIVE_PRIORITY = SIT_PRIORITY
 FIRST_SDK_TAG, LAST_SDK_TAG = 2000001, 3000000         # his actions (turn, drive straight, head angle) need an id_tag in this range
 _tags = iter(range(FIRST_SDK_TAG, LAST_SDK_TAG))
 CALM_POWER_MODE = 0x400                              # RobotState.status bit (ROBOT_STATUS_CALM_POWER_MODE): sleeping, camera off
@@ -59,6 +59,7 @@ class Robot:
         self.stub = external_interface_pb2_grpc.ExternalInterfaceStub(self.channel)
         self._hold: _Control | None = None
         self._priority = SIT_PRIORITY                   # what the hold asks for (sitting, or his face menu)
+        self._want_hold = False                         # Rosie means to hold him (sit, drive, menu) until release()
         self._lock = threading.Lock()
         self.talk_volume: str | None = None              # quiet when idle (Settings > Vector): muted except while he talks
         self._quiet: threading.Timer | None = None
@@ -81,8 +82,9 @@ class Robot:
     # control -------------------------------------------------------------------------------------------------------
     @property
     def held(self) -> bool:
-        """Sitting: Rosie holds him (also while control is away for a moment: she takes it back)."""
-        return bool(self._hold and self._hold.alive())
+        """Sitting: Rosie means to hold him, also while control is away or its stream dropped for a moment (ensure_control
+        takes it back). A dropped stream used to count as "not sitting": he stood up after answering while he sat."""
+        return bool(self._want_hold and self._hold is not None)
 
     def hold(self, timeout=8.0, priority=SIT_PRIORITY) -> bool:
         """Keep Vector still: his own behaviors (wandering, exploring, idle animations) stay off until release()."""
@@ -94,6 +96,7 @@ class Robot:
             self._priority = priority
             self._hold = _Control(self.stub, self._priority, keep=True)
             if self._hold.start(timeout):
+                self._want_hold = True
                 return True
             self._hold.stop()                            # not granted: no half-held robot that refuses to move while he wanders
             self._hold = None
@@ -135,6 +138,7 @@ class Robot:
 
     def release(self):
         with self._lock:
+            self._want_hold = False
             if self._hold:
                 self._hold.stop()
                 self._hold = None
@@ -402,6 +406,7 @@ class _Control:
             pass
         finally:
             self.granted.clear()
+            self.lost_at = time.time()                       # the stream ended: ensure_control asks again on a fresh one
             self.lost.set()
 
     def start(self, timeout: float) -> bool:

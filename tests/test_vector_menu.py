@@ -377,3 +377,47 @@ def test_heat_has_hysteresis(monkeypatch):
     assert vector_pod._hot                                                                # still cooling down
     vector_pod._check_heat("x")
     assert not vector_pod._hot and vector_pod.status["temp_c"] == 66.0
+
+
+# --- holds that survive a dropped stream, and an eye colour that does not keep him busy ------------------------------
+def test_a_dropped_control_stream_still_counts_as_sitting_and_is_taken_back(monkeypatch):
+    made = []
+
+    class FakeControl:
+        def __init__(self, stub, priority, keep=False):
+            import threading
+            self.granted, self.lost = threading.Event(), threading.Event()
+            self.lost_at, self.stopped = time.time(), False
+            made.append(self)
+
+        def start(self, timeout):
+            self.granted.set()
+            return True
+
+        def stop(self):
+            self.stopped = True
+
+        def alive(self):
+            return not self.stopped and (self.granted.is_set() or not self.lost.is_set())
+    monkeypatch.setattr(vector_bot, "_Control", FakeControl)
+    bot = vector_bot.Robot.__new__(vector_bot.Robot)
+    import threading
+    bot.stub, bot._hold, bot._lock, bot._priority, bot._want_hold = None, None, threading.Lock(), vector_bot.SIT_PRIORITY, False
+    assert bot.hold() and bot.held
+    first = made[-1]
+    first.granted.clear(); first.lost.set(); first.lost_at = time.time() - 10              # his side ended the stream
+    assert bot.held                                                                       # still sitting
+    assert bot.ensure_control(after_s=3.0) and made[-1] is not first and first.stopped    # a fresh stream, control back
+    bot.release()
+    assert not bot.held
+
+
+def test_while_he_is_free_his_eye_colour_steps_rarely():
+    import vector_dev
+    saved = []
+    bot = types.SimpleNamespace(ip="x", has_control=lambda: False, save_eye_color=lambda h, s: saved.append(h))
+    sweep = vector_dev.EyeSweep(bot, step_s=0.01, idle_step_s=0.05).start()
+    time.sleep(0.32)
+    sweep.stop()
+    assert 2 <= len(saved) <= 8 and set(saved) <= {round(h, 3) for h in vector_dev.IDLE_HUES}
+    assert vector_dev.EyeSweep(bot).idle_step_s >= 600                                    # live default: every 10 minutes

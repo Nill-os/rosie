@@ -14,6 +14,7 @@ import httpx
 PORT = 8889
 EYE_SOUNDS = ("EnableKeepAliveEyeBlinkAudioEvents", "EnableKeepAliveEyeDartAudioEvents", "EnableKeepAliveEyeSquintAudioEvents")
 CYAN, PURPLE = 0.50, 0.78                          # ProcFace_Hue: 0..1 around the colour wheel
+IDLE_HUES = (CYAN, (CYAN + PURPLE) / 2, PURPLE, (CYAN + PURPLE) / 2)   # his saved colour while free, one step at a time
 
 
 def _url(ip: str, path: str) -> str:
@@ -58,14 +59,16 @@ def gradient_hue(t: float, period: float = 12.0) -> float:
 class EyeSweep:
     """Rosie's cyan to purple theme on his eyes (owner 2026-10-21: "a cyan purple gradient"). His eyes are one colour at a
     time, so the gradient runs over time. While Rosie holds control (she talks, he drives) SetEyeColor steps once a second (four times a second kept his animation process busy and him warm: heat-warning sleep 2026-10-24); while his sit screens cover his eyes it does nothing; it
-    does nothing without control, so while he is free his saved eye colour takes a gentle step every `idle_step_s` instead
-    (his settings document: a small write each step)."""
+    does nothing without control, so while he is free his saved eye colour takes one step through IDLE_HUES every
+    `idle_step_s` instead. Each save of his eye colour starts his own EyeColor reaction (about 3 s of get-in, switch and
+    get-out animations, seen 2026-10-24), so a step every 4 s kept him reacting nonstop: now every 10 minutes."""
 
-    def __init__(self, bot, step_s: float = 1.0, idle_step_s: float = 4.0, period_s: float = 12.0, idle_period_s: float = 60.0,
+    def __init__(self, bot, step_s: float = 1.0, idle_step_s: float = 600.0, period_s: float = 12.0,
                  covered=lambda: False, hot=lambda: False):
         self.bot, self.ip = bot, bot.ip
         self.covered, self.hot = covered, hot             # covered(): his sit screens hide his eyes; hot(): he is warm, rest
-        self.step_s, self.idle_step_s, self.period_s, self.idle_period_s = step_s, idle_step_s, period_s, idle_period_s
+        self.step_s, self.idle_step_s, self.period_s = step_s, idle_step_s, period_s
+        self._idle_i = 0
         self._stop = threading.Event()
 
     def start(self):
@@ -81,12 +84,13 @@ class EyeSweep:
             now = time.time()
             try:
                 if self.covered() or self.hot():
-                    wait = self.idle_step_s                  # nothing to see, or he needs to cool down: no colour changes
+                    wait = min(self.idle_step_s, 5.0)        # nothing to see, or he needs to cool down: no colour changes
                 elif getattr(self.bot, "has_control", lambda: False)():
                     self.bot.eye_color(round(gradient_hue(now - t0, self.period_s), 4), 1.0)
                     wait = self.step_s
                 elif now - last_saved >= self.idle_step_s:
-                    self.bot.save_eye_color(round(gradient_hue(now - t0, self.idle_period_s), 3), 1.0)
+                    self.bot.save_eye_color(round(IDLE_HUES[self._idle_i % len(IDLE_HUES)], 3), 1.0)
+                    self._idle_i += 1
                     last_saved, wait = now, self.step_s
                 else:
                     wait = self.step_s

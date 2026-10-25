@@ -8,9 +8,9 @@ MENU_IDLE_S without a press or a lift move, or with "Done".
 
 His firmware lets the button do only two things, start his listening or start Alexa (BUTTON_WAKEWORD_HEY_VECTOR or
 _ALEXA in libcozmo_engine.so, WireOS 3.0.2.34d), and WireOS has no Alexa. So Rosie reads the press herself from his
-state stream (RobotState.status, ROBOT_STATUS_IS_BUTTON_PRESSED). The first press still starts his listening: Rosie
-answers that request the safe way (his greeting intent, then control 0.2 s later, vector_pod) and holds him at
-OVERRIDE_BEHAVIORS while the menu is open, so more presses don't start his listening again."""
+state stream (RobotState.status, ROBOT_STATUS_IS_BUTTON_PRESSED). A press also starts his listening: Rosie answers
+that request the safe way (his greeting intent, then control 0.2 s later, vector_pod) and shows the menu. The hold stays
+at DEFAULT: at OVERRIDE_BEHAVIORS his wake word is dropped and his engine can stop hearing it until a restart."""
 import threading
 import time
 

@@ -1036,6 +1036,9 @@ def _while_sitting(intent: str, params: dict) -> str:
 def _result(text, out):
     did = out[1] if out[0] == "intent" else ("Rosie answers" if out[0] == "talk" else "said: " + out[1])
     status["last"] = {"at": time.strftime("%H:%M:%S"), "heard": text, "did": did}
+    history = status.setdefault("history", [])           # the last few requests and answers: to match his own log
+    history.append(status["last"])                       # (an "UnmatchedVoiceIntent" there = an answer he did not claim)
+    del history[:-20]
 
 
 def _ig_response(text, out):

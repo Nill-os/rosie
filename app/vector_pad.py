@@ -264,8 +264,12 @@ class Driver:
             self._done.set()
 
     def _sender(self):
+        import vector_pod
         while not self._done.wait(TICK_S):
             if self.driving:
+                bot = vector_pod._robot_obj
+                if bot is not None and hasattr(bot, "ensure_control"):
+                    bot.ensure_control(1.0)              # his wake word or a dropped stream took control: ask again
                 self.send()
 
     def _loop(self):

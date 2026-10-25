@@ -173,26 +173,23 @@ def test_controller_settings_are_saved_and_shown(monkeypatch):
     assert pad["on"] is False and pad["speed"] == "fast" and pad["controller"] == ""
 
 
-def test_driving_ramps_the_wheels_and_holds_him_firmly(monkeypatch):
+def test_driving_ramps_the_wheels_and_keeps_his_wake_word(monkeypatch):
     import vector_bot
     bot, said = _setup(monkeypatch)
     accels, priorities = [], []
     bot.drive = lambda l, r, accel=0.0: accels.append(accel)
     bot._priority = vector_bot.SIT_PRIORITY
     bot.held = True                                                                      # he was sitting
-    bot.rehold = lambda priority=None, **k: priorities.append(priority) or setattr(bot, "_priority", priority) or True
+    bot.rehold = lambda priority=None, **k: priorities.append(priority) or True
     pad, w = _pad()
     d = vector_pad.Driver(pad)
     d.set_driving(True)
-    assert priorities == [vector_bot.DRIVE_PRIORITY]                                     # his own reactions can't take the wheels
+    assert priorities == [] and vector_bot.DRIVE_PRIORITY == vector_bot.SIT_PRIORITY      # DEFAULT: "Hey Rosie" still works
     d.motors((100.0, 100.0, 0.0, 0.0))
     d.send()
     d.motors((0.0, 0.0, 0.0, 0.0))
     d.send()
     assert accels == [vector_pad.DRIVE_ACCEL, 0.0]                                      # ramp up, stop at once
-    monkeypatch.setattr(vector_pod, "_face", object())                                   # "sit" took over
-    d.set_driving(False, release=False)
-    assert priorities[-1] == vector_bot.SIT_PRIORITY                                     # "Hey Rosie" works while he sits
     os.close(w)
     pad.close()
 
