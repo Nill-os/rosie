@@ -248,3 +248,137 @@ def test_notes_used_for_drafts_are_kept_for_the_tutor(monkeypatch):
     with study._db2() as c:
         assert c.execute("SELECT count(*) FROM sources").fetchone()[0] == 1
     assert any(p["kind"] == "notes" for p in study._passages(cid, "keystone species kelp forests"))
+
+
+# ================================================================ Phase 3: Anki import and export, deck audio, concept map
+def _apkg(tmp_path, notes, name="collection.anki21", extra=()):
+    import sqlite3
+    import zipfile
+    db = tmp_path / "c.sqlite"
+    db.unlink(missing_ok=True)
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE notes (id INTEGER, flds TEXT, tags TEXT)")
+    con.executemany("INSERT INTO notes VALUES(?,?,?)", [(i, f + "\x1f" + b, t) for i, (f, b, t) in enumerate(notes)])
+    con.commit()
+    con.close()
+    out = tmp_path / "x.apkg"
+    with zipfile.ZipFile(out, "w") as z:
+        z.write(db, name)
+        for n in extra:
+            z.writestr(n, "x")
+    return out.read_bytes()
+
+
+def _deck():
+    cid = study.course("ENVS 101")
+    return cid, study.deck(cid, "Ecology", "Ch 4")
+
+
+def test_anki_export_has_the_header_and_one_row_per_card():
+    study.import_cards({**CARDS, "cards": [{**CARDS["cards"][0], "kind": "term"}, *CARDS["cards"][1:]]}, "ENVS 101")
+    (co,) = study.overview()["courses"]
+    name, text = study.anki_export(course_id=co["id"])
+    lines = text.splitlines()
+    assert name == "ENVS_101-anki.txt" and lines[:4] == ["#separator:tab", "#html:false", "#deck column:3", "#tags column:4"]
+    rows = [l.split("\t") for l in lines[4:]]
+    assert len(rows) == 3 and rows[0][0] == "What is a hypothesis?" and rows[0][1].endswith("(Clue: Greek hypo = under.)")
+    assert rows[0][2] == "ENVS 101::Science and people" and rows[0][3] == "term" and rows[1][3] == "Ch_2"
+    deck_id = co["decks"][1]["id"]
+    assert len(study.anki_export(deck_id=deck_id)[1].splitlines()) == 5
+    with pytest.raises(ValueError):
+        study.anki_export(course_id=9999)
+
+
+def test_anki_import_reads_tsv_csv_and_anki_text_and_skips_duplicates():
+    _, d = _deck()
+    tsv = b"Q one\tA one\tweek1 bio\nQ two\tA two\n"
+    assert study.anki_import(d, tsv) | {"error_samples": 0} == {"deck_id": d, "added": 2, "skipped": 0, "errors": 0, "error_samples": 0}
+    assert study.anki_import(d, tsv)["skipped"] == 2                      # the same notes again add nothing
+    r = study.anki_import(d, b'Q three,"A, three"\nQ four,\n')            # plain CSV with a quoted comma; the empty answer is an error
+    assert (r["added"], r["errors"]) == (1, 1)
+    r = study.anki_import(d, ("#separator:tab\n#html:false\n#guid column:1\n#deck column:4\n#tags column:5\n"
+                              "g1\tQ five\tA five\tSome::Deck\tt1 t2\n").encode())
+    assert r["added"] == 1
+    cards = study.deck_cards(d)["cards"]
+    assert [c["q"] for c in cards] == ["Q one", "Q two", "Q three", "Q five"] and cards[2]["a"] == "A, three"
+    assert study._tags(study._db().execute("SELECT meta FROM cards WHERE q='Q five'").fetchone()[0]) == ["t1", "t2"]
+    _, text = study.anki_export(deck_id=d)                                  # her own export goes back in as the same cards
+    c2 = study.deck(study.course("Other"), "Copy")
+    assert study.anki_import(c2, text.encode())["added"] == 4
+
+
+def test_anki_import_of_an_apkg_strips_html_and_skips_duplicates(tmp_path):
+    _, d = _deck()
+    data = _apkg(tmp_path, [("<b>Mitosis</b>&nbsp;is?", "Cell division<br>in 4 phases<div>PMAT</div>", " bio "), ("Same", "x", ""), ("Same", "y", ""), ("Lonely", "", "")])
+    r = study.anki_import(d, data)
+    assert (r["added"], r["skipped"], r["errors"]) == (2, 1, 1)
+    c = study.deck_cards(d)["cards"]
+    assert c[0]["q"] == "Mitosis is?" and c[0]["a"] == "Cell division\nin 4 phases\nPMAT"
+    assert study.anki_import(d, data)["added"] == 0
+
+
+def test_anki_import_refuses_new_format_unsafe_paths_and_big_files(tmp_path, client):
+    _, d = _deck()
+    new = _apkg(tmp_path, [("a", "b", "")], name="collection.anki21b")
+    with pytest.raises(ValueError, match="Support older Anki versions"):
+        study.anki_import(d, new)
+    r = client.post(f"/api/study/anki/import?deck={d}", content=new)
+    assert r.status_code == 400 and "Support older Anki versions" in r.json()["error"]
+    evil = _apkg(tmp_path, [("a", "b", "")], extra=("../evil.txt",))
+    with pytest.raises(ValueError, match="unsafe"):
+        study.anki_import(d, evil)
+    with pytest.raises(ValueError, match="unsafe"):
+        study.anki_import(d, _apkg(tmp_path, [("a", "b", "")], extra=("/abs.txt",)))
+    with pytest.raises(ValueError):
+        study.anki_import(d, b"PKnot a zip")
+    ok = client.post(f"/api/study/anki/import?deck={d}", content=_apkg(tmp_path, [("a", "b", "")]))
+    assert ok.status_code == 200 and ok.json()["added"] == 1
+    assert client.post("/api/study/anki/import?deck=999", content=b"a\tb").status_code == 400
+    ex = client.get(f"/api/study/anki/export?deck={d}")
+    assert ex.status_code == 200 and "attachment" in ex.headers["content-disposition"] and ex.text.startswith("#separator:tab")
+    assert client.get("/api/study/anki/export?course=999").status_code == 400
+
+
+def test_deck_audio_is_a_wav_with_a_question_and_an_answer_per_card(monkeypatch, client):
+    import io
+    import wave
+    study.import_cards(CARDS, "ENVS 101")
+    spoken = []
+
+    def fake(text):
+        spoken.append(text)
+        return [0.1] * 240, 24000                                      # 0.01 s of tone: never loads Kokoro, never plays anything
+    monkeypatch.setattr(study, "SYNTH", fake)
+    r = client.get("/api/study/audio?limit=2")
+    assert r.status_code == 200 and r.content[:4] == b"RIFF" and r.content[8:12] == b"WAVE" and "attachment" in r.headers["content-disposition"]
+    assert len(spoken) == 4 and spoken[0] == "What is a hypothesis?" and spoken[1].startswith("Answer. A testable")
+    with wave.open(io.BytesIO(r.content)) as w:
+        assert w.getframerate() == 24000 and w.getnchannels() == 1 and w.getsampwidth() == 2
+        want = 2 * (240 * 2 + int(24000 * 1.5) + int(24000 * 1.0))
+        assert w.getnframes() == want
+    assert client.get("/api/study/audio?deck=999").status_code == 400
+    assert client.get("/api/study/audio?deck=1&limit=500").status_code == 200   # the limit is capped, a whole deck still works
+
+
+def test_concept_map_is_course_decks_tags_cards_from_her_data(client):
+    cards = {"decks": [{"id": 1, "name": "Ecology", "ch": "Ch 4"}, {"id": 2, "name": "Cells", "ch": ""}],
+             "cards": [{"d": 1, "q": "What is a producer?", "a": "Makes food.", "kind": "term"},
+                       {"d": 1, "q": "x" * 80, "a": "Long one.", "kind": "term"}, {"d": 1, "q": "Untagged?", "a": "No chapter.", "kind": "", "ch": ""},
+                       {"d": 2, "q": "What is a nucleus?", "a": "Holds DNA."}]}
+    cid = study.import_cards(cards, "ENVS 101")["course_id"]
+    m = client.get(f"/api/study/map?course={cid}").json()
+    types = [n["type"] for n in m["nodes"]]
+    assert types.count("course") == 1 and types.count("deck") == 2 and types.count("card") == 4 and types.count("tag") == 2
+    by = {n["id"]: n for n in m["nodes"]}
+    edges = {(e["from"], e["to"]) for e in m["edges"]}
+    assert (f"c{cid}", "d1") in edges and ("d1", "t1:term") in edges
+    long = next(n for n in m["nodes"] if n.get("q", "").startswith("xxx"))
+    assert len(long["label"]) <= 60 and long["label"].endswith("…")
+    assert all(a in by and b in by for a, b in edges) and len(edges) == len(m["nodes"]) - 1     # a tree: every node hangs from one parent
+    assert client.get("/api/study/map?course=999").status_code == 400
+
+
+def test_the_page_has_export_import_audio_and_map_buttons():
+    js = (Path(__file__).resolve().parent.parent / "static" / "app.js").read_text()
+    for s in ("/api/study/anki/export", "/api/study/anki/import", "/api/study/audio", "/api/study/map", "VIEWS.study", "studyMap"):
+        assert s in js

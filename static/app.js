@@ -877,6 +877,7 @@ VIEWS.study = async (arg) => {
   if (/^deck\/\d+/.test(arg || '')) return studyDeck(+arg.split('/')[1]);
   if (/^test\/\d+/.test(arg || '')) return studyTest(+arg.split('/')[1]);
   if (/^tutor\/\d+/.test(arg || '')) return studyTutor(+arg.split('/')[1]);
+  if (/^map\/\d+/.test(arg || '')) return studyMap(+arg.split('/')[1]);
   setHeader('Study', [btn('▶ Review', 'sm pur', () => go('#/study/review')), btn('🚶 Walk', 'sm', () => go('#/study/walk'))]);
   show(h('div', { class: 'muted' }, 'Loading…'));
   const d = await J('/api/study');
@@ -895,11 +896,14 @@ VIEWS.study = async (arg) => {
       h('div', { class: 'tx', role: 'button', tabindex: '0', style: 'cursor:pointer', onclick: () => go('#/study/deck/' + k.id) },
         h('div', { style: 'color:#fff' }, k.name), h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1))' },
           [k.chapters, `${k.due} due of ${k.cards}`, k.drafts ? `${k.drafts} drafts to check` : ''].filter(Boolean).join(' · '))),
-      btn('Review', 'sm ' + (k.due ? 'pur' : 'dim'), () => go('#/study/review/d/' + k.id)), btn('Walk', 'sm dim', () => go('#/study/walk/d/' + k.id)), printBtn('deck=' + k.id)))),
+      btn('Review', 'sm ' + (k.due ? 'pur' : 'dim'), () => go('#/study/review/d/' + k.id)), btn('Walk', 'sm dim', () => go('#/study/walk/d/' + k.id)), btn('Download audio', 'sm dim', () => studyDownload('/api/study/audio?deck=' + k.id, 'study-audio.wav', 'Rosie is recording the deck…')),
+      printBtn('deck=' + k.id), btn('Export', 'sm dim', () => studyDownload('/api/study/anki/export?deck=' + k.id, 'anki-deck.txt')), btn('Import', 'sm dim', () => studyAnkiImport(k.id, again))))),
     c.decks.length ? null : h('div', { class: 'empty' }, 'No decks yet: add one below or import cards.'),
     h('div', { style: 'display:flex;gap:8px;flex-wrap:wrap;margin-top:10px' },
       btn('Review all', 'sm ' + (c.due ? 'pur' : 'dim'), () => go('#/study/review/c/' + c.id)), btn('Practice test', 'sm', () => go('#/study/test/' + c.id)),
-      btn('Tutor', 'sm', () => go('#/study/tutor/' + c.id)), btn('Walk all', 'sm dim', () => go('#/study/walk/c/' + c.id)), printBtn('course=' + c.id),
+      btn('Tutor', 'sm', () => go('#/study/tutor/' + c.id)), btn('Map', 'sm', () => go('#/study/map/' + c.id)), btn('Walk all', 'sm dim', () => go('#/study/walk/c/' + c.id)), printBtn('course=' + c.id),
+      btn('Export for Anki', 'sm dim', () => studyDownload('/api/study/anki/export?course=' + c.id, 'anki-course.txt')),
+      btn('Download audio', 'sm dim', () => studyDownload('/api/study/audio?course=' + c.id, 'study-audio.wav', 'Rosie is recording the cards that are due…')),
       btn('Save a copy', 'sm dim', async () => { const x = await J('/api/study/export/' + c.id); const a = h('a', { href: URL.createObjectURL(new Blob([JSON.stringify(x, null, 1)], { type: 'application/json' })), download: c.name.replace(/[^\w-]+/g, '_') + '-cards.json' }); a.click(); }),
       btn('Delete course', 'sm dim', () => { if (confirm(`Delete ${c.name} and all its cards and review history?`)) act(() => del('/api/study/courses/' + c.id), 'Deleted'); })),
     c.tests.length ? h('div', { class: 'muted', style: 'margin-top:8px' }, 'Recent tests: ' + c.tests.map((t) => `${t.score}/${t.total}`).join(', ')) : null,
@@ -1144,6 +1148,62 @@ async function studyWalk(arg) {
       h('label', { class: 'muted', style: 'display:flex;align-items:center;gap:6px' }, clue, 'Read the clue'),
       h('label', { class: 'muted', style: 'display:flex;align-items:center;gap:6px' }, onlyDue, 'Only cards that are due')), info, now,
       h('div', { style: 'display:flex;gap:10px' }, big('✗ Missed', 'bad', 1), big('✓ Got it', 'ok', 3))));
+}
+
+// Phase 3: Anki files in and out, the deck read aloud as one audio file, and a map of a course drawn from her own decks, tags and cards.
+async function studyDownload(url, fallback, wait) {
+  if (wait) toast(wait);
+  try {
+    const r = await fetch(url);
+    if (!r.ok) { let d = null; try { d = await r.json(); } catch (e) { /* no body */ } throw new Error((d && d.error) || ('HTTP ' + r.status)); }
+    const name = /filename="([^"]+)"/.exec(r.headers.get('Content-Disposition') || '');
+    const a = h('a', { href: URL.createObjectURL(await r.blob()), download: name ? name[1] : fallback });
+    a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  } catch (e) { toast(e.message, 1); }
+}
+function studyAnkiImport(deckId, again) {
+  const f = h('input', { type: 'file', accept: '.txt,.tsv,.csv,.apkg,.colpkg', style: 'display:none', onchange: async () => {
+    const file = f.files[0]; if (!file) return;
+    try {
+      const r = await J('/api/study/anki/import?deck=' + deckId, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: file });
+      toast(`${r.added} cards added` + (r.skipped ? `, ${r.skipped} already there` : '') + (r.errors ? `, ${r.errors} could not be read` : ''), r.errors && !r.added);
+      again();
+    } catch (e) { toast(e.message, 1); }
+  } });
+  document.body.append(f); f.click(); setTimeout(() => f.remove(), 60000);
+}
+async function studyMap(courseId) {
+  setHeader('Map', [btn('← Study', 'sm dim', () => go('#/study'))]);
+  let m; try { m = await J('/api/study/map?course=' + courseId); } catch (e) { return show(h('div', { class: 'err' }, e.message)); }
+  const kids = {}; m.edges.forEach((e) => (kids[e.from] = kids[e.from] || []).push(e.to));
+  const byId = Object.fromEntries(m.nodes.map((n) => [n.id, n]));
+  const leaves = (id) => (kids[id] ? kids[id].reduce((s, k) => s + leaves(k), 0) : 1);
+  const total = leaves(m.nodes[0].id), R = [0, 90, 170, Math.max(270, total * 6.5)], size = (R[3] + 150) * 2, pos = {};
+  const place = (id, depth, a0, a1) => {
+    const a = (a0 + a1) / 2, r = R[Math.min(depth, 3)]; pos[id] = { x: size / 2 + r * Math.cos(a), y: size / 2 + r * Math.sin(a), a, depth };
+    let at = a0; (kids[id] || []).forEach((k) => { const w = (a1 - a0) * leaves(k) / leaves(id); place(k, depth + 1, at, at + w); at += w; });
+  };
+  place(m.nodes[0].id, 0, -Math.PI / 2, Math.PI * 1.5);
+  // a card hanging straight from its deck sits on the outer ring, so the rings stay readable
+  m.nodes.forEach((n) => { if (n.type === 'card' && pos[n.id].depth === 2) { const p = pos[n.id]; p.x = size / 2 + R[3] * Math.cos(p.a); p.y = size / 2 + R[3] * Math.sin(p.a); } });
+  const S = (t, a, kids2) => { const e = document.createElementNS('http://www.w3.org/2000/svg', t); for (const k in a) e.setAttribute(k, a[k]); (kids2 || []).forEach((c) => e.append(c)); return e; };
+  const fill = { course: 'var(--acc)', deck: 'var(--pur)', tag: 'var(--warn)', card: 'var(--ok)' }, rad = { course: 22, deck: 14, tag: 10, card: 5 };
+  const svg = S('svg', { viewBox: `0 0 ${size} ${size}`, width: size, height: size, role: 'img', 'aria-label': 'Concept map of ' + m.course.name, style: 'display:block;max-width:none' });
+  m.edges.forEach((e) => svg.append(S('line', { x1: pos[e.from].x, y1: pos[e.from].y, x2: pos[e.to].x, y2: pos[e.to].y, style: 'stroke:var(--line);stroke-width:1.5' })));
+  const again = () => keepScroll(() => studyMap(courseId));
+  m.nodes.forEach((n) => {
+    const p = pos[n.id], right = Math.cos(p.a) >= 0, card = n.type === 'card';
+    const g = S('g', { style: card ? 'cursor:pointer' : '', tabindex: card ? '0' : '-1', role: card ? 'button' : 'img', 'aria-label': n.label }, [S('title', {}, [document.createTextNode(card ? n.q : n.label)])]);
+    g.append(S('circle', { cx: p.x, cy: p.y, r: rad[n.type], style: 'fill:' + fill[n.type] }));
+    const txt = n.type === 'course' ? n.label : n.type === 'card' ? (n.label.length > 28 ? n.label.slice(0, 27) + '…' : n.label) : n.label.slice(0, 22);
+    const t = S('text', { x: n.type === 'course' ? p.x : p.x + (right ? 1 : -1) * (rad[n.type] + 4), y: n.type === 'course' ? p.y + 38 : p.y + 3, 'text-anchor': n.type === 'course' ? 'middle' : right ? 'start' : 'end', 'font-size': card ? 10 : 12, style: 'fill:var(--fg)' });
+    t.textContent = txt; g.append(t);
+    if (card) { const open = () => studyEdit({ id: n.card_id, q: n.q, a: n.a, clue: n.clue }, again); g.onclick = open; g.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } }; }
+    svg.append(g);
+  });
+  show(h('div', { class: 'pagehead' }, h('h2', {}, m.course.name + ' map'), h('span', { class: 'muted' },
+    `Your course, decks, tags and cards, drawn from what you entered. Tap a card to open it.` + (m.truncated ? ' Showing the first cards only.' : ''))),
+    m.nodes.length > 1 ? h('div', { class: 'card', style: 'overflow:auto;max-height:80vh;padding:6px' }, svg) : h('div', { class: 'empty' }, 'Add decks and cards to see a map.'));
 }
 
 // ----- Life Quest (a gamified life: stats, quests, evidence-gated XP, a Sunday review; rules and storage in app/lifequest.py) -----

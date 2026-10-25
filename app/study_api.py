@@ -1,8 +1,8 @@
 """Study page API. Login-protected like every /api/ route (server.py middleware). Storage, scheduling and the notes check are in study.py."""
 import html
 
-from fastapi import APIRouter
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import APIRouter, Request
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel
 
 import study
@@ -220,6 +220,43 @@ def tutor(b: TutorBody):
 @router.get("/api/study/next-block")
 def next_block():
     return {"block": study.plan_for_block(study.next_block())}
+
+
+# ---------------------------------------------------------------- Phase 3: Anki import and export, deck audio, concept map
+@router.get("/api/study/anki/export")
+def anki_export(course: int = 0, deck: int = 0):
+    r = safe(study.anki_export, course or None, deck or None)
+    if not isinstance(r, tuple):
+        return r
+    return Response(r[1], media_type="text/plain; charset=utf-8", headers={"Content-Disposition": f'attachment; filename="{r[0]}"'})
+
+
+@router.post("/api/study/anki/import")
+async def anki_import(request: Request, deck: int = 0):
+    """The body is the file itself (an Anki text export, a TSV/CSV, or an .apkg/.colpkg), so no form parsing is needed."""
+    if int(request.headers.get("content-length") or 0) > study.MAX_ANKI_BYTES:
+        return err("That file is too big (at most 50 MB)", 413)
+    return safe(study.anki_import, deck, await request.body())
+
+
+@router.get("/api/study/audio")
+def deck_audio(deck: int = 0, course: int = 0, limit: int = 40):
+    """A WAV of the deck's cards (or the cards due now when no deck is given): question, pause, answer."""
+    cards = study.due_cards(course or None, deck or None, max(1, min(limit, 200)), every=bool(deck))
+    if not cards:
+        return err("No cards to read right now")
+    try:
+        wav = study.deck_audio(cards)
+    except ValueError as e:
+        return err(str(e))
+    except Exception as e:                                       # the voice model is missing or failed: say so
+        return err(f"Rosie's voice is not available ({type(e).__name__}).", 503)
+    return Response(wav, media_type="audio/wav", headers={"Content-Disposition": 'attachment; filename="study-audio.wav"'})
+
+
+@router.get("/api/study/map")
+def concept_map(course: int = 0):
+    return safe(study.concept_map, course)
 
 
 # ---------------------------------------------------------------- print page (the browser prints it; no PDF library needed)

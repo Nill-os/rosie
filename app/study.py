@@ -4,10 +4,16 @@ cards.json: {decks, cards: [{d, q, a, t}], tips}) or are drafted from her own no
 line it came from, the quote must really be in the notes, and the answer must be backed by it (checked here, not trusted to the model);
 it waits as a draft until she keeps it. Real reviews earn Life Quest XP, counted here from the review log, never from the page.
 Everything stays in data/study.db on this PC."""
+import csv
 import datetime as dt
+import html
+import io
 import json
 import re
 import sqlite3
+import tempfile
+import wave
+import zipfile
 from pathlib import Path
 
 from fsrs import Card, Rating, Scheduler
@@ -52,8 +58,8 @@ def _iso(t: dt.datetime) -> str:
     return t.astimezone(dt.timezone.utc).isoformat(timespec="seconds")
 
 
-def _text(v, what, limit, required=True) -> str:
-    s = " ".join(str(v or "").split())
+def _text(v, what, limit, required=True, lines=False) -> str:
+    s = "\n".join(l for l in (" ".join(x.split()) for x in str(v or "").splitlines()) if l) if lines else " ".join(str(v or "").split())
     if required and not s:
         raise ValueError(f"{what} is empty")
     if len(s) > limit:
@@ -124,8 +130,8 @@ def _clean_meta(card: dict) -> str:
     return json.dumps(m) if m else ""
 
 
-def add_card(deck_id: int, q: str, a: str, clue: str = "", quote: str = "", origin: str = "typed", status: str = "active", wrong=None, meta: str = "") -> int:
-    q, a = _text(q, "Question", 300), _text(a, "Answer", 600)
+def add_card(deck_id: int, q: str, a: str, clue: str = "", quote: str = "", origin: str = "typed", status: str = "active", wrong=None, meta: str = "", lines: bool = False) -> int:
+    q, a = _text(q, "Question", 300, lines=lines), _text(a, "Answer", 600, lines=lines)
     clue, quote = _text(clue, "Clue", 300, required=False), _text(quote, "Quote", 600, required=False)
     st, due = _new_card_state()
     with _db() as c:
@@ -623,3 +629,204 @@ def plan_for_block(block: dict | None) -> dict | None:
         if co["days_to_exam"] is not None and 0 <= co["days_to_exam"] <= 7 and co["cards"]:
             todo.append(f"take a 10-question {co['name']} practice test (exam in {co['days_to_exam']} days)" if co["days_to_exam"] else f"a last {co['name']} practice test (exam today)")
     return {**block, "todo": todo[:4]}
+
+
+# ---------------------------------------------------------------- Phase 3: Anki import and export, deck audio, concept map
+MAX_ANKI_BYTES = 50 * 1024 * 1024      # biggest upload (a text file or an .apkg)
+MAX_ANKI_NOTES = 20000                 # most notes one import reads
+AUDIO_GAP_QA, AUDIO_GAP_CARD = 1.5, 1.0   # seconds of silence between question and answer, and between cards
+SYNTH = None                           # tests put a fake voice here; None = Rosie's local voice (loaded only when needed)
+
+
+def _tags(meta: str, chapters: str = "") -> list[str]:
+    """Tags of a card, all from her own data: tags typed or imported, the kind and chapter of her Claude's file, else the deck's chapters."""
+    try:
+        m = json.loads(meta) if meta else {}
+    except ValueError:
+        m = {}
+    raw = str(m.get("tags") or "").split() + [str(m.get(k) or "") for k in ("kind", "ch")] + ([chapters] if not (m.get("kind") or m.get("ch") or m.get("tags")) else [])
+    out = []
+    for t in raw:
+        t = "_".join(t.split())[:40]
+        if t and t not in out:
+            out.append(t)
+    return out
+
+
+def anki_export(course_id: int | None = None, deck_id: int | None = None) -> tuple[str, str]:
+    """(file name, text): her active cards as an Anki plain-text file (Anki 2.1.55+): front, back, deck, tags, tab-separated."""
+    where, args = ("d.id=?", (deck_id,)) if deck_id else ("co.id=?", (course_id,))
+    with _db() as c:
+        rows = c.execute("SELECT c.q, c.a, c.clue, c.meta, d.name AS deck, d.chapters, co.name AS course FROM cards c JOIN decks d ON d.id=c.deck_id "
+                         f"JOIN courses co ON co.id=d.course_id WHERE {where} AND c.status='active' ORDER BY d.id, c.id", args).fetchall()
+    if not rows:
+        raise ValueError("No cards to export")
+    buf = io.StringIO()
+    buf.write("#separator:tab\n#html:false\n#deck column:3\n#tags column:4\n")
+    w = csv.writer(buf, delimiter="\t", lineterminator="\n")
+    for r in rows:
+        w.writerow([r["q"], r["a"] + (f" (Clue: {r['clue']})" if r["clue"] else ""), f"{r['course']}::{r['deck']}", " ".join(_tags(r["meta"], r["chapters"]))])
+    name = re.sub(r"[^\w-]+", "_", rows[0]["deck"] if deck_id else rows[0]["course"]).strip("_") or "cards"
+    return name + "-anki.txt", buf.getvalue()
+
+
+def _plain(s: str) -> str:
+    """Anki's HTML field as plain text: <br> and block ends become line breaks, other tags go, entities are decoded."""
+    s = re.sub(r"(?i)<br\s*/?>|</?(?:div|p|li)\b[^>]*>", "\n", s or "")
+    return html.unescape(re.sub(r"<[^>]*>", "", s)).replace("\xa0", " ").strip()
+
+
+def _anki_text_rows(data: bytes) -> list[tuple[str, str, str]]:
+    """(front, back, tags) from Anki's text export or a plain 2 or 3 column TSV/CSV."""
+    text = data.decode("utf-8-sig", errors="replace")
+    lines, sep, cols = text.splitlines(), None, {}
+    body = []
+    for ln in lines:
+        if ln.startswith("#"):
+            k, _, v = ln[1:].partition(":")
+            if k.strip() == "separator":
+                sep = {"tab": "\t", "comma": ",", "semicolon": ";", "space": " ", "pipe": "|", "colon": ":"}.get(v.strip().lower(), v.strip()[:1] or None)
+            elif k.strip().endswith(" column") and v.strip().isdigit():
+                cols[k.strip()[:-7]] = int(v.strip()) - 1
+        elif ln.strip():
+            body.append(ln)
+    if not body:
+        return []
+    if sep is None:
+        sep = "\t" if "\t" in body[0] else ","
+    rows = list(csv.reader(io.StringIO("\n".join(body)), delimiter=sep))
+    skip = set(cols.values())
+    out = []
+    for r in rows:
+        if not any(x.strip() for x in r):
+            continue
+        fields = [x for i, x in enumerate(r) if i not in skip]
+        tag_i = cols.get("tags")
+        tags = r[tag_i] if tag_i is not None and tag_i < len(r) else (fields[2] if not cols and len(fields) > 2 else "")
+        out.append((fields[0] if fields else "", fields[1] if len(fields) > 1 else "", tags))
+    return out
+
+
+def _anki_zip_rows(data: bytes) -> list[tuple[str, str, str]]:
+    """(front, back, tags) from an .apkg or .colpkg: the collection database inside is read with sqlite3, nothing else is unpacked."""
+    try:
+        z = zipfile.ZipFile(io.BytesIO(data))
+    except zipfile.BadZipFile:
+        raise ValueError("That file is not a valid Anki package")
+    with z:
+        names = z.namelist()
+        for n in names:
+            p = n.replace("\\", "/")
+            if p.startswith("/") or ".." in p.split("/") or re.match(r"^[A-Za-z]:", p):
+                raise ValueError("That package has an unsafe file path inside, so it was not opened")
+        pick = next((n for n in ("collection.anki21", "collection.anki2") if n in names), None)
+        if not pick:
+            if "collection.anki21b" in names:
+                raise ValueError('That package uses the newer Anki format. In Anki, export again with "Support older Anki versions" ticked, then import that file.')
+            raise ValueError("No Anki collection found in that package")
+        if z.getinfo(pick).file_size > MAX_ANKI_BYTES:
+            raise ValueError("That Anki collection is too big (at most 50 MB)")
+        blob = z.read(pick)
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "collection.sqlite"
+        path.write_bytes(blob)
+        db = sqlite3.connect(path)
+        try:
+            rows = db.execute("SELECT flds, tags FROM notes LIMIT ?", (MAX_ANKI_NOTES + 1,)).fetchall()
+        except sqlite3.Error:
+            raise ValueError("That package has no readable notes")
+        finally:
+            db.close()
+    if len(rows) > MAX_ANKI_NOTES:
+        raise ValueError(f"That package has more than {MAX_ANKI_NOTES} notes, too many for one import")
+    out = []
+    for flds, tags in rows:
+        f = str(flds or "").split("\x1f")
+        out.append((_plain(f[0]), _plain(f[1]) if len(f) > 1 else "", str(tags or "")))
+    return out
+
+
+def anki_import(deck_id: int, data: bytes) -> dict:
+    """Add the notes of an Anki text file, a plain TSV/CSV or an .apkg/.colpkg to a deck. Cards whose question is already in the deck are skipped."""
+    if len(data) > MAX_ANKI_BYTES:
+        raise ValueError("That file is too big (at most 50 MB)")
+    with _db() as c:
+        if not c.execute("SELECT 1 FROM decks WHERE id=?", (deck_id,)).fetchone():
+            raise ValueError("No such deck")
+    rows = _anki_zip_rows(data) if data[:2] == b"PK" else _anki_text_rows(data)
+    if len(rows) > MAX_ANKI_NOTES:
+        raise ValueError(f"That file has more than {MAX_ANKI_NOTES} notes, too many for one import")
+    added = skipped = errors = 0
+    bad = []
+    for q, a, tags in rows:
+        try:
+            meta = json.dumps({"tags": " ".join("_".join(t.split())[:40] for t in tags.split() if t.strip())[:200]}) if tags.strip() else ""
+            if add_card(deck_id, q, a, origin="anki", meta=meta, lines=True):
+                added += 1
+            else:
+                skipped += 1
+        except ValueError as e:
+            errors += 1
+            if len(bad) < 5:
+                bad.append(str(e))
+    return {"deck_id": deck_id, "added": added, "skipped": skipped, "errors": errors, "error_samples": bad}
+
+
+def _wav_bytes(samples, rate: int) -> bytes:
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(samples.tobytes())
+    return buf.getvalue()
+
+
+def deck_audio(cards: list[dict], synth=None) -> bytes:
+    """One WAV that reads each card as: question, pause, "Answer." and the answer, pause. Only her own words are spoken."""
+    import numpy as np
+    if synth is None:
+        synth = SYNTH
+    if synth is None:
+        from server import _synth as synth                       # Rosie's local voice, loaded only now (like /api/speak)
+    parts, rate = [], 0
+    for c in cards:
+        for text, gap in ((c["q"], AUDIO_GAP_QA), ("Answer. " + c["a"], AUDIO_GAP_CARD)):
+            audio, rate = synth(text)
+            parts.append(np.clip(np.asarray(audio, dtype=np.float32).reshape(-1), -1.0, 1.0))
+            parts.append(np.zeros(int(rate * gap), dtype=np.float32))
+    if not parts:
+        raise ValueError("No cards to read")
+    return _wav_bytes((np.concatenate(parts) * 32767).astype(np.int16), int(rate))
+
+
+def concept_map(course_id: int, limit: int = 400) -> dict:
+    """Nodes and edges from her own data only: course -> decks -> tags -> cards (a card with no tag hangs from its deck)."""
+    with _db() as c:
+        co = c.execute("SELECT id, name FROM courses WHERE id=?", (course_id,)).fetchone()
+        if not co:
+            raise ValueError("No such course")
+        decks = c.execute("SELECT id, name, chapters FROM decks WHERE course_id=? ORDER BY id", (course_id,)).fetchall()
+        cards = c.execute("SELECT c.id, c.deck_id, c.q, c.a, c.clue, c.meta FROM cards c JOIN decks d ON d.id=c.deck_id "
+                          "WHERE d.course_id=? AND c.status='active' ORDER BY c.deck_id, c.id LIMIT ?", (course_id, limit + 1)).fetchall()
+    cut = len(cards) > limit
+    nodes = [{"id": f"c{co['id']}", "type": "course", "label": co["name"]}]
+    edges = []
+    chap = {d["id"]: d["chapters"] for d in decks}
+    for d in decks:
+        nodes.append({"id": f"d{d['id']}", "type": "deck", "label": d["name"], "deck_id": d["id"]})
+        edges.append({"from": f"c{co['id']}", "to": f"d{d['id']}"})
+    seen = set()
+    for x in cards[:limit]:
+        tags = _tags(x["meta"], chap.get(x["deck_id"], ""))
+        parent = f"d{x['deck_id']}"
+        if tags:
+            parent = f"t{x['deck_id']}:{tags[0]}"
+            if parent not in seen:
+                seen.add(parent)
+                nodes.append({"id": parent, "type": "tag", "label": tags[0]})
+                edges.append({"from": f"d{x['deck_id']}", "to": parent})
+        label = x["q"] if len(x["q"]) <= 60 else x["q"][:59].rstrip() + "…"
+        nodes.append({"id": f"k{x['id']}", "type": "card", "label": label, "card_id": x["id"], "q": x["q"], "a": x["a"], "clue": x["clue"], "tags": tags})
+        edges.append({"from": parent, "to": f"k{x['id']}"})
+    return {"course": {"id": co["id"], "name": co["name"]}, "nodes": nodes, "edges": edges, "truncated": cut}
