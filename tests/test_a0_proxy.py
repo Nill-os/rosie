@@ -144,6 +144,9 @@ def fake_a0(monkeypatch):
                 return
             if m.get("bytes") is not None:
                 await ws.send_bytes(m["bytes"][::-1])
+            elif m["text"] == "bye":                         # Agent Zero ends it, so the proxy is done before the test client leaves
+                await ws.close()
+                return
             else:
                 await ws.send_text("echo " + m["text"])
     port = _free_port()
@@ -189,6 +192,9 @@ def test_a_websocket_is_relayed_both_ways_without_rosies_cookie(fake_a0):
         assert ws.receive_text() == "echo ping"
         ws.send_bytes(b"abc")
         assert ws.receive_bytes() == b"cba"
+        ws.send_text("bye")                                  # leaving with the relay still open races the client's cancel (flaky in CI)
+        with pytest.raises(WebSocketDisconnect):
+            ws.receive_text()
     assert got["cookie"] == "a0=1"
 
 

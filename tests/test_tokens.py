@@ -97,6 +97,7 @@ def test_the_byte_cap_continues_next_time(home):
     assert st["days"][today()]["opus"]["main"][4] == 20 and st["pending"] == 0
 
 
+@pytest.mark.skipif(not hasattr(time, "tzset"), reason="time.tzset is Unix-only")
 def test_days_are_local_days(home, monkeypatch):
     monkeypatch.setenv("TZ", "Pacific/Kiritimati")                 # UTC+14: 12:00 UTC is already the next day there
     time.tzset()
