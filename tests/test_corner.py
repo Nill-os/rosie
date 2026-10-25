@@ -156,7 +156,7 @@ def test_the_browsing_agent_imports_nothing_private():
 def test_the_only_web_tools_are_read_a_page_and_search_the_web_or_github():
     assert set(corner_browse.TOOLS) == {"fetch_page", "search_web", "search_github"}
     src = (ROOT / "app" / "corner_browse.py").read_text(encoding="utf-8")
-    assert ".post(" not in src.replace("c.post(OLLAMA_GENERATE", "").replace('c.stream("POST", OLLAMA_CHAT', "")   # no POST anywhere but local Ollama
+    assert ".post(" not in src.replace("c.post(OLLAMA_GENERATE", "").replace("c.post(OLLAMA_SHOW", "").replace('c.stream("POST", OLLAMA_CHAT', "")   # no POST anywhere but local Ollama
     assert "web.fetch_url(" not in src and "web.get_public(" in src
     for name in ("find_recipe", "weather", "subprocess", "os.system", "open(", "write_text", "unlink"):
         assert name not in src, name
@@ -509,7 +509,7 @@ def test_a_session_keeps_a_find_with_only_the_pages_own_sentences(fresh, monkeyp
     turn_on(corner_pages_session=1)
     _site(fresh)
     monkeypatch.setattr(web, "web_search", lambda q: [{"title": "Yagi", "url": "https://radio.example/yagi", "snippet": "build"}])
-    brain = Brain(read={"interesting": True, "why": "I like cheap antenna builds.", "next_link": 0,
+    brain = Brain(read={"interesting": True, "why": "Try the stub match on the antenna project.", "next_link": 0,
                         "summary": ["The driven element is a folded dipole matched to 50 ohms with a short stub.",
                                     "This antenna has 25 dBi of gain and cures headaches."]})               # the second one is made up
     monkeypatch.setattr(corner_browse, "_llm", brain)
@@ -517,7 +517,7 @@ def test_a_session_keeps_a_find_with_only_the_pages_own_sentences(fresh, monkeyp
     f = corner.finds()
     assert len(f) == 1 and f[0]["title"] == "Build a 915 MHz Yagi" and f[0]["source"] == "radio.example"
     assert f[0]["summary"] == ["The driven element is a folded dipole matched to 50 ohms with a short stub."]
-    assert f[0]["why"] == "I like cheap antenna builds."
+    assert f[0]["why"] == "Try the stub match on the antenna project."
     kinds = [(t["kind"], t["status"]) for t in reversed(corner.trail())]
     assert ("search", "searched") in kinds and ("page", "read") in kinds and ("robots", "read") in kinds and kinds[-1][0] == "session"
     assert not corner.state["running"]
@@ -527,7 +527,7 @@ def test_no_find_without_a_real_sentence_from_the_page(fresh, monkeypatch):
     turn_on(corner_pages_session=1)
     _site(fresh)
     monkeypatch.setattr(web, "web_search", lambda q: [{"title": "Yagi", "url": "https://radio.example/yagi", "snippet": ""}])
-    monkeypatch.setattr(corner_browse, "_llm", Brain(read={"interesting": True, "why": "x", "next_link": 0, "summary": ["Totally invented sentence about antennas here."]}))
+    monkeypatch.setattr(corner_browse, "_llm", Brain(read={"interesting": True, "why": "Try x in the project", "next_link": 0, "summary": ["Totally invented sentence about antennas here."]}))
     corner_browse.run_session()
     assert corner.finds() == []
 
@@ -561,7 +561,7 @@ def test_she_stops_the_moment_the_owner_comes_back(fresh, monkeypatch):
                 corner.owner_active(True)                                   # the owner opens Rosie mid-page
                 corner.owner_active(False)
             return super().__call__(user, schema, predict)
-    monkeypatch.setattr(corner_browse, "_llm", Interrupting(read={"interesting": True, "why": "x", "summary": [PAGE_TEXT.split(". ")[0] + "."], "next_link": 1}))
+    monkeypatch.setattr(corner_browse, "_llm", Interrupting(read={"interesting": True, "why": "Try x in the project", "summary": [PAGE_TEXT.split(". ")[0] + "."], "next_link": 1}))
     corner_browse.run_session()
     assert "https://radio.example/next" not in fresh["net"].urls()
     assert corner.finds() == []                                            # nothing is saved after the stop
@@ -1022,7 +1022,7 @@ def _chain_site(fresh, n=6, extra_links=()):
 class StopAfter(Brain):
     """Reads pages; the owner presses Stop after `n` page reads (or does `act` on a given read)."""
     def __init__(self, n, pick=1, act=None, **kw):
-        super().__init__(read={"interesting": True, "why": "Nice.", "summary": [PAGE_TEXT.split(". ")[0] + "."], "next_link": pick}, **kw)
+        super().__init__(read={"interesting": True, "why": "Try it.", "summary": [PAGE_TEXT.split(". ")[0] + "."], "next_link": pick}, **kw)
         self.n, self.reads, self.act = n, 0, act or {}
 
     def __call__(self, user, schema, predict=700):
@@ -1131,7 +1131,7 @@ def test_a_model_answer_cut_short_by_the_owner_is_asked_again(fresh, monkeypatch
 
 
 def test_nonstop_pictures_have_no_budget_and_looks_wait_until_the_owner_is_away(fresh, monkeypatch):
-    turn_on(corner_images_day=0, corner_looks_day=0, corner_storage_mb=50)
+    turn_on(corner_images_day=0, corner_looks_day=20, corner_storage_mb=50)   # nonstop has no image budget, but looks stay under the day's cap
     _pics_on(monkeypatch, FakeClam(), lambda s, k, wh: (b"\x89PNG" + bytes([wh[0] % 256]) * 10, "png", wh))
     fresh["net"].pages["https://radio.example/robots.txt"] = ROBOTS_OK
     for n in range(1, 7):
@@ -1147,7 +1147,7 @@ def test_nonstop_pictures_have_no_budget_and_looks_wait_until_the_owner_is_away(
     assert len(corner.pictures()) == 3 and looks == [] and session["vision"] is False   # kept (no image budget), not looked at yet
     corner._activity["last"] = time.time() - 3600                          # away an hour: the waiting ones are looked at in one batch
     corner_browse.pictures_step(cands[3:], session)
-    assert len(corner.pictures()) == 6 and len(looks) == 6 and session["vision"] is True
+    assert len(corner.pictures()) == 6 and len(looks) == 6 and session["vision"] is True   # (the test chat model cannot see: vision model swapped in)
 
 
 def test_the_disk_safety_stop_comes_on_top_of_the_storage_budget(fresh, monkeypatch):
@@ -1271,7 +1271,7 @@ def test_the_live_view_follows_each_step(fresh, monkeypatch, live_reset):
     _site(fresh, extra_links=[("https://radio.example/next", "Next build")])
     monkeypatch.setattr(web, "web_search", lambda q: [{"title": "Yagi", "url": "https://radio.example/yagi", "snippet": ""}])
     monkeypatch.setattr(corner_browse, "topic_now", lambda: "Yagi antennas")
-    monkeypatch.setattr(corner_browse, "_llm", Brain(read={"interesting": True, "why": "I like cheap antenna builds.", "next_link": 1,
+    monkeypatch.setattr(corner_browse, "_llm", Brain(read={"interesting": True, "why": "Try the stub match on the antenna project.", "next_link": 1,
                                                             "summary": ["The driven element is a folded dipole matched to 50 ohms with a short stub."]}))
     steps, real = [], corner_browse.live
 
@@ -1291,7 +1291,7 @@ def test_the_live_view_follows_each_step(fresh, monkeypatch, live_reset):
     assert len(at_choice["page"]["text"]) <= corner_browse.LIVE_TEXT and at_choice["links"][0]["url"] == "https://radio.example/next"
     picked = next(x for x in steps if x["chosen"] == 1)
     assert picked["links"][0]["n"] == 1
-    assert any(t["text"] == "I like cheap antenna builds." for t in steps[-2]["thoughts"])
+    assert any(t["text"] == "Try the stub match on the antenna project." for t in steps[-2]["thoughts"])
     assert steps[-1]["log"][0]["text"] == "Stopped" and len(steps[-1]["log"]) <= 30
     assert fresh["net"].urls().count("https://radio.example/yagi") == 1      # the live view fetched nothing of its own
 
@@ -1734,3 +1734,254 @@ def test_picture_looks_wait_while_the_owner_is_at_the_pc(fresh, monkeypatch, hea
     with corner._db() as db:
         db.execute("INSERT INTO pictures (at, file, fmt, width, height, bytes, src_url, looked) VALUES ('2026-10-16', 'x.jpg', 'jpeg', 1, 1, 1, 'https://example.org/x.jpg', 0)")
     corner_browse.pictures_step([], {"vision": False})
+
+
+# ================================================================ focus, noise sites, repeats (owner 2026-10-25)
+def test_blocked_sites_cover_subdomains_and_paths():
+    assert corner_browse.blocked_reason("https://giphy.com/x")                                  # in the default list
+    assert corner_browse.blocked_reason("https://media.giphy.com/x")
+    assert corner_browse.blocked_reason("https://notgiphy.com/x") is None
+    corner.save_settings({"corner_block_sites": ["Docs.Example.com/en/copilot", "https://spam.example/"]})
+    assert corner_browse.blocked_reason("https://docs.example.com/en/copilot/chat")
+    assert corner_browse.blocked_reason("https://docs.example.com/en/copilot")
+    assert corner_browse.blocked_reason("https://docs.example.com/en/copilotx") is None
+    assert corner_browse.blocked_reason("https://docs.example.com/en/actions") is None
+    assert corner_browse.blocked_reason("https://a.spam.example/z")
+    assert corner_browse.blocked_reason("https://giphy.com/x") is None                         # the owner replaced the list
+    assert corner_browse.blocked_reason("https://pornhub.com/") and corner_browse.blocked_reason("https://localhost.xxx/")   # safety blocks stay
+
+
+def test_blocked_sites_are_taken_out_of_search_results(fresh, monkeypatch):
+    monkeypatch.setattr(web, "web_search", lambda q: [{"title": "g", "url": "https://giphy.com/a", "snippet": ""},
+                                                      {"title": "ok", "url": "https://radio.example/a", "snippet": ""}])
+    assert [r["url"] for r in corner_browse.search_web("x")] == ["https://radio.example/a"]
+
+
+def test_settings_validation_for_the_focus_and_block_settings(client):
+    post = lambda **kw: client.post("/api/corner/settings", json=kw).status_code
+    assert post(corner_block_sites=["ok.example/path", "b.example"]) == 200
+    assert post(corner_block_sites=["not a site!"]) == 400 and post(corner_block_sites="x.example") == 400 and post(corner_block_sites=[1]) == 400
+    assert post(corner_focus=["local tts | https://a.example/x https://b.example"]) == 200
+    assert client.get("/api/corner").json()["status"]["settings"]["corner_focus"] == ["local tts | https://a.example/x https://b.example"]
+    assert post(corner_focus=["topic | ftp://a.example"]) == 400 and post(corner_focus=["topic | javascript:alert(1)"]) == 400
+    assert post(corner_focus=["x" * 61]) == 400 and post(corner_focus=[5]) == 400 and post(corner_focus="topic") == 400
+    assert post(corner_focus_share=90) == 200 and post(corner_focus_share=101) == 400 and post(corner_focus_share="80") == 400
+    assert post(corner_focus_share=True) == 400 and post(corner_site_daily_cap=0) == 400 and post(corner_site_daily_cap=25) == 200
+
+
+def test_no_focus_topics_means_free_curiosity():
+    assert corner.DEFAULTS["corner_focus"] == [] and corner.DEFAULTS["corner_focus_share"] == 80 and corner.DEFAULTS["corner_site_daily_cap"] == 40
+    assert corner_browse.pick_focus() is None
+
+
+def test_focus_rotates_least_recently_used_first_and_follows_the_share(monkeypatch):
+    corner.save_settings({"corner_focus": ["alpha tools", "beta radios | https://beta.example/start", "gamma"], "corner_focus_share": 100})
+    got = [corner_browse.pick_focus() for _ in range(6)]
+    assert [g[0] for g in got] == ["alpha tools", "beta radios", "gamma"] * 2
+    assert got[1][1] == ["https://beta.example/start"]
+    corner.save_settings({"corner_focus_share": 0})
+    assert all(corner_browse.pick_focus() is None for _ in range(20))
+    corner.save_settings({"corner_focus_share": 80})
+    class R:
+        def __init__(self, v): self.v = v
+        def random(self): return self.v
+    assert corner_browse.pick_focus(R(0.79)) is not None and corner_browse.pick_focus(R(0.80)) is None
+
+
+def test_a_focus_session_searches_the_topic_reads_seeds_first_and_tells_her(fresh, monkeypatch):
+    turn_on(corner_pages_session=2, corner_focus=["radio builds | https://radio.example/yagi"], corner_focus_share=100)
+    _site(fresh)
+    monkeypatch.setattr(web, "web_search", lambda q: [])
+    brain = Brain(read={"interesting": False, "next_link": 0})
+    monkeypatch.setattr(corner_browse, "_llm", brain)
+    prompts = []
+    real = corner_browse.system_prompt
+    monkeypatch.setattr(corner_browse, "system_prompt", lambda: (prompts.append(real()), prompts[-1])[1])
+    corner_browse.run_session()
+    assert "https://radio.example/yagi" in fresh["net"].urls()                      # the seed was fetched without a search
+    assert any("Topic now: radio builds" in p for p in brain.prompts[1:]) or any("radio builds" in p for p in brain.prompts)
+    corner.state["focus"] = "radio builds"
+    assert "focus topic “radio builds”" in real()
+    corner.state["focus"] = None
+    assert "focus topic" not in real()
+
+
+def test_a_repeat_find_is_not_saved_again():
+    corner.add_find("https://a.example/post", "Firmware 2.5 update released for the radio", "w", ["s"])
+    assert corner.similar_find("https://a.example/post/#top", "Different") is not None             # same address
+    assert corner.similar_find("https://a.example/other", "Radio firmware 2.5 update released for the radio") is not None   # same site, same words
+    assert corner.similar_find("https://b.example/other", "Firmware 2.5 update released for the radio") is None   # other site
+    assert corner.similar_find("https://a.example/news", "Antenna matching stub guide") is None
+
+
+def test_a_find_older_than_14_days_can_be_found_again(monkeypatch):
+    import datetime as dt
+    corner.add_find("https://a.example/old", "Old topic", "w", ["s"])
+    monkeypatch.setattr(corner, "_now", lambda: dt.datetime(2026, 11, 5, 14, 0).astimezone())
+    assert corner.similar_find("https://a.example/old", "Old topic") is None
+
+
+def test_the_session_skips_a_similar_find(fresh, monkeypatch):
+    turn_on(corner_pages_session=1)
+    _site(fresh)
+    corner.add_find("https://radio.example/yagi-old", "Build a 915 MHz Yagi", "w", ["s"])
+    monkeypatch.setattr(web, "web_search", lambda q: [{"title": "Yagi", "url": "https://radio.example/yagi", "snippet": ""}])
+    monkeypatch.setattr(corner_browse, "_llm", Brain(read={"interesting": True, "why": "Try it.", "next_link": 0,
+                                                           "summary": ["The driven element is a folded dipole matched to 50 ohms with a short stub."]}))
+    corner_browse.run_session()
+    assert len(corner.finds()) == 1
+
+
+def test_one_site_cannot_eat_the_day(fresh, monkeypatch):
+    turn_on(corner_pages_session=3, corner_site_daily_cap=2)
+    for i in range(2):
+        corner.log("page", f"https://radio.example/p{i}", "t", status="read")
+    assert corner.site_capped("https://radio.example/yagi") and not corner.site_capped("https://other.example/x")
+    _site(fresh)
+    monkeypatch.setattr(web, "web_search", lambda q: [{"title": "Yagi", "url": "https://radio.example/yagi", "snippet": ""}])
+    monkeypatch.setattr(corner_browse, "_llm", Brain(read={"interesting": False, "next_link": 0}))
+    corner_browse.run_session()
+    assert "https://radio.example/yagi" not in fresh["net"].urls()
+
+
+def test_the_save_instruction_asks_for_one_action_not_praise(fresh, monkeypatch):
+    brain = Brain(read={"interesting": False, "next_link": 0})
+    monkeypatch.setattr(corner_browse, "_llm", brain)
+    corner_browse.read_page({"url": "https://a.example/x", "title": "T", "text": "Some text.", "links": [], "images": []})
+    p = brain.prompts[-1]
+    assert "one concrete action" in p and "25 words" in p and "no praise words" in p
+
+
+# ================================================================ round 2 (2026-10-25 tuning review)
+def test_praise_is_dropped_from_the_why_in_code():
+    cw = corner_browse.clean_why
+    assert cw("Perfect! Try the new retry flag in the mesh project.") == "Try the new retry flag in the mesh project."
+    assert cw("This is a great find. Switch the server to the 64k model.") == "Switch the server to the 64k model."
+    assert cw("Perfectly fits the owner's interests.") == "" and cw("Great article, so good.") == "" and cw("") == ""
+    assert len(cw("Try " + "word " * 40).split()) <= 25
+
+
+def test_a_praise_only_why_is_not_saved_as_a_find(fresh, monkeypatch):
+    turn_on(corner_pages_session=1)
+    _site(fresh)
+    monkeypatch.setattr(web, "web_search", lambda q: [{"title": "Yagi", "url": "https://radio.example/yagi", "snippet": ""}])
+    monkeypatch.setattr(corner_browse, "_llm", Brain(read={"interesting": True, "why": "Perfectly fits the owner's interests.", "next_link": 0,
+                                                           "summary": ["The driven element is a folded dipole matched to 50 ohms with a short stub."]}))
+    corner_browse.run_session()
+    assert corner.finds() == []
+
+
+def test_old_block_domains_are_merged_into_the_blocked_sites():
+    import config
+    cfg = config.load()
+    cfg["corner_block_domains"] = ["old.example"]
+    cfg["corner_block_sites"] = ["new.example"]
+    config.save(cfg)
+    assert corner.settings()["corner_block_sites"] == ["new.example", "old.example"]
+    assert corner_browse.blocked_reason("https://a.old.example/x") and corner_browse.blocked_reason("https://new.example/")
+    corner.save_settings({"corner_block_sites": ["new.example", "old.example"]})        # one list saved from the page: the old key is emptied
+    assert corner.settings()["corner_block_domains"] == [] and corner.settings()["corner_block_sites"] == ["new.example", "old.example"]
+    corner.save_settings({"corner_block_sites": ["new.example"]})
+    assert corner_browse.blocked_reason("https://old.example/") is None
+
+
+def _ollama(show_caps, seen):
+    def h(req):
+        seen.append((req.url.path, json.loads(req.content or b"{}")))
+        if req.url.path == "/api/show":
+            return httpx.Response(200, json={"capabilities": show_caps})
+        return httpx.Response(200, text=json.dumps({"message": {"content": "A cat."}, "done": True}) + "\n")
+    return httpx.MockTransport(h)
+
+
+def test_looks_use_the_chat_model_when_it_can_see(fresh, monkeypatch):
+    seen = []
+    monkeypatch.setattr(corner_browse, "_vision_cap", {})
+    monkeypatch.setattr(corner_browse, "_ollama_transport", _ollama(["completion", "vision"], seen))
+    (corner.images_dir()).mkdir(parents=True, exist_ok=True)
+    (corner.images_dir() / "p.png").write_bytes(b"x")
+    assert corner_browse.look({"file": "p.png"}) == "A cat."
+    chat = [b for p, b in seen if p == "/api/chat"][0]
+    assert chat["model"] == corner_browse.MODEL and chat["keep_alive"] == corner_browse.KEEP_ALIVE
+    assert chat["options"]["num_ctx"] == corner_browse.CTX_OPTIONS["num_ctx"]
+    corner_browse.look({"file": "p.png"})
+    assert sum(1 for p, _ in seen if p == "/api/show") == 1                      # the check is cached
+
+
+def test_looks_fall_back_to_the_vision_model_when_the_chat_model_cannot_see(fresh, monkeypatch):
+    seen = []
+    monkeypatch.setattr(corner_browse, "_vision_cap", {})
+    monkeypatch.setattr(corner_browse, "_ollama_transport", _ollama(["completion", "tools"], seen))
+    (corner.images_dir()).mkdir(parents=True, exist_ok=True)
+    (corner.images_dir() / "p.png").write_bytes(b"x")
+    corner_browse.look({"file": "p.png"})
+    assert [b for p, b in seen if p == "/api/chat"][0]["model"] == corner_browse.VISION_MODEL
+
+
+def test_nonstop_looks_never_pass_the_day_cap(fresh, monkeypatch):
+    turn_on(corner_looks_day=3, corner_pictures=True)
+    corner.state["nonstop"] = True
+    monkeypatch.setattr(corner, "owner_recent", lambda s: False)
+    monkeypatch.setattr(corner, "at_pc", lambda s: False)
+    monkeypatch.setattr(corner, "looks_today", lambda: 2)
+    monkeypatch.setattr(corner_browse, "chat_sees", lambda: True)
+    with corner._db() as db:
+        for i in range(5):
+            db.execute("INSERT INTO pictures(at, file, fmt, width, height, bytes, src_url) VALUES(?,?,?,?,?,?,?)", (corner._iso(), f"f{i}", "png", 1, 1, 1, "u"))
+    seen = []
+    monkeypatch.setattr(corner_browse, "look", lambda p: (seen.append(p["file"]), "x")[1])
+    session = {"vision": False}
+    corner_browse.pictures_step([], session)
+    assert seen == ["f0"] and session["vision"] is False                         # one look left today; the chat model was not unloaded
+
+
+def test_one_embedding_model_is_used_everywhere(monkeypatch):
+    import corner_graph as cg
+    monkeypatch.setattr(cg, "_embed_pick", {})
+    tags = lambda names: httpx.MockTransport(lambda r: httpx.Response(200, json={"models": [{"name": n} for n in names]}))
+    assert cg.embed_model(tags(["nomic-embed-cpu:latest", "qwen3.5:9b"])) == "nomic-embed-cpu"
+    monkeypatch.setattr(cg, "_embed_pick", {})
+    assert cg.embed_model(tags(["nomic-embed-text:latest"])) == "nomic-embed-text"          # a friend's copy
+    monkeypatch.setattr(cg, "_embed_pick", {})
+    assert cg.embed_model(httpx.MockTransport(lambda r: httpx.Response(500))) == "nomic-embed-text" and "m" not in cg._embed_pick
+
+
+def test_the_graph_waits_for_the_database_to_start():
+    import asyncio
+    import corner_graph as cg
+    calls, naps = [], []
+    async def flaky():
+        calls.append(1)
+        if len(calls) < 4:
+            raise RuntimeError("Redis is loading the dataset in memory") if len(calls) % 2 else OSError("Connect call failed ('127.0.0.1', 6380)")
+        return "ok"
+    async def nap(s): naps.append(s)
+    assert asyncio.run(cg.retry_start(flaky, 60, nap)) == "ok" and naps == [1.0, 2.0, 4.0]
+    async def other(): raise ValueError("bad query")
+    with pytest.raises(ValueError):
+        asyncio.run(cg.retry_start(other, 60, nap))
+    async def never(): raise OSError("Connect call failed")
+    with pytest.raises(OSError):
+        asyncio.run(cg.retry_start(never, 0.5, nap))
+
+
+def test_vector_eye_sounds_are_sent_once_per_connection(monkeypatch):
+    import vector_pod
+    sent = []
+    monkeypatch.setattr(vector_pod.vector_dev, "eye_sounds", lambda ip, on: (sent.append((ip, on)), True)[1])
+    monkeypatch.setattr(vector_pod, "_sounds", {"key": None, "t": 0.0})
+    for _ in range(5):
+        vector_pod._apply_eye_sounds("1.2.3.4", True)
+    assert sent == [("1.2.3.4", True)]
+    vector_pod._apply_eye_sounds("1.2.3.4", False)                                # the choice changed
+    vector_pod._sounds["key"] = None                                              # he was unreachable and came back
+    vector_pod._apply_eye_sounds("1.2.3.4", False)
+    assert sent == [("1.2.3.4", True), ("1.2.3.4", False), ("1.2.3.4", False)]
+
+
+def test_vector_reachability_is_not_asked_every_minute(monkeypatch):
+    import vector_pod
+    asks = []
+    monkeypatch.setattr(vector_pod.vector_dev, "available", lambda ip: (asks.append(ip), True)[1])
+    monkeypatch.setattr(vector_pod, "_probe", {"ip": None, "t": 0.0})
+    assert all(vector_pod._reachable("1.2.3.4") for _ in range(10)) and len(asks) == 1

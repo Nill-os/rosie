@@ -110,7 +110,7 @@ const NAV = [['-', 'My day'], ['home', '⌂', 'Home'], ['inbox', '🔔', 'Inbox'
 // Pages that share one menu entry show a small tab bar at the top (owner 2026-10-24: "reorganize and combine anything"). Old links such as
 // #/paper or #/graph still open their page and light up the group's entry.
 const TABS = { brief: [['brief', 'Daily Brief'], ['paper', 'Morning Paper']], memory: [['memory', 'Memory'], ['graph', 'Memory graph']],
-  deck: [['deck', 'Agent Deck'], ['servers', 'Servers'], ['terminal', 'Terminal']] };
+  deck: [['deck', 'Agent Deck'], ['servers', 'Servers'], ['tokens', 'Tokens'], ['terminal', 'Terminal']] };
 const TAB_GROUP = {}; for (const [g, list] of Object.entries(TABS)) for (const [k] of list) TAB_GROUP[k] = g;
 function renderTabs(name) {
   const g = TAB_GROUP[name], box = $('#tabs');
@@ -1913,6 +1913,53 @@ VIEWS.servers = async () => {
   show(h('div', { class: 'muted' }, 'Checking your servers…'));
   draw(true);
 };
+// Tokens: Claude's own token use (app/tokens.py), so the owner and Claude can see whether the token-saving setup is working.
+let tokensPollT = null;
+const tkFmt = (n) => n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e4 ? Math.round(n / 1e3) + 'k' : n >= 1e3 ? (n / 1e3).toFixed(1) + 'k' : String(Math.round(n));
+VIEWS.tokens = async () => {
+  setHeader('Tokens', []);
+  const here = () => /^#\/tokens\/?$/.test(location.hash);
+  const FAM = [['opus', 'Opus (main)', 'var(--pur)'], ['sonnet', 'Sonnet', 'var(--acc)'], ['haiku', 'Haiku', 'var(--ok)'], ['other', 'Other', 'var(--mute)']];
+  const draw = async () => {
+    clearTimeout(tokensPollT);
+    if (!here()) return;
+    if (document.hidden) { tokensPollT = setTimeout(draw, 60000); return; }
+    let d;
+    try { d = await J('/api/tokens'); } catch (e) { if (here()) show(h('div', { class: 'card' }, 'Couldn\'t read the token report: ' + e.message)); return; }
+    if (!here()) return;
+    const big = (label, val, sub, bad) => h('div', { class: 'tk-big' + (bad ? ' bad' : '') }, h('div', { class: 'tk-n' }, val), h('div', { class: 'tk-l' }, label), sub ? h('div', { class: 'tk-s muted' }, sub) : null);
+    const goal = d.goals.token_goal_main_share;
+    const row = h('div', { class: 'tk-row' },
+      big('Output today', tkFmt(d.today.out), d.today.n + ' responses'),
+      big('Output, 7 days', tkFmt(d.week.out), 'Cache read ' + d.week.cache_ratio + '% of input'),
+      big('Main model share', d.week.main_share + '%', 'Goal ' + goal + '% or less', d.week.out >= 50000 && d.week.main_share > goal),
+      big('Kept out by local model', tkFmt(d.ledger.week), '7 days; ' + tkFmt(d.ledger.all) + ' in all'));
+    const flags = d.flags.length
+      ? h('div', { class: 'card tk-flags' }, h('h3', {}, 'What to do'), h('ul', {}, d.flags.map((f) => h('li', {}, f.text))))
+      : h('div', { class: 'card tk-ok' }, h('span', { class: 'pill' }, 'On track'), ' Token use is inside your goals.');
+    const max = Math.max(1, ...d.series.map((r) => r.out));
+    const bars = h('div', { class: 'tk-chart', role: 'img', 'aria-label': 'Output tokens per day for the last 14 days, by model' },
+      d.series.map((r) => h('div', { class: 'tk-col', title: r.day + ': ' + tkFmt(r.out) + ' output (' + FAM.filter(([k]) => r.fam[k]).map(([k, l]) => l + ' ' + tkFmt(r.fam[k])).join(', ') + ')' },
+        h('div', { class: 'tk-val' }, r.out ? tkFmt(r.out) : ''),
+        h('div', { class: 'tk-well' }, h('div', { class: 'tk-stack', style: `height:${Math.round(100 * r.out / max)}%` }, FAM.filter(([k]) => r.fam[k]).map(([k, , c]) => h('div', { style: `flex:${r.fam[k]};background:${c}` })))),
+        h('div', { class: 'tk-day' }, r.day.slice(8)))));
+    const legend = h('div', { class: 'tk-legend' }, FAM.map(([k, l, c]) => h('span', {}, h('i', { style: 'background:' + c }), l + ' ' + tkFmt(d.by_model[k] || 0))));
+    const top = d.top_sessions.length
+      ? h('table', { class: 'rs-tbl tk-tbl' }, h('thead', {}, h('tr', {}, ['Project', 'Session', 'Output', 'Sub-agent', 'Models'].map((t, i) => h('th', { class: i >= 2 && i < 4 ? 'num' : '' }, t)))),
+          h('tbody', {}, d.top_sessions.map((s) => h('tr', {}, h('td', {}, s.project.replace(/^-home-[^-]+-?/, '') || 'home'), h('td', {}, h('code', {}, s.session)), h('td', { class: 'num' }, tkFmt(s.out)), h('td', { class: 'num' }, tkFmt(s.sub_out)),
+            h('td', {}, Object.entries(s.models).map(([k, p]) => k + ' ' + p + '%').join(', '))))))
+      : h('div', { class: 'muted' }, 'No sessions in the last 7 days.');
+    const when = d.updated ? new Date(d.updated * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'never';
+    show(row, flags,
+      h('div', { class: 'card', style: 'margin-top:12px' }, h('h3', {}, 'Output tokens per day, last 14 days'), bars, legend),
+      h('div', { class: 'card', style: 'margin-top:12px' }, h('h3', {}, 'Top sessions this week'), h('div', { class: 'tk-scroll' }, top)),
+      h('div', { class: 'muted', style: 'font-size:var(--t0,13px);margin-top:10px' }, 'Report updated ' + when + (d.pending_bytes ? '; still reading older logs.' : '.') + ' Run python app/tokens.py to refresh now. Numbers only: Rosie never stores what was said.'));
+    tokensPollT = setTimeout(draw, 60000);
+  };
+  show(h('div', { class: 'muted' }, 'Reading the token report…'));
+  draw();
+};
+
 VIEWS.deck = async () => {
   setHeader('Agent Deck', []);
   show(h('iframe', { class: 'deckframe', src: '/deck/index.html', title: 'Agent Deck: what every agent is doing, with controls' }));

@@ -122,7 +122,8 @@ def _client(timeout=120):
 def embed(texts: list[str], query: bool = False) -> np.ndarray:
     """Unit-length vectors (nomic-embed-text on the CPU, with its search_query / search_document prefixes)."""
     pre = "search_query: " if query else "search_document: "
-    body = {"model": EMBED_MODEL, "input": [pre + str(t)[:6000] for t in texts], "truncate": True, "keep_alive": "30m", "options": {"num_gpu": 0}}
+    import corner_graph
+    body = {"model": corner_graph.embed_model(_transport), "input": [pre + str(t)[:6000] for t in texts], "truncate": True, "keep_alive": "30m", "options": {"num_gpu": 0}}
     try:
         with _client() as cl:
             r = cl.post(OLLAMA + "/api/embed", json=body)

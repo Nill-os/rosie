@@ -172,8 +172,12 @@ function cnSettings(st, again) {
   const qf = h('input', { type: 'time', value: s.corner_quiet_from, 'aria-label': 'Quiet hours start', style: 'flex:none;width:140px' });
   const qt = h('input', { type: 'time', value: s.corner_quiet_to, 'aria-label': 'Quiet hours end', style: 'flex:none;width:140px' });
   const interests = h('input', { value: (s.corner_interests || []).join(', '), 'aria-label': 'Interests' });
-  const block = h('textarea', { rows: 4, 'aria-label': 'Sites to never open', placeholder: 'one site per line, like example.com' });
-  block.value = (s.corner_block_domains || []).join('\n');
+  const sites = h('textarea', { rows: 5, 'aria-label': 'Blocked sites', placeholder: 'one per line: example.com or example.com/some/path' });
+  sites.value = (s.corner_block_sites || []).join('\n');
+  const focus = h('textarea', { rows: 5, 'aria-label': 'Focus topics', placeholder: 'one per line: topic | https://seed1 https://seed2' });
+  focus.value = (s.corner_focus || []).join('\n');
+  let share = Number.isInteger(s.corner_focus_share) ? s.corner_focus_share : 80;
+  const shareBtns = h('div', { class: 'form' }, [0, 50, 70, 80, 90, 100].map((n) => { const b = btn(n + '%', 'sm' + (n === share ? ' pur' : ''), () => { share = n; shareBtns.querySelectorAll('button').forEach((x) => x.classList.toggle('pur', x.textContent === n + '%')); }); b.setAttribute('aria-label', 'Focus share ' + n + ' percent'); return b; }));
   let pics = !!s.corner_pictures, nsq = !!s.corner_nonstop_quiet, bat = !!s.corner_on_battery;
   const pc = st.pc || {}, pcNow = [pc.mem_free_gb != null ? pc.mem_free_gb + ' GB memory free' : '', pc.cpu_temp != null ? 'CPU ' + Math.round(pc.cpu_temp) + ' °C' : '',
     pc.on_battery == null ? '' : pc.on_battery ? 'on battery' : 'plugged in', pc.idle_s == null ? '' : pc.at_pc ? 'you are using the PC' : 'you are away from the PC'].filter(Boolean).join(' · ');
@@ -201,10 +205,14 @@ function cnSettings(st, again) {
     num('corner_storage_mb', 'Picture storage (MB)', 'Oldest pictures go first when it is full. Starred ones stay. She also stops saving pictures when the disk has less than 5 GB free.', 50, 10240),
     num('corner_changes_day', 'Corner changes per day', 'How many changes Rosie may make to her own space each day.', 0, 100),
     h('dt', {}, 'Interests'), h('dd', {}, h('div', { class: 'form' }, interests), h('div', { class: 'muted cn-meta' }, 'Comma separated. Rosie also follows her own curiosity.')),
-    h('dt', {}, 'Never open'), h('dd', {}, block, h('div', { class: 'muted cn-meta' }, 'Added to the built-in block list (adult, gambling, piracy and malware sites, and sites that need a login).')));
+    h('dt', {}, 'Blocked sites'), h('dd', {}, sites, h('div', { class: 'muted cn-meta' }, 'Sites she never opens, on top of the built-in list (adult, gambling, piracy, malware, and sites that need a login). A site also blocks its subdomains; add a path to block only that part, like example.com/blog.')),
+    h('dt', {}, 'Focus topics'), h('dd', {}, focus, h('div', { class: 'muted cn-meta' }, 'One topic per line, optionally with pages to read first: topic | https://seed1 https://seed2. With none, she follows her interests.')),
+    h('dt', {}, 'Focus share'), h('dd', {}, shareBtns, h('div', { class: 'muted cn-meta' }, 'How often she starts from a focus topic; the rest is free curiosity.')),
+    num('corner_site_daily_cap', 'Pages per site per day', 'So one site can\'t eat the day.', 1, 1000));
   const save = async () => {
     const body = { corner_quiet_from: qf.value, corner_quiet_to: qt.value, corner_pictures: pics, corner_nonstop_quiet: nsq, corner_on_battery: bat,
-      corner_interests: interests.value.split(',').map((x) => x.trim()).filter(Boolean), corner_block_domains: block.value.split(/\s+/).map((x) => x.trim()).filter(Boolean) };
+      corner_interests: interests.value.split(',').map((x) => x.trim()).filter(Boolean),
+      corner_block_sites: sites.value.split('\n').map((x) => x.trim()).filter(Boolean), corner_focus: focus.value.split('\n').map((x) => x.trim()).filter(Boolean), corner_focus_share: share };
     form.querySelectorAll('input[type=number]').forEach((i) => { body[i.dataset.k] = +i.value; });
     try { await post('/api/corner/settings', body); toast('Saved'); again(); } catch (e) { toast(e.message, 1); }
   };

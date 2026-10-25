@@ -47,6 +47,13 @@ def main(event: str, data: dict) -> dict | None:
     if event == "SessionStart":
         agentboard.checkin(cwd=cwd, task="(new session)" if data.get("source") == "startup" else None)
         text = agentboard.summary() + f"\nYou are {agentboard.me()} on this board (rosie-board MCP: board, post, claim, release)."
+        try:                                                   # the token report's one line (tokens.py): from its cache only, never a scan
+            import tokens
+            line = tokens.hook_line()
+            if line:
+                text += "\n" + line
+        except Exception:
+            pass
     elif event == "UserPromptSubmit":
         prompt = data.get("prompt") or ""
         # A finished background job, a note from another session or a hook's own feedback also arrives as a "prompt". It belongs to

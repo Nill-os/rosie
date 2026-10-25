@@ -45,23 +45,60 @@ DEFAULTS = {
     "corner_pc_away_min": 5,          # minutes with no key press or mouse move before the owner counts as away from the PC
     "corner_max_temp": 90,            # she pauses while the CPU is this hot (°C) and goes on 10 °C cooler; 0 = never
     "corner_on_battery": False,       # read while a laptop runs on its battery
-    "corner_block_domains": [],       # the owner's own additions to the built-in block list
+    "corner_block_domains": [],       # OLD key, still read (merged into corner_block_sites); the owner's own additions to the built-in block list
     "corner_nonstop": False,          # nonstop mode: the owner pressed Start; she reads until they press Stop (survives a restart)
     "corner_nonstop_since": "",
     "corner_nonstop_quiet": False,    # quiet hours also pause nonstop mode (off by default; the paper window always pauses)
+    # Noise sites (owner 2026-10-25: "tune her to block out the noise sites"): a site blocks its subdomains; "site.com/some/path" blocks only that path.
+    "corner_block_sites": ["giphy.com", "tenor.com", "eventbrite.com", "systeme.io", "pinterest.com", "pinimg.com", "linktr.ee", "bit.ly"],
+    # Focus topics (owner 2026-10-25: "make her look at things that will help me 80% of the time"): "topic" or "topic | https://seed1 https://seed2".
+    # Empty = no focus, she follows her interests as before.
+    "corner_focus": [],
+    "corner_focus_share": 80,         # percent of her searches that start from a focus topic (when there are any); the rest is free curiosity
+    "corner_site_daily_cap": 40,      # pages from one site per day, so one site can't eat the day
     "corner_interests": ["science", "technology", "making things", "nature", "history", "local news"],
 }
 INT_LIMITS = {"corner_idle_min": (1, 240), "corner_rest_min": (1, 720), "corner_pages_session": (1, 100), "corner_pages_hour": (1, 1000),
               "corner_pages_day": (1, 10000), "corner_site_gap_s": (5, 600), "corner_images_day": (0, 100), "corner_looks_day": (0, 50),
               "corner_storage_mb": (50, 10240), "corner_changes_day": (0, 100), "corner_github_pct": (0, 100),
-              "corner_graph_wait": (0, 5000), "corner_pc_free_gb": (0, 64), "corner_pc_away_min": (1, 120), "corner_max_temp": (0, 105)}
+              "corner_graph_wait": (0, 5000), "corner_site_daily_cap": (1, 1000), "corner_pc_free_gb": (0, 64), "corner_pc_away_min": (1, 120), "corner_max_temp": (0, 105)}
 TIME_RE = re.compile(r"([01]\d|2[0-3]):[0-5]\d")
 DOMAIN_RE = re.compile(r"(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}")
+SITE_RE = re.compile(r"(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}(/[\w.~%!$&'()*+,;=:@/-]{0,200})?")
+
+
+def parse_focus(entry: str) -> tuple[str, list[str]]:
+    """"topic" or "topic | https://seed1 https://seed2" -> (topic, [http(s) seeds only, at most 5])."""
+    topic, _, rest = str(entry).partition("|")
+    seeds = [u for u in rest.split() if re.fullmatch(r"https?://[^\s<>\"']{4,500}", u)]
+    return re.sub(r"\s+", " ", topic).strip(), seeds[:5]
+
+
+def focus_topics(s: dict | None = None) -> list[tuple[str, list[str]]]:
+    return [t for t in (parse_focus(x) for x in (s or settings())["corner_focus"]) if t[0]]
+
+
+def site_blocked(url: str, sites=None) -> bool:
+    """True when `url` is on one of the owner's blocked sites (corner_block_sites): a site covers its subdomains, "site.com/path" only that path."""
+    p = urlsplit(url)
+    host = (p.hostname or "").lower().strip(".")
+    path = (p.path or "/").lower()
+    for e in (settings()["corner_block_sites"] if sites is None else sites):
+        d, _, rest = str(e).lower().strip().partition("/")
+        if not d or not (host == d or host.endswith("." + d)):
+            continue
+        rest = "/" + rest.strip("/") if rest.strip("/") else ""
+        if not rest or path == rest or path.startswith(rest + "/"):
+            return True
+    return False
 
 
 def settings() -> dict:
     cfg = config.load()
-    return {k: cfg.get(k, v) for k, v in DEFAULTS.items()}
+    out = {k: cfg.get(k, v) for k, v in DEFAULTS.items()}
+    old = [d for d in out["corner_block_domains"] if isinstance(d, str)]            # the old "Never open" list lives on in the blocked sites
+    out["corner_block_sites"] = list(dict.fromkeys(list(out["corner_block_sites"]) + old))
+    return out
 
 
 def save_settings(body: dict) -> dict:
@@ -92,6 +129,27 @@ def save_settings(body: dict) -> dict:
             bad = [d for d in v if not DOMAIN_RE.fullmatch(d)]
             if bad:
                 raise ValueError(f"Not a site name: {bad[0][:60]}")
+        elif k == "corner_block_sites":
+            if not (isinstance(v, list) and len(v) <= 300 and all(isinstance(d, str) for d in v)):
+                raise ValueError("Blocked sites must be a list of site names")
+            v = [d.strip().lower().removeprefix("https://").removeprefix("http://").strip("/ ") for d in v if d.strip()]
+            bad = [d for d in v if not SITE_RE.fullmatch(d)]
+            if bad:
+                raise ValueError(f"Not a site name or site/path: {bad[0][:60]}")
+            cfg["corner_block_domains"] = []                   # one list: what was in the old key is now part of what the owner saved
+        elif k == "corner_focus":
+            if not (isinstance(v, list) and len(v) <= 30 and all(isinstance(x, str) and 1 <= len(x.strip()) <= 600 for x in v)):
+                raise ValueError("Focus topics must be up to 30 lines of text")
+            v = [x.strip() for x in v]
+            for x in v:
+                topic, seeds = parse_focus(x)
+                if not topic or len(topic) > 60 or not re.fullmatch(r"[\w\s'&+.,:/-]+", topic):
+                    raise ValueError(f"Not a short topic: {x[:60]}")
+                if "|" in x and len(seeds) != len(x.split("|", 1)[1].split()):
+                    raise ValueError("Seed addresses must start with http:// or https://")
+        elif k == "corner_focus_share":
+            if not (isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= 100):
+                raise ValueError("corner_focus_share must be a number from 0 to 100")
         elif k == "corner_interests":
             if not (isinstance(v, list) and 1 <= len(v) <= 20 and all(isinstance(x, str) and 1 <= len(x.strip()) <= 40 for x in v)):
                 raise ValueError("Interests must be 1 to 20 short topics")
@@ -266,6 +324,42 @@ def recent_searches(seconds: float) -> list[str]:
     since = _iso(_now() - dt.timedelta(seconds=seconds))
     with _db() as db:
         return [r[0] for r in db.execute("SELECT title FROM trail WHERE kind='search' AND at >= ?", (since,))]
+
+
+def _canon(url: str) -> str:
+    """An address without #fragment and trailing slash, for telling repeats apart."""
+    return str(url or "").split("#", 1)[0].rstrip("/").lower()
+
+
+def _tokens(title: str) -> set:
+    return set(re.findall(r"[a-z0-9]+", str(title or "").lower()))
+
+
+def similar_find(url: str, title: str, days: int = 14) -> int | None:
+    """The id of a find from the last `days` days that is the same page (same address ignoring #fragment and trailing slash) or has a very
+    similar title (token overlap >= 0.8) on the same site; None when it is new."""
+    since = _iso(_now() - dt.timedelta(days=days))
+    src, c, t = source_of(url), _canon(url), _tokens(title)
+    with _db() as db:
+        for r in db.execute("SELECT id, url, title, source FROM finds WHERE at >= ? ORDER BY id DESC", (since,)):
+            if _canon(r["url"]) == c:
+                return r["id"]
+            u = _tokens(r["title"])
+            if r["source"] == src and t and u and len(t & u) / min(len(t), len(u)) >= 0.8:
+                return r["id"]
+    return None
+
+
+def site_pages_today(url: str) -> int:
+    """Pages read today from the site of `url` (the trail)."""
+    start = _iso(_now().replace(hour=0, minute=0, second=0, microsecond=0))
+    src = source_of(url)
+    with _db() as db:
+        return sum(1 for r in db.execute("SELECT url FROM trail WHERE kind='page' AND status='read' AND at >= ?", (start,)) if source_of(r[0]) == src)
+
+
+def site_capped(url: str) -> bool:
+    return site_pages_today(url) >= settings()["corner_site_daily_cap"]
 
 
 def find_id(url: str) -> int | None:

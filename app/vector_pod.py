@@ -1293,17 +1293,49 @@ def _check_heat(ip: str):
     _hot = t >= HOT_C or (_hot and t > COOL_C)
 
 
+_sounds = {"key": None, "t": 0.0}      # what was last sent to him: (ip, on), and when
+SOUNDS_RESEND_S = 1800                 # his restarts forget runtime values without a gap we can see: send them again this often anyway
+
+
+def _apply_eye_sounds(ip: str, on: bool):
+    """Send the idle eye-sound switches once per connection (and again when the choice changes, after he was unreachable, or every
+    SOUNDS_RESEND_S), not every minute: that was 3 requests x 1,440 a day (2026-10-25 tuning review)."""
+    now = time.time()
+    if _sounds["key"] == (ip, on) and now - _sounds["t"] < SOUNDS_RESEND_S:
+        return
+    if vector_dev.eye_sounds(ip, on):
+        _sounds.update(key=(ip, on), t=now)
+
+
+_probe = {"ip": None, "t": 0.0}
+PROBE_EVERY_S = 600
+
+
+def _reachable(ip: str) -> bool:
+    """Is his developer page there? A yes holds for PROBE_EVERY_S (the check was one request a minute, 1,440 a day); a no is asked every minute."""
+    if not ip:
+        return False
+    now = time.time()
+    if _probe["ip"] == ip and now - _probe["t"] < PROBE_EVERY_S:
+        return True
+    ok = vector_dev.available(ip)
+    _probe.update(ip=ip if ok else None, t=now)
+    return ok
+
+
 def _keep_looks(srv):
     """WireOS live settings that his restarts forget: Rosie's cyan to purple eyes, and no idle eye sounds while he is
     quiet when idle. Checked every minute while this server runs."""
     global _eyes
     while _server is srv:
+        reach = False
         try:
             cfg = config.load()
             robots = cfg.get("vector_robots") or []
             ip = robots[0].get("ip") if robots else ""
-            if ip and vector_dev.available(ip):
-                vector_dev.eye_sounds(ip, not cfg.get("vector_quiet_idle"))
+            reach = _reachable(ip)
+            if reach:
+                _apply_eye_sounds(ip, not cfg.get("vector_quiet_idle"))
                 _check_heat(ip)
                 want = (cfg.get("vector_eyes") or "rosie") == "rosie"
                 bot = robot()
@@ -1316,6 +1348,8 @@ def _keep_looks(srv):
                     _eyes = None
         except Exception as e:
             status["error"] = f"Looks: {type(e).__name__}: {e}"
+        if not reach:
+            _sounds["key"] = None                # he was not reachable: send the switches again when he is back
         for _ in range(60):
             if _server is not srv:
                 break

@@ -554,6 +554,13 @@ class ServerLabel(BaseModel):
     label: str = ""
 
 
+@router.get("/api/tokens")
+def tokens_get():
+    """The Claude token report (tokens.py), from its cache; the hourly job and `python app/tokens.py` refresh it. Only reads."""
+    import tokens
+    return tokens.summary()
+
+
 @router.get("/api/servers")
 def servers_get():
     import servers

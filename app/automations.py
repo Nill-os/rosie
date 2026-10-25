@@ -326,6 +326,16 @@ def job_security_watch(now, cfg):
 
 
 JOBS.insert(JOBS.index(job_mail), job_security_watch)
+
+
+def job_tokens(now, cfg):
+    """Hourly: refresh the Claude token report (capped, in its own thread) and, once a day while a flag is active, tell the Inbox (tokens.py).
+    Owner 2026-10-25: "build a token report into rosie and have you look at it every so often to make sure we are doing good on tokens"."""
+    import tokens
+    tokens.job(now, cfg, add=inbox.add)
+
+
+JOBS.insert(JOBS.index(job_mail), job_tokens)
 JOBS.insert(0, job_model)                      # first: every other job's model calls want the owner's pick
 
 

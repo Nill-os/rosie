@@ -43,6 +43,7 @@ HOST = os.environ.get("ROSIE_GRAPH_HOST", "127.0.0.1")
 PORT = int(os.environ.get("ROSIE_GRAPH_PORT", "6380"))
 OLLAMA = "http://127.0.0.1:11434"
 EMBED_MODEL = "nomic-embed-text"
+EMBED_CPU = "nomic-embed-cpu"        # the same nomic-embed-text weights with num_gpu 0 baked in (made on the owner's PC); used when installed
 EMBED_DIM = 768
 MAX_PREDICT = 2048                   # per Graphiti call; the longest real answer seen is ~1000 tokens (a note about many finds)
 RUNAWAY_SPACES = 100                 # this many blanks in a row: the answer has turned into empty space (JSON never indents that deep)
@@ -63,6 +64,7 @@ SKIPPED = "skipped:"                 # error prefix of a piece the owner left ou
 ADD_TIMEOUT_S = 1800
 SEARCH_TIMEOUT_S = 25
 CONNECT_TIMEOUT_S = 10               # connecting (and building indexes) gives up after this; a hung database never holds things up longer
+START_WAIT_S = 60                    # after a restart FalkorDB first says "loading the dataset" or refuses connections: wait up to this long
 _ollama_transport = None             # tests put an httpx.MockTransport here; None = the local Ollama
 
 SCHEMA = """
@@ -165,9 +167,29 @@ async def ollama_chat(messages: list[dict], fmt, predict: int = MAX_PREDICT, tem
         return text
 
 
+_embed_pick: dict = {}
+
+
+def embed_model(transport=None) -> str:
+    """The ONE embedding model every part of Rosie uses (graph, memory): nomic-embed-cpu when Ollama has it, else nomic-embed-text, so
+    Ollama loads one embedding model, not two. Only a real answer from Ollama is remembered."""
+    if "m" in _embed_pick:
+        return _embed_pick["m"]
+    try:
+        with httpx.Client(transport=transport, timeout=httpx.Timeout(10, connect=3)) as c:
+            r = c.get(OLLAMA + "/api/tags")
+        names = {str(m.get("name", "")) for m in (r.json().get("models") or [])} if r.status_code == 200 else None
+    except (httpx.HTTPError, ValueError, AttributeError):
+        names = None
+    if names is None:
+        return EMBED_MODEL
+    _embed_pick["m"] = EMBED_CPU if EMBED_CPU + ":latest" in names or EMBED_CPU in names else EMBED_MODEL
+    return _embed_pick["m"]
+
+
 async def ollama_embed(texts: list[str]) -> list[list[float]]:
     """Embeddings on the CPU (num_gpu 0), so they never push her chat model off the GPU."""
-    body = {"model": EMBED_MODEL, "input": [str(t)[:8000] for t in texts], "truncate": True, "keep_alive": "30m", "options": {"num_gpu": 0}}
+    body = {"model": embed_model(_ollama_transport), "input": [str(t)[:8000] for t in texts], "truncate": True, "keep_alive": "30m", "options": {"num_gpu": 0}}
     async with httpx.AsyncClient(transport=_ollama_transport, timeout=httpx.Timeout(120, connect=5)) as c:
         r = await c.post(OLLAMA + "/api/embed", json=body)
         r.raise_for_status()
@@ -276,10 +298,31 @@ def make_graph(password: str):
         client = FalkorDB(host=HOST, port=PORT, password=password, socket_connect_timeout=5, socket_timeout=60)
         driver = FalkorDriver(falkor_db=client, database=GROUP)
         g = Graphiti(graph_driver=driver, llm_client=ns.OllamaLLM(), embedder=ns.OllamaEmbedder(), cross_encoder=ns.NoRerank(), max_coroutines=1)
-        await driver.execute_query("RETURN 1")
-        await g.build_indices_and_constraints()
+        await retry_start(lambda: driver.execute_query("RETURN 1"))
+        await retry_start(g.build_indices_and_constraints)
         return g
-    return _run(build(), CONNECT_TIMEOUT_S)
+    return _run(build(), CONNECT_TIMEOUT_S + START_WAIT_S)
+
+
+def _starting(e: Exception) -> bool:
+    """The database is only starting up: Redis still loading its dataset, or not accepting connections yet."""
+    t = str(e)
+    return "loading the dataset" in t or "Connect call failed" in t or isinstance(e, ConnectionRefusedError)
+
+
+async def retry_start(call, wait_s: float | None = None, sleep=None):
+    """Await call() again, with growing pauses (1, 2, 4, 8, then 10 s), while the database is still starting; other errors and a start
+    that takes longer than wait_s are raised."""
+    sleep = sleep or asyncio.sleep
+    end, pause = time.monotonic() + (START_WAIT_S if wait_s is None else wait_s), 1.0
+    while True:
+        try:
+            return await call()
+        except Exception as e:
+            if not _starting(e) or time.monotonic() + pause > end:
+                raise
+        await sleep(pause)
+        pause = min(pause * 2, 10.0)
 
 
 def _not_answering(e: Exception) -> str:

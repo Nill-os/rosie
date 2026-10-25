@@ -492,3 +492,21 @@ html[data-theme="aurora"] .bar{border-radius:999px}html[data-theme="aurora"] .ba
 html[data-theme="aurora"] .pp-wrap,html[data-theme="aurora"] .gstage{border-radius:16px}
 @media (prefers-reduced-motion:reduce){html[data-theme="aurora"] *,html[data-theme="aurora"] *::before,html[data-theme="aurora"] *::after{transition:none!important;animation:none!important}
   html[data-theme="aurora"] .btn:hover,html[data-theme="aurora"] .tabs .tab:hover{transform:none}}
+
+/* Tokens page (app/tokens.py): one row of big numbers, flags, a 14-day stacked bar chart, top sessions. Theme tokens only. */
+.tk-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:12px}
+.tk-big{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px;min-width:0}
+.tk-n{font-size:calc(28px*var(--ts,1));font-weight:700;line-height:1.1;font-variant-numeric:tabular-nums;color:var(--acc)}
+.tk-big.bad .tk-n{color:var(--bad)}
+.tk-l{font-size:calc(13px*var(--ts,1));margin-top:4px}.tk-s{font-size:calc(12px*var(--ts,1));margin-top:2px;font-variant-numeric:tabular-nums}
+.tk-flags{border-color:var(--warn)}.tk-flags ul{margin:0;padding-left:20px}.tk-flags li{margin:4px 0;overflow-wrap:anywhere}
+.tk-chart{display:flex;align-items:flex-end;gap:4px;height:190px}
+.tk-col{flex:1;min-width:0;height:100%;display:flex;flex-direction:column;align-items:stretch}
+.tk-well{flex:1;min-height:0;display:flex;flex-direction:column;justify-content:flex-end}
+.tk-stack{display:flex;flex-direction:column-reverse;min-height:0;border-radius:4px 4px 0 0;overflow:hidden}
+.tk-val{font-size:calc(10px*var(--ts,1));text-align:center;color:var(--mute);font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;line-height:1.6}
+.tk-day{font-size:calc(11px*var(--ts,1));text-align:center;color:var(--mute);font-variant-numeric:tabular-nums;margin-top:3px}
+.tk-legend{display:flex;flex-wrap:wrap;gap:6px 16px;margin-top:12px;font-size:calc(12px*var(--ts,1));font-variant-numeric:tabular-nums}
+.tk-legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px}
+.tk-scroll{overflow-x:auto}.tk-tbl th,.tk-tbl td{padding:6px 8px;text-align:left;white-space:nowrap}.tk-tbl .num{text-align:right}
+@media(max-width:700px){.tk-val{display:none}.tk-chart{height:150px;gap:2px}}

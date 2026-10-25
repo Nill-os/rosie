@@ -5,6 +5,10 @@ from pathlib import Path
 PATH = Path(__file__).resolve().parent.parent / "data" / "config.json"
 DEFAULTS = {
     "chat_model": "qwen3.5:9b",      # the local Ollama model Rosie thinks with (Settings > AI model); see models.py
+    "token_report_on": True,         # an hourly Claude token report (tokens.py) and one Inbox item a day while a flag is active
+    "token_goal_main_share": 50,     # the main (top) model may write at most this % of Claude's output tokens over 7 days
+    "token_goal_cache_read_ratio": 80,   # at least this % of Claude's input should come from the cache over 7 days
+    "token_spike_factor": 2.0,       # today's output above this many times the daily average is flagged
     "model_scout": True,             # Rosie looks for new abliterated models, tests the best one at night and flags a better one (model_scout.py)
     "security_watch": True,          # a nightly check for known and exploited security holes in Rosie, this PC and the home server (security_watch.py)
     "security_autopatch": True,      # ...and she installs the safe fixes herself: her own packages (tested) and the containers' security updates

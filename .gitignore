@@ -14,3 +14,4 @@ android/app/src/main/assets/model-en-us/
 *.apk
 # local-only extras
 vendor/gi/
+.cgcignore
