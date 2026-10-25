@@ -18,7 +18,7 @@ FEED = """BEGIN:VCALENDAR\r
 BEGIN:VEVENT\r
 UID:event-assignment-101\r
 DTSTART:20261026T065900Z\r
-SUMMARY:Mid Term exam [ENVS&101 Environmental Science]\r
+SUMMARY:Mid Term exam [BIOL&100 Survey of Biology]\r
 URL:https://school.instructure.com/courses/1/assignments/101\r
 END:VEVENT\r
 BEGIN:VEVENT\r
@@ -30,7 +30,7 @@ END:VEVENT\r
 BEGIN:VEVENT\r
 UID:event-old\r
 DTSTART:20261001T120000Z\r
-SUMMARY:Old quiz [ENVS&101 Environmental Science]\r
+SUMMARY:Old quiz [BIOL&100 Survey of Biology]\r
 END:VEVENT\r
 END:VCALENDAR\r
 """
@@ -72,7 +72,7 @@ class FakeCal:
 def test_the_feed_parses_to_local_dates_courses_and_unescaped_titles():
     items = canvas.parse(FEED, tz=dt.timezone(dt.timedelta(hours=-7)))
     first = items[0]
-    assert first["start"] == "2026-10-25" and first["course"] == "ENVS&101 Environmental Science" and first["title"] == "Mid Term exam"   # 06:59 UTC is the evening before
+    assert first["start"] == "2026-10-25" and first["course"] == "BIOL&100 Survey of Biology" and first["title"] == "Mid Term exam"   # 06:59 UTC is the evening before
     second = items[1]
     assert second["start"] == "2026-10-30" and second["title"] == "Annotated Bibliography, draft" and second["course"].startswith("ENGL&235")
 
@@ -82,7 +82,7 @@ def test_a_sync_adds_upcoming_dates_once_and_updates_a_changed_one(tmp_path):
     r = canvas.sync(svc=cal, calendar_id="primary", today=dt.date(2026, 10, 20), ics=FEED)
     assert (r["added"], r["updated"], r["upcoming"]) == (2, 0, 2) and not r["error"]
     body = cal.items["event-assignment-101"]
-    assert body["summary"] == "ENVS&101: Mid Term exam" and body["start"]["date"] and body["reminders"]["overrides"][0]["minutes"] == 15 * 60
+    assert body["summary"] == "BIOL&100: Mid Term exam" and body["start"]["date"] and body["reminders"]["overrides"][0]["minutes"] == 15 * 60
     assert "event-old" not in cal.items                                    # the past is left alone
     again = canvas.sync(svc=cal, calendar_id="primary", today=dt.date(2026, 10, 20), ics=FEED)
     assert (again["added"], again["updated"]) == (0, 0)                     # a rerun adds no copies

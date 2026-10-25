@@ -932,7 +932,7 @@ VIEWS.study = async (arg) => {
       btn('Keep', 'sm ok', () => act(() => post(`/api/study/cards/${x.id}/keep`), 'Kept')), btn('Edit', 'sm dim', () => studyEdit(x, again)),
       btn('Drop', 'sm dim', () => act(() => del('/api/study/cards/' + x.id))))))) : null;
   // add a course, a deck, or import
-  const cname = h('input', { placeholder: 'New course, like ENVS 101', 'aria-label': 'Course name' });
+  const cname = h('input', { placeholder: 'New course, like BIOL 100', 'aria-label': 'Course name' });
   const dcourse = h('select', { 'aria-label': 'Course' }, d.courses.map((c) => h('option', { value: c.id }, c.name)));
   const dname = h('input', { placeholder: 'New deck, like Ecology', 'aria-label': 'Deck name' }), dch = h('input', { placeholder: 'chapters (optional)', 'aria-label': 'Chapters', style: 'max-width:160px' });
   const icourse = h('input', { placeholder: 'Course for the imported cards', 'aria-label': 'Course for import' });

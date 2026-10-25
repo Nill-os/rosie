@@ -1,98 +1,123 @@
 ---
 name: three-pass-audit
-description: "Audit loop that signs off only after three clean passes in a row (fresh parallel reviewers, verified findings, fixes between passes, hard cap of 8). Use for a full audit or a ready-to-order or ready-to-ship check of hardware, firmware or code, or /three-pass-audit."
+description: "Audit loop that signs off only after three clean passes in a row: an approved risk list, a failure test per risk, each fix gated by its own test and diff review, focused passes, and a final full-scope pass (hard cap of 8). Use for a full audit or a ready-to-order or ready-to-ship check of hardware, firmware or code, or /three-pass-audit."
 ---
 
 # Three-pass audit
 
-The user's rule: **audit, fix, re-audit - and only call it good after 3 consecutive clean passes.** A pass that finds
-a real problem resets the count to 0, even if the passes before it were clean. (On one PCB this caught a backwards microSD
-socket in pass 4 and a USB-C plug blocked by the board edge in pass 5, after two "clean" passes - which is exactly why the
-rule exists.)
+The user's rule: **audit, fix, re-audit, and only call it good after 3 consecutive clean passes.** A pass with a verified
+real finding resets the count to 0. (On one PCB this caught a backwards microSD socket in pass 4 and a USB-C plug blocked by
+the board edge in pass 5, after two "clean" passes. That is why the rule exists.)
 
-Claude Code runs this with its Agent tool. Agent Zero: run one `call_subordinate` (`reset: true`) per reviewer. Rosie: offer
-to hand the audit to Agent Zero or Claude Code instead of running it yourself.
+The 2026-10-25 rework keeps that rule and makes it converge. What went wrong before: fresh reviewers were told to "find
+anything" in the whole area every pass, so a big surface (a launcher's error paths) yielded new old problems forever; fixes
+went straight into the next full pass, so their regressions showed up a whole pass later; and hardening ideas were filed as
+SHOULD-FIX and reset the streak.
 
-## 1. Set up (once)
+Claude Code runs this with its Agent tool. Agent Zero: one `call_subordinate` (`reset: true`) per reviewer. Rosie: offer to
+hand the audit to Agent Zero or Claude Code instead of running it yourself.
 
-1. Run the project's own checks first (audit script, DRC, tests, build). They must pass before a reviewer pass starts.
-2. Write a **brief** file in the scratch/job dir (not the repo) that every reviewer reads first:
-   - what the product is, the files and tools (paths, how to run the checks), local datasheets
-   - conventions already established (e.g. JLC CPL bottom-side rotation = 180 - angle)
-   - **ACCEPTED items**: known trade-offs, numbered, each with the reason. Reviewers must not re-report them unless they
-     prove the item is wrong or worse than stated.
-   - **Changes since the last review** (updated every pass) - reviewers look at these closely.
-   - Severity definitions and the report format (below).
-   - "READ-ONLY: never modify the repo; scratch files only under <dir>; no git writes."
+## 1. Set up (once, before any reviewer)
 
-Severities:
-- **BLOCKER** - won't work, can't be built/assembled as ordered, or something gets damaged.
-- **SHOULD-FIX** - a real functional, assembly or reliability risk worth changing before ordering/shipping.
-- **NOTE** - minor, cosmetic, informational.
-Every finding: severity, exact location (refs/nets/coordinates/file:line), evidence (measured numbers, datasheet
-section, tool output), concrete fix. Plus a "checked and OK" list as one comma-separated line. Under ~400 words; no
-restating the brief, no quoted file contents beyond the few lines that prove a finding.
+1. Run the project's own checks (tests, audit script, DRC, build). They must pass first.
+2. **Risk list.** Write the concrete ways this product can fail the user, per area: one line each, as a failure scenario
+   ("an update leaves her with no working Rosie", "a second launcher rolls back a good update", "private data reaches the
+   public repo", "the USB-C plug can't seat"). Mark each risk with how it gets checked: **scripted** (a test or tool can
+   prove it) or **review** (needs judgment). Show the list to the user and get it approved. The list is the scope.
+3. **A failure test per scripted risk.** Before pass 1, write tests that inject the failure: a crash at each step of an
+   update, a second instance, a slow start, a locked file, a planted private string, a misspelled marker, a DRC rule, a
+   connector clearance measured from the footprint. Risks covered by a passing failure test are re-checked by running
+   the test, not by a reviewer reading code. A cheap model (`model: "sonnet"`) writes them; you check that each test fails
+   when the protection is removed.
+4. **Run where it really runs.** Platform-specific risks (Windows paths, a phone, a board) need a real run: a CI job on
+   that platform, the target device, or a bring-up checklist. Ask the user before touching their or someone else's device.
+   Check that the platform run really includes those tests: a test file left out of a public export or skipped by a marker
+   never runs there. Never trust a "covered on CI" comment or a reviewer's claim; find the run or the job config that
+   proves it. (2026-10-25: the Windows junction and lock tests were excluded from the public copy, so Windows CI never ran
+   them, while one reviewer said it did.)
+5. Write the **brief** in the scratch/job dir (not the repo). Every reviewer reads it first:
+   - the product, files, tools and how to run the checks; local datasheets
+   - the approved risk list, with which failure test covers which risk
+   - **ACCEPTED items**: known trade-offs, numbered, each with its reason. Reviewers must not re-report them without new
+     proof.
+   - **Changes since the last pass** (updated every pass)
+   - the severity bar and report format below
+   - "READ-ONLY: never modify the repo; scratch files only under <dir>; no git writes; nice 19, at most 4 test workers."
 
-## Save tokens (always)
+## Severity bar (strict)
 
-The streak rule never changes: every pass is a real, full-scope review. Spend less per pass instead:
-- **Rosie reads, Claude judges.** Reviewers and the verify step read big files through the local model first: `lm outline FILE`,
-  then Read only the needed range; `lm sum`/`lm ask` for logs, test output and long diffs (token-saver skill). Never Read a
-  whole file over ~300 lines just to look around.
-- **3-4 reviewers per pass**, one Agent call each, split by domain so they don't overlap. Give each the brief's path, not the
-  brief pasted into the prompt.
-- **Cheaper model after pass 1.** Pass 1 runs on the default model. Later passes may run reviewers with `model: "sonnet"`; a
-  reviewer whose domain had a BLOCKER fixed since the last pass stays on the default model.
-- **Scripted checks only when something changed.** Rerun the test suite/DRC/build only if code or design changed since its
-  last green run; otherwise reuse that result and say so in the pass table.
-- **Verify cheaply.** Check a finding with `grep -n`/`sed -n` on the cited lines or one targeted command, not a full re-read.
-- **Short updates.** One line to the user per pass (result + streak); the full table only at the end.
+- **BLOCKER**: it won't work, can't be built or ordered as is, damages something, or leaks private data or a secret.
+- **SHOULD-FIX**: a concrete failure scenario that is **plausible on the real target** (her PC, this board, this
+  printer), with evidence: a reproduction, a failing test, a measured number, a datasheet line. "Could be hardened", "a
+  rarer variant might slip through", "another pattern to add" are NOT SHOULD-FIX.
+- **NOTE**: hardening, polish, rare edge cases, ideas. NOTEs go on the **later list** and never reset the streak.
 
-## 2. Each pass
+Every finding: severity, exact location (file:line, ref, net, coordinates), evidence, the failure scenario in one
+sentence, and a concrete fix. Then one comma-separated "checked and OK" line. Under ~400 words.
 
-Launch the reviewers **in parallel, as fresh agents** (no memory of earlier passes - independence is the point), one
-per domain, each with its own scratch subdir (`p<N>_<domain>/`). For a PCB:
-- **Electrical + firmware**: re-derive every IC's supply/ground/decoupling/straps/unused pins from the board's actual pad
-  nets and datasheets; every firmware GPIO vs the board; regulator/charger equations; back-power paths; sequencing;
-  interfaces/cables; power budget.
-- **Layout + physical + mechanical**: DRC, copper connectivity (islands, stubs, duplicates, single-layer vias), fills
-  current, vias in pads/paste, keep-outs, RF, high-current paths, decoupling distance, courtyards, edges, holes,
-  silkscreen, board vs netlist - and **every connector / button's mating direction checked against its library fab
-  drawing or datasheet** (which side the card/plug/cable/finger enters, clearance for the mating part, nothing in the
-  insertion path, the PCB edge not blocking a plug overmold).
-- **Manufacturing files (DFM)**: fabrication outputs regenerated and byte-compared, BOM vs CPL vs board, stock, CPL
-  positions/rotations fitted independently against the assembler's own footprints, DFM limits, the user-facing order
-  instructions and the copies in the user's order folder.
-For code: e.g. correctness/logic, security, tests/build/release artifacts. Tell each reviewer to re-derive rather than
-trust comments or earlier reports, and point at the riskiest recent changes.
+## 2. Passes
 
-## 3. Verify, then fix
+**Pass 1 (full scope):** 3-4 reviewers in parallel, fresh agents, one per area, each with its own scratch subdir
+(`p1_<area>/`). Each checks the risk list for its area and looks for risks the list missed. A missed risk that meets the
+SHOULD-FIX bar is added to the risk list (with a failure test when it can be scripted).
 
-- **Verify every BLOCKER / SHOULD-FIX yourself** before acting (re-measure, re-read the datasheet, reproduce). Reviewers
-  are sometimes wrong (e.g. an "all LEDs backwards" claim was disproved by the assembler's own placement preview).
-  If you reject or downgrade a finding, say so to the user with the evidence, and add it to the brief's ACCEPTED list
-  so later passes don't re-raise it without new proof.
-- A pass is **clean** only if, after verification, no BLOCKER or SHOULD-FIX remains. NOTEs don't fail a pass.
-- Fix real findings (and cheap, safe NOTEs) between passes. After fixing: re-run the scripted checks, regenerate
-  outputs, refresh any user-facing copies, commit (and push if that's the repo's workflow), and update the brief's
-  "changes since the last review".
-- Turn every real finding into a scripted check where possible (so it can never silently come back).
-- Don't game the count: a downgrade needs evidence; if in doubt, it is not clean.
+**Passes 2..N (focused):** reviewers get only the diff since the last pass plus the risk list. They check that the fixes
+work, that nothing nearby regressed, and that every risk still holds (by running the failure tests). One reviewer per area
+that changed; skip areas with no change and say so.
+
+**Final pass (full scope):** the last pass of a sign-off is always a fresh full-scope pass like pass 1. The streak only
+completes when that final full pass is clean.
+
+Domains, as examples. Code: correctness and error paths; security and privacy; tests, build and release. PCB:
+electrical and firmware; layout, physical and mechanical (every connector's mating direction against its fab drawing);
+manufacturing files (outputs regenerated and byte-compared, BOM vs CPL vs board, rotations).
+
+Models: reviewers and fix agents run on `model: "sonnet"`. Keep the main model for the risk list, verification, the
+final pass's triage and sign-off. Reviewers read big files through `lm outline` / `lm ask` first.
+
+## 3. Verify, then fix (the fix gate)
+
+1. **Verify every BLOCKER and SHOULD-FIX yourself** with the cited lines (`sed -n`, `grep -n`) or one targeted command.
+   Apply the severity bar: downgrade hardening ideas to NOTE and say so. Rejected findings go to ACCEPTED with the
+   evidence.
+2. **Fix gate.** A fix enters the next pass only when it has:
+   - a test that **fails on the old code and passes on the new**. Run it both ways by restoring only the product file
+     (`git show HEAD:<file> > <file>`), never `git stash`, which also hides the new test. Check pytest's own exit code,
+     never a pipe's, and never chain a commit after `pytest | tail` with `&&`;
+   - a **diff review**: one small reviewer (`model: "sonnet"`) that sees only that fix's diff and asks "what does this
+     break?": every new exception path, `None` values, platform differences (e.g. `RuntimeError` vs `OSError` across Python
+     versions, Windows file locks), callers of changed functions, and exits that pass through (`finally` also runs on
+     `SystemExit`: a cleanup that restarts something must use `except Exception`, not `finally`);
+   - the project's checks green again.
+   A regression the diff review catches is fixed before the pass; it does not count against the streak.
+3. Turn every real finding into a scripted check, so it can't silently come back.
+4. Commit fixes in a dev copy or branch; deploy only per the project's own rules (slots, staging, probation).
 
 ## 4. Count and stop
 
-- Clean pass -> streak + 1. Any verified BLOCKER/SHOULD-FIX -> streak = 0.
-- Stop and call it good only at **3 consecutive clean passes**. Then report: pass-by-pass table (result, what was
-  fixed, commits), the final state of the scripted checks, accepted trade-offs that the user should know, and
-  follow-ups (bring-up checks, case/firmware notes).
-- Keep the user posted in one or two lines after each pass (result + streak).
-- **Hard cap: 8 passes (or ~6 hours), whichever comes first.** If there still aren't 3 clean in a row, stop launching
-  reviewers, don't deploy/ship, and ask the user how to proceed (narrow scope, accept items, or keep going) with the
-  pass table and the remaining findings. Also stop and ask early if two passes in a row find regressions from your own
-  earlier fixes. (On Oct 8 2026 an uncapped loop ran 29 passes, never signed off, burned the weekly usage limit and
-  blocked the job the user actually wanted run.)
-- **Scope is locked** to what was agreed at setup. Findings outside it go in a "later" list for the user; they don't
-  get fixed in-loop and don't reset the streak.
-- Never let an audit block other work the user asked for - start that work first unless it truly depends on the audit.
-- If you run out of budget mid-loop: stop running reviewers, and tell the user the streak, what is fixed/committed,
-  and "say continue to resume from pass N" - never present an unfinished loop as signed off.
+- Clean pass (no verified BLOCKER or SHOULD-FIX) -> streak + 1. Verified BLOCKER or SHOULD-FIX -> streak = 0.
+- Sign off at **3 consecutive clean passes, the last one full scope**. Report: the pass table (result, fixes, commits), the
+  failure tests and their state, the ACCEPTED trade-offs, and the later list.
+- **Hard cap: 8 passes (or ~6 hours).** Then stop launching reviewers, don't deploy or ship, and ask the user how to
+  proceed with the pass table and the open findings.
+- **Stop and ask early** if a fix's regression gets past the fix gate into a pass, or if two passes in a row find new old
+  problems in the same area: that area needs a better failure test or a narrower risk list, not more reviewers.
+- **Scope is the approved risk list.** Out-of-scope findings go on the later list.
+- Never let an audit block other work the user asked for.
+- If budget runs out mid-loop: stop, report the streak and what is fixed and committed, and say "say continue to resume
+  from pass N". Never present an unfinished loop as signed off.
+
+## Record of runs
+
+- 2026-10-25, Rosie Windows/OTA/export/skill sync re-audit. Old method: 3 passes, streak 0, two of its own fixes
+  regressed. New method: 15-risk list, failure tests (they found 2 real launcher bugs before any reviewer did), every
+  mutation caught; passes: full clean, focused clean, final full clean = signed off. The fix gate caught one regression
+  (`finally` on `SystemExit`) before it reached a pass.
+
+## Save tokens (always)
+
+- Rosie reads, Claude judges: `lm outline FILE`, then Read only the range; `lm sum` / `lm ask` for logs and long diffs.
+- Failure tests replace re-reading: a risk with a passing test needs no reviewer time.
+- Focused passes read the diff, not the whole area.
+- Rerun the full test suite only when code changed since its last green run; otherwise reuse the result and say so.
+- One-line update to the user per pass (result and streak); the full table only at the end.

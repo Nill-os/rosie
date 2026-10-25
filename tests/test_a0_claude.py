@@ -279,11 +279,11 @@ def test_rosie_installs_the_loop_into_agent_zero_and_keeps_it_current(tmp_path, 
 # --- when Claude can't be used (owner 2026-10-21: "make a handler for when i run out of tokens") ---------------------------
 WRONG = """| 4 | `/host/home/.local/lib` | **5.3G** | 🟢 Safe to delete |
 | 8 | `/host/home/Desktop` | **8.0G** | 🟡 Ask the owner |
-| 9 | `/host/home/wardrive-maps/.git/objects/pack` | **9.1G** | 🟢 Safe to delete |
+| 9 | `/host/home/project-data/.git/objects/pack` | **9.1G** | 🟢 Safe to delete |
 | 12 | `/host/home/.cache/huggingface/hub/...` | **16.7G** | 🟢 Safe to delete |
-| 14 | `/host/home/Figma` | **2.1GB** | Ask the owner |
+| 14 | `/host/home/Archive` | **2.1GB** | Ask the owner |
 find /host/home -type f -mtime +90 -exec rm -f {} +"""
-MEASURED = "107G\t/host/home/Pictures\n77G\t/host/home/Desktop\n5.3G\t/host/home/.local/lib\n13G\t/host/home/.cache/uv\n26G\t/host/home/wardrive-maps"
+MEASURED = "107G\t/host/home/Pictures\n77G\t/host/home/Desktop\n5.3G\t/host/home/.local/lib\n13G\t/host/home/.cache/uv\n26G\t/host/home/project-data"
 
 
 def test_rosies_code_catches_wrong_sizes_keep_folders_and_broad_deletes():
@@ -292,7 +292,7 @@ def test_rosies_code_catches_wrong_sizes_keep_folders_and_broad_deletes():
     assert "It says /host/home/Desktop is 8.0G, but the command output shows 77.0G." in problems
     assert "/host/home/.local/lib safe to delete" in text and ".git/objects/pack safe to delete" in text
     assert "find /host/home -type f -mtime +90 -exec rm" in text
-    assert "/host/home/Figma (2.1GB) is not in the command output given." in hints        # a hint for her model, not a fact
+    assert "/host/home/Archive (2.1GB) is not in the command output given." in hints        # a hint for her model, not a fact
     assert "16.7" not in text                                                             # a shortened path is not a claim
     good = "| `/host/home/Pictures` | 107G | Ask the owner |\n| `/host/home/.cache/uv` | 13G | Safe to delete |\nRun `uv cache clean`."
     assert claude_plan.local_findings(good, MEASURED) == ([], [])
@@ -404,7 +404,7 @@ ASKS = "I need your Immich server address and API key."
 
 
 def test_what_an_answer_asks_the_owner_goes_to_the_other_ais_first_once_a_turn(ext, monkeypatch):
-    team = [{"question": "What is the Immich address?", "known": True, "answer": "192.168.1.52:2283", "source": "Claude Code memory",
+    team = [{"question": "What is the Immich address?", "known": True, "answer": "10.0.4.52:2283", "source": "Claude Code memory",
              "how_to_find": ""},
             {"question": "What is the Immich API key?", "known": False, "answer": "", "source": "", "how_to_find": "ask the owner"}]
     calls = routes(monkeypatch, ext, check=lambda p: {"ok": True, "problems": [], "fix": "", "by": "claude",
@@ -413,7 +413,7 @@ def test_what_an_answer_asks_the_owner_goes_to_the_other_ais_first_once_a_turn(e
     with pytest.raises(Repairable) as e:
         run(ext, ag, text=ASKS)
     msg = str(e.value)
-    assert "192.168.1.52:2283" in msg and "other AIs" in msg and "confirm it with a real command" in msg
+    assert "10.0.4.52:2283" in msg and "other AIs" in msg and "confirm it with a real command" in msg
     assert "API key" not in msg and "NOT done" not in msg                    # only the owner knows the key; the check itself passed
     assert run(ext, ag, text=ASKS).startswith(ASKS)                          # the second answer goes to the owner
     assert [c[1]["asked"] for c in calls] == [False, True]
@@ -421,7 +421,7 @@ def test_what_an_answer_asks_the_owner_goes_to_the_other_ais_first_once_a_turn(e
 
 def test_when_nobody_knows_it_says_how_to_find_it_and_owner_only_facts_go_to_the_owner(ext, monkeypatch):
     team = [{"question": "Immich address?", "known": False, "answer": "", "source": "",
-             "how_to_find": "nmap -p 2283 --open 192.168.1.0/24, then curl http://<ip>:2283/api/server/ping"}]
+             "how_to_find": "nmap -p 2283 --open 10.0.4.0/24, then curl http://<ip>:2283/api/server/ping"}]
     routes(monkeypatch, ext, check={"ok": True, "problems": [], "fix": "", "by": "claude", "team": team})
     with pytest.raises(Repairable) as e:
         run(ext, a0_agent(IMMICH), text=ASKS)
@@ -499,7 +499,7 @@ def test_a_one_step_answer_to_a_real_request_is_checked_but_small_talk_is_not(ex
 def test_the_other_ais_lines_come_from_every_source_masked_and_claude_answers_from_them(tmp_path, monkeypatch):
     mem = tmp_path / "proj" / "memory"
     mem.mkdir(parents=True)
-    (mem / "homelab.md").write_text("Proxmox host 192.168.1.10, Immich LXC 192.168.1.52:2283\napi_key=" + FAKE_KEY + " immich\nunrelated\n")
+    (mem / "homelab.md").write_text("Proxmox host 10.0.4.10, Immich LXC 10.0.4.52:2283\napi_key=" + FAKE_KEY + " immich\nunrelated\n")
     monkeypatch.setattr(claude_plan, "CLAUDE_MEMORY", tmp_path)
     stubs = {"mind": types.SimpleNamespace(recall=lambda q, k=10: [{"text": "Owner runs Immich on Proxmox", "when": "2026-10-01"},
                                                                     {"text": "Laundry", "when": "2026-10-02"}]),
@@ -509,19 +509,19 @@ def test_the_other_ais_lines_come_from_every_source_masked_and_claude_answers_fr
     for name, mod in stubs.items():
         monkeypatch.setitem(sys.modules, name, mod)
     lines = claude_plan.team_notes(["What is the IP address of the owner's Proxmox Immich server?"])
-    assert any("192.168.1.52:2283" in x and "Claude Code memory homelab.md" in x for x in lines)
+    assert any("10.0.4.52:2283" in x and "Claude Code memory homelab.md" in x for x in lines)
     assert any("Rosie's memory" in x for x in lines) and not any("Laundry" in x or "unrelated" in x for x in lines)
     seen = {}
 
     def fake_ask(prompt, schema=None, timeout=0, system=None):
         seen.update(prompt=prompt, schema=schema, system=system)
-        return {"answers": [{"question": "Immich address?", "known": True, "answer": "192.168.1.52:2283", "source": "Claude Code memory",
+        return {"answers": [{"question": "Immich address?", "known": True, "answer": "10.0.4.52:2283", "source": "Claude Code memory",
                              "how_to_find": ""}]}
     monkeypatch.setattr(claude_plan, "available", lambda: True)
     monkeypatch.setattr(claude_plan, "ask", fake_ask)
     t = claude_plan.tool_ask_team("What is the Immich server address?", "move my pictures to immich")
-    assert t["answers"][0]["answer"] == "192.168.1.52:2283" and t["by"] == "claude" and "how_to_find" in t["next"]
-    assert "192.168.1.52:2283" in seen["prompt"] and FAKE_KEY not in seen["prompt"]   # keys never leave the PC
+    assert t["answers"][0]["answer"] == "10.0.4.52:2283" and t["by"] == "claude" and "how_to_find" in t["next"]
+    assert "10.0.4.52:2283" in seen["prompt"] and FAKE_KEY not in seen["prompt"]   # keys never leave the PC
     assert seen["system"] == claude_plan.TEAM_RULES and seen["schema"] == claude_plan.TEAM_SCHEMA
 
 

@@ -24,7 +24,7 @@ from vector_pb import token_pb2 as tpb, token_pb2_grpc as tgrpc
 
 REAL_SLEEP = time.sleep                                          # the pod fixture turns time.sleep into a no-op
 CLIP = Path(__file__).parent / "fixtures" / "vector_sit.ogg"     # "Sit." as 16 kHz Ogg Opus, 20 ms frames (like Vector's mic stream)
-ESN = "00808493"
+ESN = "0a1b2c3d"
 
 
 def _opus_or_skip():
@@ -262,26 +262,26 @@ def test_token_hash_is_vic_gateways_format():
 
 def test_certificate_names_the_address_vector_uses_and_is_remade_when_it_changes():
     from cryptography import x509
-    pem = vector_pod.ensure_cert("192.168.7.20")
+    pem = vector_pod.ensure_cert("10.0.7.20")
     sans = x509.load_pem_x509_certificate(pem.encode()).extensions.get_extension_for_class(x509.SubjectAlternativeName).value
-    assert "192.168.7.20" in [str(i) for i in sans.get_values_for_type(x509.IPAddress)]
-    assert vector_pod.ensure_cert("192.168.7.20") == pem and vector_pod.ensure_cert("192.168.7.21") != pem
+    assert "10.0.7.20" in [str(i) for i in sans.get_values_for_type(x509.IPAddress)]
+    assert vector_pod.ensure_cert("10.0.7.20") == pem and vector_pod.ensure_cert("10.0.7.21") != pem
     assert oct(vector_pod.KEY.stat().st_mode)[-3:] == "600"
 
 
 
 def test_no_network_at_start_keeps_the_certificate_vector_trusts():
     """Audit pass 3: Rosie started before the Wi-Fi made a new certificate for 127.0.0.1, and Vector stopped trusting her."""
-    pem = vector_pod.ensure_cert("192.168.7.20")
+    pem = vector_pod.ensure_cert("10.0.7.20")
     key = vector_pod.KEY.read_bytes()
     assert vector_pod.ensure_cert("127.0.0.1") == pem and vector_pod.KEY.read_bytes() == key
 
 def test_server_config_points_every_service_at_rosie():
     cfg = config.load()
-    cfg.update(vector_host="192.168.1.117", vector_port=8084, vector_check_port=8085)
+    cfg.update(vector_host="10.0.1.117", vector_port=8084, vector_check_port=8085)
     config.save(cfg)
     sc = vector_pod.server_config()
-    assert sc["chipper"] == sc["jdocs"] == sc["tms"] == "192.168.1.117:8084" and sc["check"] == "192.168.1.117:8085/ok"
+    assert sc["chipper"] == sc["jdocs"] == sc["tms"] == "10.0.1.117:8084" and sc["check"] == "10.0.1.117:8085/ok"
 
 
 def test_wire_pods_documents_and_token_are_taken_over(tmp_path):
@@ -289,11 +289,11 @@ def test_wire_pods_documents_and_token_are_taken_over(tmp_path):
     (vector_pod.WIREPOD / "jdocs" / "jdocs.json").write_text(json.dumps([
         {"thing": f"vic:{ESN}", "name": "vic.RobotSettings", "jdoc": {"doc_version": "3", "fmt_version": "2", "json_doc": '{"a": 1}'}}]))
     (vector_pod.WIREPOD / "jdocs" / "botSdkInfo.json").write_text(json.dumps(
-        {"robots": [{"esn": ESN, "ip_address": "192.168.1.15", "guid": "d2lyZXBvZHRva2VuMTIzNA==", "activated": True}]}))
+        {"robots": [{"esn": ESN, "ip_address": "10.0.1.15", "guid": "d2lyZXBvZHRva2VuMTIzNA==", "activated": True}]}))
     assert vector_pod.import_wirepod() == 1
     assert vector_pod._load_docs()[f"vic:{ESN}"]["vic.RobotSettings"]["doc_version"] == 3
     assert vector_pod.client_token() == "d2lyZXBvZHRva2VuMTIzNA==" and oct(vector_pod.TOKEN.stat().st_mode)[-3:] == "600"
-    assert config.load()["vector_robots"] == [{"esn": ESN, "ip": "192.168.1.15"}]
+    assert config.load()["vector_robots"] == [{"esn": ESN, "ip": "10.0.1.15"}]
 
 
 # --- the page's API ---------------------------------------------------------------------------------------------
@@ -318,8 +318,8 @@ def test_page_saves_personality_and_only_well_formed_commands(tmp_path, monkeypa
     assert cfg["vector_commands"] == [{"phrases": ["park it"], "action": "hold", "text": "", "reply": "Parked."}]
     d = c.get("/api/vector").json()
     assert d["on"] is False and d["personality"] == "Dry wit, short answers." and d["built_in"][0]["action"] == "hold"
-    assert c.post("/api/vector/setup", json={"ip": "192.168.1.15; reboot"}).json()["error"].startswith("Type Vector's address")
-    assert c.post("/api/vector/setup", json={"ip": "192.168.1.15"}).json()["error"] == "Turn the Vector server on first."
+    assert c.post("/api/vector/setup", json={"ip": "10.0.1.15; reboot"}).json()["error"].startswith("Type Vector's address")
+    assert c.post("/api/vector/setup", json={"ip": "10.0.1.15"}).json()["error"] == "Turn the Vector server on first."
 
 
 def test_rosies_vector_turn_goes_into_its_own_voice_chat_with_the_personality(tmp_path, monkeypatch):
@@ -543,17 +543,17 @@ def test_escape_pod_mode_says_how_to_open_port_443(monkeypatch):
 
 def test_connect_adopts_an_escape_pod_robot_that_takes_rosies_token(monkeypatch):
     cfg = config.load()
-    cfg["vector_robots"] = [{"esn": ESN, "ip": "192.168.1.15"}]
+    cfg["vector_robots"] = [{"esn": ESN, "ip": "10.0.1.15"}]
     config.save(cfg)
     monkeypatch.setattr(vector_pod.vector_bot, "reachable", lambda ip, port=443: port != 22)
     monkeypatch.setattr(vector_pod.vector_bot, "fetch_cert", lambda ip, port=443: "PEM")
-    monkeypatch.setattr(vector_pod.vector_bot, "cert_name", lambda pem: "Vector-U4H6")
+    monkeypatch.setattr(vector_pod.vector_bot, "cert_name", lambda pem: "Vector-A1B2")
     monkeypatch.setattr(vector_pod.vector_bot, "Robot", lambda ip, guid, pem: types.SimpleNamespace(version=lambda: "2.0.1.6076ep", channel=types.SimpleNamespace(close=lambda: None)))
     monkeypatch.setattr(vector_pod, "start", lambda: True)
-    msg = vector_pod.connect("192.168.1.130")
-    assert "Vector-U4H6 (2.0.1.6076ep) at 192.168.1.130 is yours." in msg
+    msg = vector_pod.connect("10.0.1.130")
+    assert "Vector-A1B2 (2.0.1.6076ep) at 10.0.1.130 is yours." in msg
     c = config.load()
-    assert c["vector_escapepod"] and c["vector_robots"] == [{"esn": ESN, "ip": "192.168.1.130", "name": "Vector-U4H6", "firmware": "2.0.1.6076ep"}]
+    assert c["vector_escapepod"] and c["vector_robots"] == [{"esn": ESN, "ip": "10.0.1.130", "name": "Vector-A1B2", "firmware": "2.0.1.6076ep"}]
     assert (vector_pod.DIR / f"robot-{ESN}.pem").read_text(encoding="utf-8") == "PEM"
 
 

@@ -105,7 +105,7 @@ DEFAULTS = {
     "vector_pad_speed": "normal",     # his top driving speed with the controller: slow, normal or fast
     "vector_wake_word": "hey vector",   # WireOS only: "hey rosie" puts Rosie's keyword file on him (vector_pod.set_wake_word)
     "vector_escapepod": False,        # his firmware is DDL's escape pod build: Rosie answers as escapepod.local:443 (set by Connect)
-    "vector_robots": [],              # [{"esn": "00808493", "ip": "192.168.1.15"}]: only these robots may use the server
+    "vector_robots": [],              # [{"esn": "0a1b2c3d", "ip": "192.168.1.15"}]: only these robots may use the server
     "taint_guard": True,            # after reading untrusted text (web, email, files), risky tools need your confirmation
     "desktop_notify": True,
     "quiet_from": "22:00",

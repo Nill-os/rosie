@@ -126,3 +126,54 @@ def test_a_bundled_skill_points_rosie_at_its_folder_and_follows_a_slot_switch(wo
     monkeypatch.setattr(ss, "BUNDLE", tmp_path / "B" / "skills")                         # an update switched slots
     assert "rosie:gcode" in ss.sync()["updated"]
     assert f"Skill folder: {tmp_path / 'B' / 'skills' / 'gcode'}" in skills.use_skill("gcode")["instructions"]
+
+
+def test_agent_zero_place_comes_from_a0_host(monkeypatch, tmp_path):
+    """No stand-in folder or container: the folder and name are read from a0_host at call time (Settings or detection)."""
+    import a0_host
+    monkeypatch.setattr(ss, "A0_SKILLS", None)
+    monkeypatch.setattr(ss, "CONTAINER", None)
+    monkeypatch.setattr(a0_host, "info", lambda: {"container": "az-two", "url": "http://127.0.0.1:1", "usr": str(tmp_path / "usr")})
+    assert ss._a0_dir() == tmp_path / "usr" / "skills" and ss._container() == "az-two"
+
+
+def test_a_missing_claude_skills_folder_is_created_for_the_copy(world, tmp_path):
+    import shutil
+    shutil.rmtree(ss.CLAUDE_SKILLS)
+    assert ss._write_claude("x-skill", {"origin": "rosie:x"}, {"SKILL.md": b"---\nname: x-skill\n---\n"})
+    assert (ss.CLAUDE_SKILLS / "x-skill" / "SKILL.md").exists() and (ss.CLAUDE_SKILLS / "x-skill" / ss.MARK).exists()
+
+
+def test_the_old_claude_copy_survives_a_failed_swap(world, monkeypatch):
+    from pathlib import Path
+    ss._write_claude("x-skill", {"origin": "rosie:x"}, {"SKILL.md": b"old"})
+    real = Path.rename
+
+    def rename(self, target):
+        if self.name.startswith(".x-skill.") and not self.name.startswith(".x-skill.old."):
+            raise OSError("swap failed")
+        return real(self, target)
+    monkeypatch.setattr(Path, "rename", rename)
+    with pytest.raises(OSError):
+        ss._write_claude("x-skill", {"origin": "rosie:x"}, {"SKILL.md": b"new"})
+    assert (ss.CLAUDE_SKILLS / "x-skill" / "SKILL.md").read_bytes() == b"old"
+    assert [p.name for p in ss.CLAUDE_SKILLS.iterdir() if p.name.startswith(".")] == []
+
+
+def test_a_playbook_that_quotes_the_marker_in_its_body_stays_an_original(world):
+    (skills.DIR).mkdir(parents=True, exist_ok=True)
+    (skills.DIR / "notes.md").write_text("Use for notes.\n\n" + "1. step\n" * 10 + "\nMirrored-from: claude:/x\n", encoding="utf-8")
+    assert not skills.copied("notes") and not ss._marked((skills.DIR / "notes.md").read_text(encoding="utf-8"))
+    assert ss._marked("Use it.\n\nMirrored-from: claude:/x\nbody")
+
+
+def test_a_symlink_loop_inside_a_skill_is_skipped_not_fatal(tmp_path):
+    """Audit 2026-10-25: Path.resolve() raises RuntimeError on a loop in Python 3.12, which stopped every skill's sync."""
+    d = tmp_path / "sk"
+    d.mkdir()
+    (d / "SKILL.md").write_text("---\nname: sk\n---\nx\n")
+    try:
+        (d / "loop").symlink_to("loop")
+    except OSError:
+        pytest.skip("no symlinks here")
+    assert set(ss._files({"dir": d, "text": "x"})) == {"SKILL.md"}

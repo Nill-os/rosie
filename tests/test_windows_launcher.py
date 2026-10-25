@@ -7,6 +7,8 @@ import time
 import zipfile
 from pathlib import Path
 
+import subprocess
+
 import pytest
 
 SRC = Path(__file__).resolve().parent.parent / "tools" / "windows" / "launcher.py"
@@ -41,7 +43,8 @@ class GitHub:
     def __init__(self, head="new1", checks=None, files=None):
         self.head, self.calls = head, []
         self.checks = {"new1": [{"name": "pytest", "status": "completed", "conclusion": "success"},
-                                {"name": "windows", "status": "completed", "conclusion": "success"}]} if checks is None else checks
+                                {"name": "windows", "status": "completed", "conclusion": "success"},
+                                {"name": "windows-start", "status": "completed", "conclusion": "success"}]} if checks is None else checks
         self.files = files or {"app/server.py": "x = 1\n", "requirements.txt": "", "tools/windows/launcher.py": SRC.read_text(encoding="utf-8")}
 
     def __call__(self, url, timeout=30):
@@ -57,14 +60,83 @@ class GitHub:
 
 
 def test_only_a_commit_whose_every_check_passed_counts(L):
-    gh = GitHub(checks={"a": [{"status": "completed", "conclusion": "success"}, {"status": "completed", "conclusion": "skipped"}],
-                        "b": [{"status": "completed", "conclusion": "success"}, {"status": "in_progress", "conclusion": None}],
-                        "c": [{"status": "completed", "conclusion": "success"}, {"status": "completed", "conclusion": "failure"}],
+    def job(n, c, status="completed"):
+        return {"name": n, "status": status, "conclusion": c}
+    req = [job("pytest", "success"), job("windows", "success"), job("windows-start", "success")]
+    gh = GitHub(checks={"a": req + [job("lint", "skipped")],
+                        "b": req + [job("lint", None, "in_progress")],
+                        "c": req + [job("lint", "failure")],
                         "d": []})
     assert L.checks_passed("a", gh) is True
     assert L.checks_passed("b", gh) is None          # still running
     assert L.checks_passed("c", gh) is False
     assert L.checks_passed("d", gh) is None          # no checks yet: wait
+
+
+def test_the_required_jobs_must_all_exist_and_succeed(L):
+    def job(n, c, status="completed"):
+        return {"name": n, "status": status, "conclusion": c}
+    gh = GitHub(checks={"missing": [job("pytest", "success"), job("windows", "success")],
+                        "missing_running": [job("pytest", "success"), job("windows", "success"), job("lint", None, "queued")],
+                        "skipped": [job("pytest", "success"), job("windows", "skipped"), job("windows-start", "success")],
+                        "ok": [job("pytest", "success"), job("windows", "success"), job("windows-start", "success")]})
+    assert L.checks_passed("missing", gh) is False
+    assert L.checks_passed("missing_running", gh) is None
+    assert L.checks_passed("skipped", gh) is False
+    assert L.checks_passed("ok", gh) is True
+
+
+def test_switch_refuses_when_the_idle_slot_does_not_hold_the_staged_version(L):
+    st = L.load()
+    st.update(heads={"A": "old", "B": "other"}, staged="new1")      # B was overwritten after staging
+    py = L.venv_python("B")
+    py.parent.mkdir(parents=True)
+    py.write_text("")
+    before = json.dumps(st, sort_keys=True)
+    assert L.switch(st) is False and not L.can_switch(st)
+    assert json.dumps(st, sort_keys=True) == before and st["active"] == "A"
+    st["heads"]["B"] = "new1"
+    assert L.can_switch(st)
+    py.unlink()
+    assert L.switch(st) is False                                   # no Python in the slot
+
+
+def test_a_failed_build_leaves_nothing_staged(L, monkeypatch):
+    st = L.load()
+    st.update(heads={"A": "old"}, staged="older")
+    def boom(*a, **k):
+        raise OSError("network")
+    monkeypatch.setattr(L, "build", boom)
+    L.check(st, GitHub())
+    assert L.load()["staged"] is None
+
+
+def test_relaunch_starts_a_new_process_with_the_same_arguments(L, monkeypatch, tmp_path):
+    slot = L.slot_dir("A") / "tools" / "windows"
+    slot.mkdir(parents=True)
+    (slot / "launcher.py").write_text("# newer\n")
+    me = tmp_path / "launcher.py"
+    me.write_text("# older\n")
+    monkeypatch.setattr(L, "__file__", str(me))
+    calls = []
+    monkeypatch.setattr(L.subprocess, "Popen", lambda args, **k: calls.append(args))
+    monkeypatch.setattr(L.sys, "argv", ["launcher.py", "--no-browser"])
+    runner = L.Runner()
+    with pytest.raises(SystemExit) as e:
+        L.relaunch_if_launcher_changed({"active": "A"}, runner)
+    assert e.value.code == 0
+    assert calls == [[L.sys.executable, str(me.resolve()), "--no-browser"]]
+
+
+def test_a_voice_download_that_times_out_does_not_stop_rosie(L, monkeypatch):
+    seen = []
+    def slow(url, timeout=None):
+        seen.append(timeout)
+        raise TimeoutError("timed out")
+    monkeypatch.setattr(L.urllib.request, "urlopen", slow)
+    L.first_run()                                                   # must return normally
+    assert seen and all(t == 60 for t in seen)
+    assert not list((L.ROOT / "data" / "voices").glob("*.onnx"))
 
 
 def test_a_new_passing_version_is_built_in_the_idle_slot_and_checked_before_it_is_staged(L, monkeypatch):
@@ -375,3 +447,198 @@ def test_the_update_check_starts_the_new_version_on_a_free_port(L):
         with socket.socket() as s:
             s.bind(("127.0.0.1", p))
     assert not hasattr(L, "STAGE_PORT")
+
+
+def test_a_smoke_test_that_fails_before_starting_reports_it_instead_of_crashing(L):
+    """Audit 2026-10-25: a slot with no app folder made smoke() raise AttributeError from its cleanup, which stopped the launcher."""
+    res = L.smoke("A")                                           # slot A is empty here
+    assert res["ok"] is False and "error" in res
+
+
+# ---- audit 2026-10-25 launcher fixes ----
+class _Stop(Exception):
+    pass
+
+
+def _loop(L, monkeypatch, tmp_path, ticks, up_until=0.0, probation=True, boom=None):
+    """Run run()'s loop for `ticks` passes on a fake clock (15 s per pass). Returns (rollbacks, log lines, clock start)."""
+    t0 = time.time()
+    clock = [t0]
+    (tmp_path / "secrets").mkdir(exist_ok=True)
+    (tmp_path / "secrets" / "access_code").write_text("code")
+    py = L.venv_python("A")
+    py.parent.mkdir(parents=True, exist_ok=True)
+    py.write_text("")
+    L.save({**L.load(), "probation_until": t0 + 99999 if probation else None})
+    n = [0]
+
+    def sleep(s):
+        n[0] += 1
+        if n[0] > ticks:
+            raise _Stop
+        clock[0] += s
+    rollbacks, lines = [], []
+    answer = boom or (lambda *a, **k: {"ok": True} if clock[0] < t0 + up_until else None)
+    monkeypatch.setattr(L.time, "sleep", sleep)
+    monkeypatch.setattr(L.time, "time", lambda: clock[0])
+    monkeypatch.setattr(L, "single_instance", lambda: True)
+    monkeypatch.setattr(L, "first_run", lambda: None)
+    monkeypatch.setattr(L, "sign_in_file", lambda: None)
+    monkeypatch.setattr(L, "phone_address", lambda: None)
+    monkeypatch.setattr(L, "healthz", answer)
+    monkeypatch.setattr(L, "rollback", lambda st, why: rollbacks.append(why))
+    monkeypatch.setattr(L, "log", lines.append)
+    monkeypatch.setattr(L, "settings", lambda: {**L.DEFAULTS, "auto": False})
+    monkeypatch.setattr(L, "server_cmd", lambda *a: ["x"])
+    monkeypatch.setattr(L.subprocess, "Popen", lambda *a, **k: type("P", (), {"poll": lambda self: None, "terminate": lambda self: None, "wait": lambda self, t=None: 0})())
+    monkeypatch.setattr(L.sys, "argv", ["launcher.py", "--no-browser"])
+    with pytest.raises(_Stop):
+        L.run()
+    return rollbacks, lines
+
+
+def test_a_second_launcher_exits_and_opens_the_running_rosie(L, monkeypatch):
+    opened = []
+    monkeypatch.setattr(L, "single_instance", lambda: False)
+    monkeypatch.setattr(L, "healthz", lambda *a, **k: {"ok": True})
+    import webbrowser
+    monkeypatch.setattr(webbrowser, "open", opened.append)
+    monkeypatch.setattr(L.sys, "argv", ["launcher.py"])
+    with pytest.raises(SystemExit) as e:
+        L.run()
+    assert e.value.code == 0 and opened == [f"http://127.0.0.1:{L.PORT}"]
+    monkeypatch.setattr(L.sys, "argv", ["launcher.py", "--no-browser"])
+    with pytest.raises(SystemExit):
+        L.run()
+    assert len(opened) == 1
+
+
+def test_the_lock_is_refused_while_another_holder_has_it(L, monkeypatch):
+    if L.WIN:
+        pytest.skip("msvcrt locking is covered on Windows CI")
+    import fcntl
+    first = L.single_instance()
+    assert first is True
+    other = open(L.ROOT / "launcher.lock", "a+")
+    with pytest.raises(OSError):
+        fcntl.flock(other.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    other.close()
+    assert L.single_instance() is False                       # a second open file in this process is refused too
+    L._LOCK.close()
+
+
+def test_no_rollback_before_she_answered_within_the_startup_grace(L, monkeypatch, tmp_path):
+    rollbacks, _ = _loop(L, monkeypatch, tmp_path, ticks=18)       # 4.5 minutes of silence
+    assert rollbacks == []
+
+
+def test_silence_after_the_grace_still_rolls_back(L, monkeypatch, tmp_path):
+    rollbacks, _ = _loop(L, monkeypatch, tmp_path, ticks=25)
+    assert rollbacks == ["the new version stopped answering"]
+
+
+def test_silence_right_after_she_answered_counts_at_once(L, monkeypatch, tmp_path):
+    rollbacks, _ = _loop(L, monkeypatch, tmp_path, ticks=8, up_until=20)
+    assert rollbacks == ["the new version stopped answering"]
+
+
+def test_an_exception_in_the_loop_is_logged_and_the_loop_continues(L, monkeypatch, tmp_path):
+    calls = []
+
+    def boom(*a, **k):
+        calls.append(1)
+        raise RuntimeError("bad pass")
+    _, lines = _loop(L, monkeypatch, tmp_path, ticks=3, probation=False, boom=boom)
+    assert len(calls) == 3
+    assert lines.count("launcher loop: RuntimeError: bad pass") == 3
+
+
+def test_a_smoke_timeout_marks_the_version_bad_only_the_second_time(L, monkeypatch):
+    st = L.load()
+    st["heads"] = {"A": "old"}
+    monkeypatch.setattr(L, "build", lambda *a, **k: None)
+    monkeypatch.setattr(L, "smoke", lambda slot: {"ok": False, "checks": {}, "error": L.SMOKE_TIMEOUT})
+    L.check(st, GitHub())
+    assert "new1" not in L.load()["bad"] and L.load()["smoke_timeouts"] == {"new1": 1}
+    L.check(L.load(), GitHub())
+    assert "new1" in L.load()["bad"]
+    monkeypatch.setattr(L, "smoke", lambda slot: {"ok": False, "checks": {}, "error": "crashed"})
+    st = L.load()
+    st["bad"] = []
+    L.check(st, GitHub())
+    assert "new1" in L.load()["bad"]                              # any other failure is still bad at once
+
+
+def test_three_build_failures_of_the_same_version_mark_it_bad(L, monkeypatch):
+    st = L.load()
+    st["heads"] = {"A": "old"}
+    def boom(*a, **k):
+        raise subprocess.CalledProcessError(1, ["uv", "pip", "install"])
+    monkeypatch.setattr(L, "build", boom)
+    for i in (1, 2):
+        L.check(L.load(), GitHub())
+        assert "new1" not in L.load()["bad"] and L.load()["build_fails"] == {"new1": i}
+    L.check(L.load(), GitHub())
+    assert "new1" in L.load()["bad"]
+
+
+def test_network_trouble_while_building_never_marks_a_version_bad(L, monkeypatch):
+    """Gate review 2026-10-25: three Wi-Fi outages in a row would have skipped a good version for good."""
+    st = L.load()
+    st["heads"] = {"A": "old"}
+    L.save(st)
+    def offline(*a, **k):
+        raise OSError("network")
+    monkeypatch.setattr(L, "build", offline)
+    for _ in range(4):
+        L.check(L.load(), GitHub())
+    assert "new1" not in L.load()["bad"] and not L.load().get("build_fails")
+
+
+def test_the_required_checks_are_the_workflows_job_ids():
+    import re
+    wf = (Path(__file__).resolve().parent.parent / ".github" / "workflows" / "tests.yml").read_text(encoding="utf-8")
+    jobs = wf.split("\njobs:", 1)[1]
+    ids = set(re.findall(r"^  ([A-Za-z0-9_-]+):\s*$", jobs, re.M))
+    spec = importlib.util.spec_from_file_location("rosie_launcher_c", SRC)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert ids == mod.REQUIRED_CHECKS
+
+
+def test_a_marker_without_the_venv_rebuilds(L, monkeypatch):
+    (L.ROOT / L.INSTALLED).write_text("ok\n")
+    L.save({**L.load(), "heads": {"A": "old"}})                   # a head is recorded but slot A has no Python
+    built = []
+    monkeypatch.setattr(L, "build", lambda slot, sha, *a: built.append((slot, sha)))
+    monkeypatch.setattr(L, "newest", lambda: "new1")
+    monkeypatch.setattr(L, "checks_passed", lambda sha, get=None: True)
+    L.install()
+    assert built == [("A", "new1")] and (L.ROOT / L.INSTALLED).exists()
+
+
+def test_a_marker_with_the_venv_only_rewrites_the_marker(L, monkeypatch):
+    py = L.venv_python("A")
+    py.parent.mkdir(parents=True)
+    py.write_text("")
+    L.save({**L.load(), "heads": {"A": "old"}})
+    monkeypatch.setattr(L, "build", lambda *a, **k: pytest.fail("rebuilt"))
+    L.install()
+    assert (L.ROOT / L.INSTALLED).exists()
+
+
+def test_save_retries_a_locked_state_file(L, monkeypatch):
+    real, n = L.os.replace, [0]
+
+    def flaky(a, b):
+        n[0] += 1
+        if n[0] < 3:
+            raise PermissionError("in use")
+        real(a, b)
+    monkeypatch.setattr(L.os, "replace", flaky)
+    monkeypatch.setattr(L.time, "sleep", lambda s: None)
+    L.save({"active": "A"})
+    assert n[0] == 3 and L.load()["active"] == "A"
+    monkeypatch.setattr(L.os, "replace", lambda a, b: (_ for _ in ()).throw(PermissionError("x")))
+    with pytest.raises(PermissionError):
+        L.save({"active": "A"})

@@ -21,19 +21,22 @@ import re
 import shutil
 import subprocess
 import tarfile
+import tempfile
 import threading
 import time
 from pathlib import Path
 
+import a0_host
+import atomic
 import skills
 import testguard
 
 HOME = Path.home()
 CLAUDE = HOME / ".claude"
 CLAUDE_SKILLS = CLAUDE / "skills"
-A0_SKILLS = HOME / "agent-zero" / "usr" / "skills"            # host side of the container's /a0/usr/skills (read here; written with docker)
+A0_SKILLS = None                  # tests only: a stand-in folder; normally a0_host.usr() / "skills" (host side of the container's /a0/usr/skills), read at call time
 A0_PATH = "/a0/usr/skills"
-CONTAINER = "agent-zero"
+CONTAINER = None                  # tests only; normally a0_host.container(), read at call time
 BUNDLE = Path(__file__).resolve().parent.parent / "skills"   # skills shipped with Rosie (ops/bundle_skills.py), for every copy
 STATE = Path(__file__).resolve().parent.parent / "data" / "skill_sync.json"
 APPROVED = STATE.with_name("skill_sync_approved.json")      # skills the owner let into Claude Code: name -> the version they saw
@@ -47,6 +50,23 @@ SKIP_FILES = (".jsonl", ".log", ".sqlite", ".db", ".pid", ".lock")      # saved 
 SKIP_NAMES = {"state.json", ".credentials.json"}
 NAME_RE = re.compile(r"[^a-z0-9-]+")
 _lock = threading.Lock()
+
+
+def _a0_dir() -> Path:
+    return Path(A0_SKILLS) if A0_SKILLS else a0_host.usr() / "skills"
+
+
+def _container() -> str:
+    return CONTAINER or a0_host.container()
+
+
+def _junction(p) -> bool:
+    return getattr(os.path, "isjunction", lambda q: False)(p)       # NTFS junctions (Python 3.12+); a link the OS follows like a symlink
+
+
+def _marked(text: str) -> bool:
+    """Our mark sits in the header; a playbook that only quotes it in its body is still the owner's own."""
+    return "\nMirrored-from: " in "\n" + "\n".join(text.split("\n")[:8])
 
 
 def _name(s: str) -> str:
@@ -84,7 +104,7 @@ def _skill_dirs(root: Path) -> list[Path]:
         return []
     base = root.resolve()
     return sorted(p.parent for p in root.glob("*/SKILL.md")
-                  if not p.is_symlink() and not p.parent.is_symlink() and base in p.resolve().parents)
+                  if not p.is_symlink() and not _junction(p) and not p.parent.is_symlink() and not _junction(p.parent) and base in p.resolve().parents)
 
 
 def claude_skills() -> dict:
@@ -92,8 +112,8 @@ def claude_skills() -> dict:
     dirs = [d for d in _skill_dirs(CLAUDE_SKILLS) if not (d / MARK).exists()]
     dirs += [d for b in sorted((CLAUDE_SKILLS / "synced").glob("*")) if b.is_dir() for d in _skill_dirs(b)]
     try:
-        enabled = json.loads((CLAUDE / "settings.json").read_text()).get("enabledPlugins") or {}
-        installed = json.loads((CLAUDE / "plugins" / "installed_plugins.json").read_text()).get("plugins") or {}
+        enabled = json.loads((CLAUDE / "settings.json").read_text(encoding="utf-8")).get("enabledPlugins") or {}
+        installed = json.loads((CLAUDE / "plugins" / "installed_plugins.json").read_text(encoding="utf-8")).get("plugins") or {}
     except (OSError, ValueError):
         enabled, installed = {}, {}
     for key, on in enabled.items():
@@ -103,7 +123,7 @@ def claude_skills() -> dict:
     out = {}
     for d in dirs:
         try:
-            text = (d / "SKILL.md").read_text(errors="replace")
+            text = (d / "SKILL.md").read_text(errors="replace", encoding="utf-8")
         except OSError:
             continue
         meta, _ = frontmatter(text)
@@ -118,8 +138,11 @@ def rosie_skills() -> dict:
     skills.init()
     out = {}
     for p in sorted(skills.DIR.glob("*.md")):
-        text = p.read_text(errors="replace")
-        if "\nMirrored-from: " in text:
+        try:
+            text = p.read_text(errors="replace", encoding="utf-8")
+        except OSError:                                          # one unreadable playbook never stops the round
+            continue
+        if _marked(text):
             continue
         desc, _, body = text.partition("\n")
         if not _name(p.stem):
@@ -134,11 +157,11 @@ def rosie_skills() -> dict:
 
 def a0_skills() -> dict:
     out = {}
-    for d in _skill_dirs(A0_SKILLS):
+    for d in _skill_dirs(_a0_dir()):
         if (d / MARK).exists():
             continue
         try:
-            text = (d / "SKILL.md").read_text(errors="replace")
+            text = (d / "SKILL.md").read_text(errors="replace", encoding="utf-8")
         except OSError:
             continue
         meta, _ = frontmatter(text)
@@ -153,7 +176,7 @@ def bundle_skills() -> dict:
     out = {}
     for d in _skill_dirs(BUNDLE):
         try:
-            text = (d / "SKILL.md").read_text(errors="replace")
+            text = (d / "SKILL.md").read_text(errors="replace", encoding="utf-8")
         except OSError:
             continue
         meta, _ = frontmatter(text)
@@ -168,10 +191,16 @@ def _files(src: dict) -> dict:
     if src["dir"] is None:
         return {"SKILL.md": src["text"].encode()}
     out = {}
+    base = src["dir"].resolve()
     for p in sorted(src["dir"].rglob("*")):
         rel = p.relative_to(src["dir"])
-        if (p.is_file() and not p.is_symlink() and not (set(rel.parts) & SKIP_DIRS) and p.name != MARK and not p.name.endswith(SKIP_FILES)
-                and p.name not in SKIP_NAMES and not any(q.is_symlink() for q in p.relative_to(src["dir"]).parents if str(q) != ".")):
+        try:
+            if base not in p.resolve().parents:                 # reached through a link or junction to outside the skill: never copied
+                continue
+        except (OSError, RuntimeError, ValueError):              # 3.12 raises RuntimeError on a symlink loop
+            continue
+        if (p.is_file() and not p.is_symlink() and not _junction(p) and not (set(rel.parts) & SKIP_DIRS) and p.name != MARK and not p.name.endswith(SKIP_FILES)
+                and p.name not in SKIP_NAMES and not any(q.is_symlink() or _junction(q) for q in (src["dir"] / x for x in rel.parents) if q != src["dir"])):
             try:
                 if p.stat().st_size <= MAX_FILE:
                     out[rel.as_posix()] = p.read_bytes()        # "/" even on Windows: the tar goes into a Linux container
@@ -203,11 +232,11 @@ def playbook(name: str, src: dict) -> str:
 def _write_rosie(name: str, src: dict) -> bool:
     p = skills.DIR / f"{name}.md"
     testguard.check(p)
-    if p.exists() and "\nMirrored-from: " not in p.read_text(errors="replace"):
+    if p.exists() and not _marked(p.read_text(errors="replace", encoding="utf-8")):
         return False                                           # her own playbook of that name stays
     text = playbook(name, src)
-    if not p.exists() or p.read_text(errors="replace") != text:
-        p.write_text(text)
+    if not p.exists() or p.read_text(errors="replace", encoding="utf-8") != text:
+        p.write_text(text, encoding="utf-8", newline="\n")
     return True
 
 
@@ -216,16 +245,26 @@ def _write_claude(name: str, src: dict, files: dict) -> bool:
     testguard.check(d)
     if d.exists() and not (d / MARK).exists():
         return False
-    import tempfile
+    CLAUDE_SKILLS.mkdir(parents=True, exist_ok=True)
     tmp = Path(tempfile.mkdtemp(dir=CLAUDE_SKILLS, prefix=f".{name}."))   # built aside, marked, then swapped in: never half a copy
     try:
-        (tmp / MARK).write_text(src["origin"] + "\n")
+        (tmp / MARK).write_text(src["origin"] + "\n", encoding="utf-8")
         for rel, data in files.items():
             (tmp / rel).parent.mkdir(parents=True, exist_ok=True)
             (tmp / rel).write_bytes(data)
+        old = None
         if d.exists():
-            shutil.rmtree(d)
-        tmp.rename(d)
+            old = Path(tempfile.mkdtemp(dir=CLAUDE_SKILLS, prefix=f".{name}.old."))
+            old.rmdir()
+            d.rename(old)                                      # the old copy waits aside until the new one is in place
+        try:
+            tmp.rename(d)
+        except BaseException:
+            if old is not None:
+                old.rename(d)                                  # swap failed: the old copy goes back
+            raise
+        if old is not None:
+            shutil.rmtree(old, ignore_errors=True)
     except BaseException:
         shutil.rmtree(tmp, ignore_errors=True)
         raise
@@ -240,14 +279,14 @@ def _docker(*args, data: bytes | None = None, timeout=60) -> subprocess.Complete
 
 def a0_up() -> bool:
     try:
-        r = _docker("inspect", "-f", "{{.State.Running}}", CONTAINER, timeout=10)
+        r = _docker("inspect", "-f", "{{.State.Running}}", _container(), timeout=10)
         return r.returncode == 0 and r.stdout.strip() == b"true"
     except (OSError, subprocess.SubprocessError):
         return False
 
 
 def _write_a0(name: str, src: dict, files: dict) -> bool:
-    d = A0_SKILLS / name
+    d = _a0_dir() / name
     if d.exists() and not (d / MARK).exists():
         return False
     buf = io.BytesIO()
@@ -257,7 +296,7 @@ def _write_a0(name: str, src: dict, files: dict) -> bool:
             info.size, info.mode, info.mtime = len(data), 0o644, int(time.time())
             tar.addfile(info, io.BytesIO(data))
     target = f"{A0_PATH}/{name}"
-    r = _docker("exec", "-i", CONTAINER, "sh", "-c", f"rm -rf '{target}' && mkdir -p '{target}' && tar -C '{target}' -xf -", data=buf.getvalue())
+    r = _docker("exec", "-i", _container(), "sh", "-c", f"rm -rf '{target}' && mkdir -p '{target}' && tar -C '{target}' -xf -", data=buf.getvalue())
     if r.returncode != 0:
         raise OSError(f"docker exec failed: {r.stderr[:200]!r}")
     return True
@@ -266,20 +305,20 @@ def _write_a0(name: str, src: dict, files: dict) -> bool:
 def _remove(agent: str, name: str):
     if agent == "rosie":
         p = skills.DIR / f"{name}.md"
-        if p.exists() and "\nMirrored-from: " in p.read_text(errors="replace"):
+        if p.exists() and _marked(p.read_text(errors="replace", encoding="utf-8")):
             p.unlink()
     elif agent == "claude":
         d = CLAUDE_SKILLS / name
         if (d / MARK).exists():
             shutil.rmtree(d)
-    elif agent == "agent-zero" and (A0_SKILLS / name / MARK).exists():
-        if _docker("exec", CONTAINER, "rm", "-rf", f"{A0_PATH}/{name}").returncode != 0:
+    elif agent == "agent-zero" and (_a0_dir() / name / MARK).exists():
+        if _docker("exec", _container(), "rm", "-rf", f"{A0_PATH}/{name}").returncode != 0:
             raise OSError("docker exec rm failed")             # kept in the state, tried again next round
 
 
 def _state() -> dict:
     try:
-        return json.loads(STATE.read_text())
+        return json.loads(STATE.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
 
@@ -292,7 +331,7 @@ def sync() -> dict:
         for agent in ("claude", "rosie", "agent-zero", "bundle"):      # the first owner of a name wins; what ships with Rosie comes last
             for n, src in have[agent].items():
                 everything.setdefault(n, {**src, "from": agent})
-        a0_ok = a0_up() and A0_SKILLS.is_dir()                       # its files not visible from this PC: copies wait (never rewrite blind)
+        a0_ok = a0_up() and _a0_dir().is_dir()                       # its files not visible from this PC: copies wait (never rewrite blind)
         st, new = _state(), {}
         out = {"added": [], "updated": [], "removed": [], "kept_own": [], "held": [], "a0": "running" if a0_ok else ("files not visible on this PC: copies wait" if a0_up() else "not running: copies wait")}
         for n, src in everything.items():
@@ -343,7 +382,7 @@ def sync() -> dict:
                 new[key] = st[key]
         testguard.check(STATE)
         STATE.parent.mkdir(parents=True, exist_ok=True)
-        STATE.write_text(json.dumps(new, indent=1, sort_keys=True))
+        atomic.write_text(STATE, json.dumps(new, indent=1, sort_keys=True))   # a crash never leaves half a state file
         out["counts"] = {a: len(v) for a, v in have.items()}
         return out
 
@@ -356,7 +395,7 @@ def needs_ok(src: dict) -> bool:
 
 def _approved() -> dict:
     try:
-        return json.loads(APPROVED.read_text())
+        return json.loads(APPROVED.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
 
@@ -385,7 +424,7 @@ def approve(name: str, version: str = "") -> dict:
                         + ". Read it again, then approve that version.", "version": now}
             ok = {**_approved(), n: now}
             testguard.check(APPROVED)
-            APPROVED.write_text(json.dumps(ok, indent=1, sort_keys=True))
+            APPROVED.write_text(json.dumps(ok, indent=1, sort_keys=True), encoding="utf-8")
             return {"approved": n, "from": agent, "note": "It is copied into Claude Code on the next sync (run skill_sync.py to do it now)."}
     return {"error": f"No Rosie or Agent Zero skill named {n}."}
 
@@ -395,7 +434,7 @@ def _exists(agent: str, name: str) -> bool:
         return (skills.DIR / f"{name}.md").exists()
     if agent == "claude":
         return (CLAUDE_SKILLS / name / MARK).exists()
-    return (A0_SKILLS / name / MARK).exists()
+    return (_a0_dir() / name / MARK).exists()
 
 
 def soon():

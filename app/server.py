@@ -88,8 +88,7 @@ def _startup():
         if not a0_host.FILE.exists():                    # first start on this PC: ask Docker where Agent Zero is (once; Settings can change it)
             a0_host.detect()
         a0.relocate()
-        a0_api.CONTAINER = skill_sync.CONTAINER = ctxsize.A0_CONTAINER = a0.CONTAINER
-        skill_sync.A0_SKILLS = a0_host.usr() / "skills"
+        a0_api.CONTAINER = ctxsize.A0_CONTAINER = a0.CONTAINER
     def _board_link():
         import board_link
         board_link.start()

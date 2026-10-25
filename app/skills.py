@@ -87,7 +87,10 @@ def listing() -> list[tuple[str, str]]:
     init()
     out = []
     for p in sorted(DIR.glob("*.md")):
-        first = p.read_text().split("\n", 1)[0].strip()
+        try:
+            first = p.read_text(encoding="utf-8", errors="replace").split("\n", 1)[0].strip()
+        except OSError:
+            continue
         out.append((p.stem, first))
     return out
 
@@ -95,7 +98,7 @@ def listing() -> list[tuple[str, str]]:
 def copied(name: str) -> bool:
     """A skill copied from Claude Code or Agent Zero (skill_sync.py), not one of her own playbooks."""
     p = DIR / f"{Path(name).stem}.md"
-    return p.exists() and "\nMirrored-from: " in p.read_text(errors="replace")
+    return p.exists() and "\nMirrored-from: " in "\n" + "\n".join(p.read_text(errors="replace", encoding="utf-8").split("\n")[:8])
 
 
 def prompt_line() -> str:

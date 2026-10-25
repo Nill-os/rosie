@@ -17,7 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 
-NOTICE = re.compile(r"\s*(<task-notification|<system-reminder|<cross-session-message|\[SYSTEM NOTIFICATION|\[Cross-session|Stop hook feedback)", re.I)
+NOTICE = re.compile(r"\s*(<task-notification|<system-reminder|<cross-session-message|\[SYSTEM NOTIFICATION|\[Cross-session|Stop hook feedback|Another Claude session sent a message)", re.I)
 
 
 def main(event: str, data: dict) -> dict | None:

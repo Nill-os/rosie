@@ -36,19 +36,19 @@ def client(tmp_path, monkeypatch):
 
 
 def test_her_cards_file_imports_once_with_decks_clues_and_tips():
-    r = study.import_cards(CARDS, "ENVS 101")
+    r = study.import_cards(CARDS, "BIOL 100")
     assert (r["decks"], r["added"], r["skipped"]) == (2, 3, 0)
-    assert study.import_cards(CARDS, "envs 101")["added"] == 0          # same course (any case), same questions: nothing twice
+    assert study.import_cards(CARDS, "biol 100")["added"] == 0          # same course (any case), same questions: nothing twice
     o = study.overview()
     (co,) = o["courses"]
-    assert co["name"] == "ENVS 101" and co["cards"] == 3 and co["due"] == 3 and "Sleep locks memories in." in co["notes"]
+    assert co["name"] == "BIOL 100" and co["cards"] == 3 and co["due"] == 3 and "Sleep locks memories in." in co["notes"]
     assert [d["name"] for d in co["decks"]] == ["Science and people", "Ecology"]
     back = study.export_cards(co["id"])
     assert len(back["cards"]) == 3 and back["cards"][0]["t"] == "Greek hypo = under." and back["tips"] == CARDS["tips"]
 
 
 def test_a_review_moves_the_card_out_and_a_missed_one_comes_back_soon():
-    study.import_cards(CARDS, "ENVS 101")
+    study.import_cards(CARDS, "BIOL 100")
     now = dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=5)
     first, second = study.due_cards(now=now)[:2]
     good = study.review(first["id"], 3, now=now)
@@ -82,7 +82,7 @@ def test_a_drafted_card_needs_a_real_quote_and_an_answer_the_quote_backs(monkeyp
 
 def test_reviews_earn_knowledge_xp_once_and_never_past_the_daily_cap(monkeypatch):
     lifequest.state()                                                    # first use makes the default stats (Knowledge among them)
-    study.import_cards(CARDS, "ENVS 101")
+    study.import_cards(CARDS, "BIOL 100")
     for c in study.due_cards():
         study.review(c["id"], 3)
     got = study.award_xp()
@@ -95,7 +95,7 @@ def test_reviews_earn_knowledge_xp_once_and_never_past_the_daily_cap(monkeypatch
 
 
 def test_the_page_api_and_the_badge(client):
-    r = client.post("/api/study/import", json={"course": "ENVS 101", "data": CARDS}).json()
+    r = client.post("/api/study/import", json={"course": "BIOL 100", "data": CARDS}).json()
     assert r["added"] == 3
     assert client.get("/api/badges").json()["study_due"] == 3
     card = client.get("/api/study/due").json()["cards"][0]
@@ -161,7 +161,7 @@ def test_her_written_wrong_answers_and_details_import_and_drive_the_test():
         {"d": 1, "q": "What does interdisciplinary mean?", "a": "It combines several sciences", "t": "", "src": "lecture", "kind": "fact", "ch": "Ch 1", "pri": 1,
          "wrong": ["It studies only living things", "It is a branch of chemistry", "It focuses only on laws"]},
         {"d": 1, "q": "Test group", "a": "Subjects that get the treatment", "t": "", "src": "textbook", "kind": "term", "ch": "Ch 2", "pri": 3}]}
-    cid = study.import_cards(data, "ENVS")["course_id"]
+    cid = study.import_cards(data, "BIOL")["course_id"]
     t = study.make_test(cid, 2, seed=3)
     first = t["questions"][0]
     assert first["q"] == "What does interdisciplinary mean?" and first["kind"] == "choice"     # the lecture item comes first
@@ -214,7 +214,7 @@ def test_the_tutor_only_answers_from_her_material_and_cites_what_it_had(monkeypa
 
 def test_the_next_study_block_is_read_from_her_calendar_and_planned(monkeypatch):
     import gcal
-    study.import_cards(CARDS, "ENVS 101")
+    study.import_cards(CARDS, "BIOL 100")
     cid = study.overview()["courses"][0]["id"]
     study.set_exam(cid, (dt.date.today() + dt.timedelta(days=2)).isoformat())
     start = dt.datetime.now().astimezone() + dt.timedelta(hours=2)
@@ -231,10 +231,10 @@ def test_the_next_study_block_is_read_from_her_calendar_and_planned(monkeypatch)
     monkeypatch.setattr(gcal, "service", lambda: Svc())
     asked = {}
     monkeypatch.setattr(gcal, "list_events", lambda s, e, calendar_id="primary", query=None: (asked.update(cal=calendar_id), [
-        {"id": "e1", "title": "Study: ENVS", "start": start.isoformat(), "end": (start + dt.timedelta(minutes=45)).isoformat(), "all_day": False, "location": ""}])[1])
+        {"id": "e1", "title": "Study: BIOL", "start": start.isoformat(), "end": (start + dt.timedelta(minutes=45)).isoformat(), "all_day": False, "location": ""}])[1])
     b = study.plan_for_block(study.next_block())
-    assert asked["cal"] == "cal-study" and b["title"] == "Study: ENVS"
-    assert b["todo"][0] == "review 3 ENVS 101 cards" and "practice test (exam in 2 days)" in b["todo"][1]
+    assert asked["cal"] == "cal-study" and b["title"] == "Study: BIOL"
+    assert b["todo"][0] == "review 3 BIOL 100 cards" and "practice test (exam in 2 days)" in b["todo"][1]
     monkeypatch.setattr(gcal, "service", lambda: (_ for _ in ()).throw(gcal.LoginExpired("x")))
     assert study.next_block() is None
 
@@ -270,19 +270,19 @@ def _apkg(tmp_path, notes, name="collection.anki21", extra=()):
 
 
 def _deck():
-    cid = study.course("ENVS 101")
+    cid = study.course("BIOL 100")
     return cid, study.deck(cid, "Ecology", "Ch 4")
 
 
 def test_anki_export_has_the_header_and_one_row_per_card():
-    study.import_cards({**CARDS, "cards": [{**CARDS["cards"][0], "kind": "term"}, *CARDS["cards"][1:]]}, "ENVS 101")
+    study.import_cards({**CARDS, "cards": [{**CARDS["cards"][0], "kind": "term"}, *CARDS["cards"][1:]]}, "BIOL 100")
     (co,) = study.overview()["courses"]
     name, text = study.anki_export(course_id=co["id"])
     lines = text.splitlines()
-    assert name == "ENVS_101-anki.txt" and lines[:4] == ["#separator:tab", "#html:false", "#deck column:3", "#tags column:4"]
+    assert name == "BIOL_100-anki.txt" and lines[:4] == ["#separator:tab", "#html:false", "#deck column:3", "#tags column:4"]
     rows = [l.split("\t") for l in lines[4:]]
     assert len(rows) == 3 and rows[0][0] == "What is a hypothesis?" and rows[0][1].endswith("(Clue: Greek hypo = under.)")
-    assert rows[0][2] == "ENVS 101::Science and people" and rows[0][3] == "term" and rows[1][3] == "Ch_2"
+    assert rows[0][2] == "BIOL 100::Science and people" and rows[0][3] == "term" and rows[1][3] == "Ch_2"
     deck_id = co["decks"][1]["id"]
     assert len(study.anki_export(deck_id=deck_id)[1].splitlines()) == 5
     with pytest.raises(ValueError):
@@ -342,7 +342,7 @@ def test_anki_import_refuses_new_format_unsafe_paths_and_big_files(tmp_path, cli
 def test_deck_audio_is_a_wav_with_a_question_and_an_answer_per_card(monkeypatch, client):
     import io
     import wave
-    study.import_cards(CARDS, "ENVS 101")
+    study.import_cards(CARDS, "BIOL 100")
     spoken = []
 
     def fake(text):
@@ -365,7 +365,7 @@ def test_concept_map_is_course_decks_tags_cards_from_her_data(client):
              "cards": [{"d": 1, "q": "What is a producer?", "a": "Makes food.", "kind": "term"},
                        {"d": 1, "q": "x" * 80, "a": "Long one.", "kind": "term"}, {"d": 1, "q": "Untagged?", "a": "No chapter.", "kind": "", "ch": ""},
                        {"d": 2, "q": "What is a nucleus?", "a": "Holds DNA."}]}
-    cid = study.import_cards(cards, "ENVS 101")["course_id"]
+    cid = study.import_cards(cards, "BIOL 100")["course_id"]
     m = client.get(f"/api/study/map?course={cid}").json()
     types = [n["type"] for n in m["nodes"]]
     assert types.count("course") == 1 and types.count("deck") == 2 and types.count("card") == 4 and types.count("tag") == 2

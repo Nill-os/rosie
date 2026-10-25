@@ -157,9 +157,27 @@ def check_backup():
     return _row("Backup", "ok", f"{s['count']} kept, newest {h:.0f} h ago, verified")
 
 
+LAUNCHER_STATE = Path(__file__).resolve().parents[3] / "state.json"    # ROOT/slots/<X>/app/health.py: the launcher keeps state.json in ROOT
+
+
+def _windows_updates():
+    try:
+        st = json.loads(LAUNCHER_STATE.read_text(encoding="utf-8"))
+        last = float(st["last_check"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return _row("Code backup (GitHub)", "off", "not used on Windows: Rosie updates herself")
+    res = st.get("last_result") or ""
+    ver = (st.get("heads", {}).get(st.get("active")) or "?")[:7]
+    days = (time.time() - last) / 86400
+    when = dt.datetime.fromtimestamp(last).strftime("%b %d %H:%M")
+    if days > 3 or any(w in res for w in ("failed", "Could not")):
+        return _row("Updates", "warn", f"{res or 'no result yet'} (version {ver}, last check {when})")
+    return _row("Updates", "ok", f"version {ver}, last check {when}")
+
+
 def check_repo():
     if plat.IS_WIN:                                 # the daily GitHub sync is a Linux timer; Rosie's Windows copy updates itself (launcher.py)
-        return _row("Code backup (GitHub)", "off", "not used on Windows: Rosie updates herself")
+        return _windows_updates()
     try:
         dirty = subprocess.run(["git", "-C", str(ROOT), "status", "--porcelain"], capture_output=True, text=True, timeout=10).stdout.strip().splitlines()
         last = int(subprocess.run(["git", "-C", str(ROOT), "log", "-1", "--format=%ct"], capture_output=True, text=True, timeout=10).stdout.strip() or 0)

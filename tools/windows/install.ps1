@@ -24,7 +24,7 @@ if (-not (Test-Path $uv)) {
 Invoke-WebRequest "$Raw/launcher.py" -OutFile "$Root\launcher.py"
 Invoke-WebRequest "$Raw/Rosie.bat" -OutFile "$Root\Rosie.bat"
 Invoke-WebRequest "$Raw/Rosie%20Google%20Sign-in.bat" -OutFile "$Root\Rosie Google Sign-in.bat"
-if ($Repo -ne 'Nill-os/rosie') { Set-Content "$Root\update.json" (@{ repo = $Repo } | ConvertTo-Json) -Encoding UTF8 }
+if ($Repo -ne 'Nill-os/rosie') { Set-Content "$Root\update.json" (@{ repo = $Repo } | ConvertTo-Json) -Encoding ASCII }   # PowerShell 5.1's UTF8 adds a BOM that json can't read
 & $uv python install 3.12
 if ($LASTEXITCODE -ne 0) { throw 'Could not set up Python.' }
 
@@ -35,16 +35,20 @@ Write-Host '3/6  The AI engine (Ollama)'
 $ollama = (Get-Command ollama -ErrorAction SilentlyContinue).Source
 if (-not $ollama -and (Test-Path "$env:LOCALAPPDATA\Programs\Ollama\ollama.exe")) { $ollama = "$env:LOCALAPPDATA\Programs\Ollama\ollama.exe" }
 if ($ollama) { Write-Host '     Already installed.' } else {
-    winget install --id Ollama.Ollama -e --silent --accept-source-agreements --accept-package-agreements
+    try {
+        winget install --id Ollama.Ollama -e --silent --accept-source-agreements --accept-package-agreements
+        if ($LASTEXITCODE -ne 0) { throw 'winget failed' }
+    } catch {
+        Write-Host '     Install Ollama from https://ollama.com/download, then run this again.'
+        exit 1
+    }
     Start-Process "$env:LOCALAPPDATA\Programs\Ollama\ollama app.exe" -ErrorAction SilentlyContinue
     Start-Sleep 10
 }
 
 Write-Host '4/6  Rosie (Python, libraries, and the newest tested version: 5 to 15 minutes)'
-if (-not (Test-Path "$Root\slots\A\.venv")) {
-    Launcher --install
-    if ($LASTEXITCODE -ne 0) { throw 'Could not install Rosie.' }
-} else { Write-Host '     Already installed: Rosie updates herself.' }
+Launcher --install                                    # returns at once when the active slot is already built (a repair run rebuilds a missing one)
+if ($LASTEXITCODE -ne 0) { throw 'Could not install Rosie.' }
 
 Write-Host '5/6  Model and Agent Zero (starts Ollama and Docker Desktop if they are closed; this can take a few minutes)'
 Launcher --setup

@@ -173,3 +173,22 @@ def test_settings_voice_status_works_without_systemctl(monkeypatch):
     monkeypatch.setattr("subprocess.run", no_systemctl)
     st = hub.dictation_status()
     assert st["service"] == "unavailable" and st["overlay"] == "unavailable"
+
+
+def test_windows_updates_row_follows_the_launchers_state(monkeypatch, tmp_path):
+    state = tmp_path / "state.json"
+    monkeypatch.setattr(health.plat, "IS_WIN", True)
+    monkeypatch.setattr(health, "LAUNCHER_STATE", state)
+    assert health.check_repo()["level"] == "off"                      # no state file: an install that is not from the launcher
+    def put(age_days, result, head="abcdef1234"):
+        state.write_text(json.dumps({"active": "A", "heads": {"A": head}, "last_check": time.time() - age_days * 86400, "last_result": result}))
+        return health.check_repo()
+    row = put(0.1, "Rosie is up to date.")
+    assert row["name"] == "Updates" and row["level"] == "ok" and "abcdef1" in row["detail"]
+    row = put(4, "Rosie is up to date.")
+    assert row["level"] == "warn" and "up to date" in row["detail"]
+    row = put(0.1, "Could not reach GitHub (URLError).")
+    assert row["level"] == "warn" and "Could not reach GitHub" in row["detail"]
+    assert put(0.1, "The new version (abc1234) failed GitHub's tests; waiting for a fixed one.")["level"] == "warn"
+    state.write_text("not json")
+    assert health.check_repo()["level"] == "off"

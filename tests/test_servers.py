@@ -9,21 +9,21 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "app"))
 import servers  # noqa: E402
 
 PROXMOX = """MACHINE host Home running -
-PORT host 192.168.5.8:22 users:(("sshd",pid=1,fd=6))
+PORT host 10.77.4.8:22 users:(("sshd",pid=1,fd=6))
 PORT host 127.0.0.1:85 users:(("pvedaemon
 PORT host *:8006 users:(("pveproxy
 PORT host *:3128 users:(("spiceproxy
 PORT host 100.64.0.1%tailscale0:47574 users:(("tailscaled",pid=7,fd=19))
-MACHINE 101 photos running 192.168.5.52
-PORT 101 127.0.0.1:5432 users:(("postgres",pid=1,fd=7))
-PORT 101 *:2283 users:(("immich-api",pid=2,fd=47))
-PORT 101 *:38231 users:(("immich",pid=3,fd=94))
-PORT 101 [::]:2283 users:(("immich-api",pid=2,fd=48))
-MACHINE 102 dns running 192.168.5.53
-PORT 102 0.0.0.0:53 users:(("pihole-FTL",pid=1,fd=24))
-PORT 102 0.0.0.0:80 users:(("pihole-FTL",pid=1,fd=33))
-PORT 102 0.0.0.0:443 users:(("pihole-FTL",pid=1,fd=38))
-MACHINE 103 old stopped -
+MACHINE 701 photos running 10.77.4.52
+PORT 701 127.0.0.1:5432 users:(("postgres",pid=1,fd=7))
+PORT 701 *:2283 users:(("immich-api",pid=2,fd=47))
+PORT 701 *:38231 users:(("immich",pid=3,fd=94))
+PORT 701 [::]:2283 users:(("immich-api",pid=2,fd=48))
+MACHINE 702 dns running 10.77.4.53
+PORT 702 0.0.0.0:53 users:(("pihole-FTL",pid=1,fd=24))
+PORT 702 0.0.0.0:80 users:(("pihole-FTL",pid=1,fd=33))
+PORT 702 0.0.0.0:443 users:(("pihole-FTL",pid=1,fd=38))
+MACHINE 703 old stopped -
 """
 
 
@@ -31,7 +31,7 @@ MACHINE 103 old stopped -
 def home(monkeypatch, tmp_path):
     monkeypatch.setattr(servers, "STATE", tmp_path / "servers.json")
     monkeypatch.setattr(servers, "state", {"running": False, "last_error": ""})
-    monkeypatch.setattr(servers.security_watch, "_ssh_cmd", lambda: ["ssh", "-i", "k", "root@192.168.5.8"])
+    monkeypatch.setattr(servers.security_watch, "_ssh_cmd", lambda: ["ssh", "-i", "k", "root@10.77.4.8"])
     monkeypatch.setattr(servers.security_watch, "_run", lambda argv, timeout, stdin=None: PROXMOX)
     webs = {8006: {"scheme": "https", "title": "Home - Proxmox Virtual Environment"}, 2283: {"scheme": "http", "title": "Immich"},
             80: {"scheme": "", "title": ""}, 443: {"scheme": "", "title": ""}}                    # Pi-hole busy: no answer right now
@@ -46,11 +46,11 @@ def by_name(d):
 
 def test_she_finds_the_server_its_containers_and_what_can_be_opened(home):
     m = by_name(servers.discover())
-    assert m["Home"]["ip"] == "192.168.5.8" and m["Home"]["kind"] == "server"                  # its login address, not its VPN one
+    assert m["Home"]["ip"] == "10.77.4.8" and m["Home"]["kind"] == "server"                  # its login address, not its VPN one
     assert [(s["port"], s["label"], s["url"] or s["hint"]) for s in m["Home"]["services"]] == [
-        (22, "SSH", "ssh root@192.168.5.8"), (8006, "Proxmox", "https://192.168.5.8:8006/")]   # no loopback, VPN or SPICE port
-    assert [(s["port"], s["label"], s["url"]) for s in m["photos"]["services"]] == [(2283, "Immich", "http://192.168.5.52:2283/")]
-    assert [(s["port"], s["label"], s["url"]) for s in m["dns"]["services"]] == [(53, "DNS", ""), (443, "Pi-hole", "https://192.168.5.53/admin/")]
+        (22, "SSH", "ssh root@10.77.4.8"), (8006, "Proxmox", "https://10.77.4.8:8006/")]   # no loopback, VPN or SPICE port
+    assert [(s["port"], s["label"], s["url"]) for s in m["photos"]["services"]] == [(2283, "Immich", "http://10.77.4.52:2283/")]
+    assert [(s["port"], s["label"], s["url"]) for s in m["dns"]["services"]] == [(53, "DNS", ""), (443, "Pi-hole", "https://10.77.4.53/admin/")]
     assert m["old"]["running"] is False and m["old"]["services"] == [] and m["old"]["ip"] == ""
 
 
@@ -58,7 +58,7 @@ def test_a_plain_server_without_proxmox(home, monkeypatch):
     monkeypatch.setattr(servers.security_watch, "_run", lambda argv, timeout, stdin=None:
                         "MACHINE host nas running -\nPORT host 0.0.0.0:445 users:((\"smbd\",pid=1,fd=3))\n")
     m = by_name(servers.discover())
-    assert list(m) == ["nas"] and m["nas"]["services"][0]["url"] == "smb://192.168.5.8/"
+    assert list(m) == ["nas"] and m["nas"]["services"][0]["url"] == "smb://10.77.4.8/"
 
 
 def test_unknown_web_apps_are_named_by_their_page_title():
@@ -70,19 +70,19 @@ def test_unknown_web_apps_are_named_by_their_page_title():
 
 def test_the_page_checks_each_service_now_and_keeps_renames(home):
     servers.discover()
-    servers.rename("192.168.5.52", 2283, "Photos")
+    servers.rename("10.77.4.52", 2283, "Photos")
     d = servers.listing()
     m = by_name(d)
     assert m["photos"]["services"][0]["label"] == "Photos" and m["photos"]["services"][0]["up"] and m["photos"]["up"]
     assert m["Home"]["services"][0]["up"] is False and m["Home"]["up"]                            # SSH firewalled, Proxmox answers
-    servers.rename("192.168.5.52", 2283, "")
+    servers.rename("10.77.4.52", 2283, "")
     assert by_name(servers.listing())["photos"]["services"][0]["label"] == "Immich"
 
 
 def test_machines_added_by_hand(home):
     assert not servers.add("", "1.2.3.4")["ok"] and not servers.add("Router", "bad address!")["ok"]
-    assert not servers.add("Router", "192.168.5.1", 70000)["ok"] and not servers.add("Router", "192.168.5.1", 80, url="javascript:alert(1)")["ok"]
-    assert servers.add("Router", "192.168.5.1", 80, "the ISP box")["ok"]
+    assert not servers.add("Router", "10.77.4.1", 70000)["ok"] and not servers.add("Router", "10.77.4.1", 80, url="javascript:alert(1)")["ok"]
+    assert servers.add("Router", "10.77.4.1", 80, "the ISP box")["ok"]
     d = servers.listing()
     r = by_name(d)["Router"]
     assert r["manual"] and r["note"] == "the ISP box" and r["services"][0]["port"] == 80
@@ -91,15 +91,15 @@ def test_machines_added_by_hand(home):
 
 def test_rosie_can_answer_whats_the_ip_of(home):
     servers.discover()
-    servers.add("Printer", "192.168.5.20", 631)
+    servers.add("Printer", "10.77.4.20", 631)
     rows = servers.tool("immich")["servers"]
-    assert rows == [{"machine": "photos", "address": "192.168.5.52", "port": 2283, "service": "Immich", "open": "http://192.168.5.52:2283/"}]
-    assert len(servers.tool()["servers"]) == 6 and servers.tool("printer")["servers"][0]["address"] == "192.168.5.20"
+    assert rows == [{"machine": "photos", "address": "10.77.4.52", "port": 2283, "service": "Immich", "open": "http://10.77.4.52:2283/"}]
+    assert len(servers.tool()["servers"]) == 6 and servers.tool("printer")["servers"][0]["address"] == "10.77.4.20"
 
 
 def test_without_a_home_server_only_added_machines_show(home, monkeypatch):
     monkeypatch.setattr(servers.security_watch, "_ssh_cmd", lambda: None)
-    servers.add("Router", "192.168.5.1")
+    servers.add("Router", "10.77.4.1")
     d = servers.listing()
     assert d["server"] is False and [m["name"] for m in d["machines"]] == ["Router"]
     with pytest.raises(RuntimeError):

@@ -36,8 +36,8 @@ def test_redirects_are_followed_and_every_hop_is_checked(monkeypatch):
 
 def test_a_redirect_to_this_pc_or_the_lan_is_refused(monkeypatch):
     calls = []
-    pages = {"https://a.test/x": R(302, headers={"Location": "http://192.168.1.8:8006/"})}
-    monkeypatch.setattr(web, "public_url_problem", lambda u: "local network" if "192.168" in u else None)
+    pages = {"https://a.test/x": R(302, headers={"Location": "http://192.0.2.8:8006/"})}
+    monkeypatch.setattr(web, "public_url_problem", lambda u: "local network" if "192.0.2" in u else None)
     monkeypatch.setattr(web, "_scrapling_get", fake(pages, calls))
     out = web.scrape("https://a.test/x")
     assert out["error"] == "local network" and [u for u, _ in calls] == ["https://a.test/x"]   # the LAN address is never requested

@@ -75,7 +75,7 @@ def test_arcade_drive_forward_spin_and_clamp():
 
 class Bot:
     def __init__(self):
-        self.calls, self.held, self.ip = [], False, "192.168.1.130"
+        self.calls, self.held, self.ip = [], False, "10.0.1.130"
 
     def hold(self, **k):
         self.calls.append("hold")

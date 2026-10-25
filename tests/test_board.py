@@ -391,7 +391,8 @@ def test_a_background_notice_keeps_the_current_task_and_its_posts(monkeypatch):
     board.post("deploying the Canvas sync", "doing", agent="claude-1")
     for notice in ("<task-notification>\n<task-id>b1</task-id> completed</task-notification>",
                    "[SYSTEM NOTIFICATION - NOT USER INPUT] a background task finished",
-                   "Stop hook feedback:\n[Agent board] ...", "<cross-session-message from=\"x\">hi</cross-session-message>"):
+                   "Stop hook feedback:\n[Agent board] ...", "<cross-session-message from=\"x\">hi</cross-session-message>",
+                   "Another Claude session sent a message:\n<agent-message from=\"a1\">report</agent-message>"):   # a subagent's report (2026-10-25)
         board_hook.main("UserPromptSubmit", {"cwd": "/tmp/x", "prompt": notice})
         for _ in range(4):
             board_hook.main("PostToolUse", {"tool_name": "Edit"})
