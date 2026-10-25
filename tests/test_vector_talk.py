@@ -37,3 +37,9 @@ def test_fillers_never_repeat_and_are_synthesized_once(monkeypatch):
 def test_the_talk_prompt_offers_voice_games():
     import server
     assert "20 questions" in server.VECTOR_GAMES and "one question per reply" in server.VECTOR_GAMES
+
+
+def test_his_name_alone_is_not_a_request():
+    import vector_intents
+    assert vector_intents.is_filler("Vector.") and vector_intents.is_filler("Rosie!") and vector_intents.is_filler("hmm, Vector")
+    assert not vector_intents.is_filler("Vector, sit") and not vector_intents.is_filler("Rosie what time is it")

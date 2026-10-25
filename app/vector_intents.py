@@ -19,7 +19,9 @@ def normalize(text: str) -> str:
 
 
 # Backchannels and noise words: a transcript of only these is not a request (false requests from "uh-huh" and noise, 2026-10-24)
-FILLER_WORDS = {"uh", "um", "umm", "uh-huh", "uhhuh", "mm", "mmm", "hmm", "hm", "mhm", "ah", "oh", "er", "erm", "huh"}
+FILLER_WORDS = {"uh", "um", "umm", "uh-huh", "uhhuh", "mm", "mmm", "hmm", "hm", "mhm", "ah", "oh", "er", "erm", "huh",
+                "vector", "victor", "rosie", "rosy"}   # his name alone: speech to text echoes its hint words for unclear audio
+                                                        # ("Sit." from the PC speakers came out "Vector.", 2026-10-24)
 
 
 def is_filler(text: str) -> bool:

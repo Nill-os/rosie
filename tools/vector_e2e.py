@@ -9,11 +9,12 @@ from Ollama (no tools, no chat history), so the run never writes to her chats or
     ~/assistant/.venv/bin/python tools/vector_e2e.py            # all steps
     ~/assistant/.venv/bin/python tools/vector_e2e.py sit talk   # some steps
 
-Steps: time, talk, followup, sit, sit_talk, stand. The speaker voice is a different Kokoro voice from Rosie's, so you
-can tell who is who."""
+Steps: time, talk, followup, look, sit, sit_talk, stand. The timing follows him, not a clock: after "Hey... Rosie" the
+question waits until he is listening, and the wake word is said again (up to WAKE_TRIES times) when he does not respond. The speaker voice is Rosie's own (af_heart): his wake word recognizes it best."""
 import hashlib
 import hmac
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -27,12 +28,16 @@ import numpy as np
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "app"))
 LIVE = Path.home() / "assistant"                      # data and secrets are shared by both slots
-SPEAKER_VOICE = "am_adam"                             # the "owner" talking to Vector (not Rosie's af_heart)
+SPEAKER_VOICE = "af_heart"                            # the "owner" talking to Vector: his wake word hears Rosie's own voice well and
+                                                      # missed am_adam every time (owner 2026-10-24: "she isnt reconizing that ai voice")
 ROSIE = "http://127.0.0.1:8765"
 OLLAMA = "http://127.0.0.1:11434/api/chat"
 SSH_OPTS = ["-o", "HostKeyAlgorithms=+ssh-rsa", "-o", "PubkeyAcceptedAlgorithms=+ssh-rsa", "-o", "ConnectTimeout=8"]
 
 results: list[dict] = []
+WAKE_TRIES = 3
+WAKE = os.environ.get("E2E_WAKE", "button")             # "button" (default) or "voice" (say "Hey... Rosie" out loud)
+LISTEN_WAIT_S = 4.0                                   # after the wake word: this long for his listening to start
 
 
 # --- helpers ---------------------------------------------------------------------------------------------------------
@@ -54,13 +59,23 @@ def kokoro():
     return _kokoro
 
 
+_clips: dict = {}
+
+
+def render(text: str, voice: str = SPEAKER_VOICE) -> str:
+    """`text` as a wav file, made once (so it can play the moment he listens, not a second or two later)."""
+    import soundfile as sf
+    if (text, voice) not in _clips:
+        audio, sr = kokoro().create(text, voice=voice, speed=0.95, lang="en-us")
+        f = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+        sf.write(f.name, audio, sr)
+        _clips[(text, voice)] = f.name
+    return _clips[(text, voice)]
+
+
 def say_out_loud(text: str, voice: str = SPEAKER_VOICE):
     """The PC's speakers say `text` (default output)."""
-    import soundfile as sf
-    audio, sr = kokoro().create(text, voice=voice, speed=0.95, lang="en-us")
-    with tempfile.NamedTemporaryFile(suffix=".wav") as f:
-        sf.write(f.name, audio, sr)
-        subprocess.run(["pw-play", f.name], check=True, timeout=60)
+    subprocess.run(["pw-play", render(text, voice)], check=True, timeout=60)
 
 
 def robot_ssh(ip, key, cmd) -> str:
@@ -104,7 +119,15 @@ def wait_for(cond, secs, step=0.25):
     return cond()
 
 
+KEEP = Path(os.environ.get("E2E_KEEP", "")) if os.environ.get("E2E_KEEP") else None   # a folder: keep what he heard per step
+
+
 def record(step, ok, **info):
+    import vector_pod as vp
+    info["heard_s"] = vp.status.get("heard_s")
+    if KEEP is not None and vp.LAST_HEARD.exists():
+        KEEP.mkdir(parents=True, exist_ok=True)
+        shutil.copy(vp.LAST_HEARD, KEEP / f"{step}.wav")
     results.append({"step": step, "ok": bool(ok), **info})
     print(("PASS " if ok else "FAIL ") + step + "  " + json.dumps(info, default=str))
 
@@ -146,7 +169,8 @@ def main(steps):
     work = Path(tempfile.mkdtemp(prefix="vector-e2e-"))
     shutil.copytree(LIVE / "data" / "vector", work / "vector")       # same certificate, token and pinned robot as the live server
     cfg = json.loads((LIVE / "data" / "config.json").read_text())
-    cfg.update(vector_on=True, vector_voice="rosie", vector_followup=True)
+    cfg.update(vector_on=True, vector_voice="rosie", vector_followup=True, vector_life="off",   # no lines of his own mid-test
+               vector_eyes=os.environ.get("E2E_EYES", cfg.get("vector_eyes", "rosie")))
     (work / "config.json").write_text(json.dumps(cfg))
     config.PATH = work / "config.json"
     vp.DIR = work / "vector"
@@ -166,13 +190,34 @@ def main(steps):
         brain("hello")                                               # model warm: the first answer is not a cold load
         last = lambda: vp.status.get("last") or {}
 
+        def asleep_check():
+            """Asleep (power save), he does not react to his wake word, and waking him (Rosie taking control, or a pick-up)
+            crashed vic-engine twice on 2026-10-24 (SIGSEGV at vic-engine+0xcc4d a few seconds after he left power save).
+            So the test never wakes him: it says so and waits instead."""
+            bot = vp.robot()
+            if bot is not None and bot.asleep():
+                print("  (he is asleep: waiting up to 2 min for him to wake by himself)")
+                wait_for(lambda: not bot.asleep(), 120, step=5)
+
         def ask(phrase, wake=True, secs=20):
+            render(phrase)                                   # ready before he listens
             mark = time.time()
-            if wake:                                         # his wake word needs "Hey" and "Rosie" spaced out, then a beat
-                say_out_loud("Hey.")                         # before the question (owner's note, 2026-10-21)
-                time.sleep(0.35)
-                say_out_loud("Rosie.")
-                time.sleep(0.9)
+            if wake:
+                asleep_check()                                         # his wake word needs "Hey" and "Rosie" spaced out, then a beat
+                for attempt in range(1, WAKE_TRIES + 1):     # before the question (owner's note, 2026-10-21); the timing can be
+                    wait_for(lambda: not vp.busy(), 20)      # off when he is slow, so the question waits for his listening
+                    if WAKE == "button":                     # his wake word hears people well but not synthetic voices from
+                        import vector_dev                    # the PC speakers (owner 2026-10-24): start his listening the way
+                        vector_dev.listen(ip)                # his backpack button does, then ask out loud
+                    else:
+                        say_out_loud("Hey.")
+                        time.sleep(0.35)
+                        say_out_loud("Rosie.")
+                    if wait_for(lambda: vp._listening.is_set(), LISTEN_WAIT_S, step=0.05):
+                        break
+                    print(f"  (no listening after wake word try {attempt})")
+                    time.sleep(3)
+                time.sleep(0.3)
             say_out_loud(phrase)
             got = wait_for(lambda: last() if last().get("at", "") >= time.strftime("%H:%M:%S", time.localtime(mark)) else None, secs)
             return got, time.time() - mark
@@ -191,8 +236,15 @@ def main(steps):
                 record("followup", window and got2 and got2.get("heard"), window_open=bool(window), heard=got2 and got2.get("heard"))
                 wait_for(lambda: not vp.busy(), 40)
                 time.sleep(13)                                       # let the follow-up window close
+        if "look" in steps:
+            scene_t = (vp.status.get("scene") or {}).get("t", 0)
+            got, t = ask("what do you see?")
+            seen = wait_for(lambda: (vp.status.get("scene") or {}).get("t", 0) > scene_t, 45)
+            record("look", got and seen, heard=got and got.get("heard"), saw=(vp.status.get("scene") or {}).get("saw"))
+            wait_for(lambda: not vp.busy(), 40)
+            time.sleep(13)                                   # let the follow-up window close
         if "sit" in steps or "sit_talk" in steps:
-            got, t = ask("sit.")
+            got, t = ask("sit down.")      # a lone "Sit." from the speakers is too short to hear clearly
             held = wait_for(lambda: vp.sitting(), 10)
             time.sleep(8)
             frame = vp._face.last_frame if vp._face else None
@@ -223,5 +275,5 @@ def main(steps):
 
 
 if __name__ == "__main__":
-    wanted = sys.argv[1:] or ["time", "talk", "followup", "sit", "sit_talk", "stand"]
+    wanted = sys.argv[1:] or ["time", "talk", "followup", "look", "sit", "sit_talk", "stand"]
     sys.exit(main(set(wanted)))

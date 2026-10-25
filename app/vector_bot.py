@@ -398,7 +398,7 @@ class _Control:
                         self._out.put(behavior_pb2.BehaviorControlRequest(control_request=behavior_pb2.ControlRequest(priority=self._priority)))
                     else:
                         self.lost.set()
-        except grpc.RpcError:
+        except (grpc.RpcError, ValueError):                 # ValueError: the channel was closed (Rosie's server stopping)
             pass
         finally:
             self.granted.clear()

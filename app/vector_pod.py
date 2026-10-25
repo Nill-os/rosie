@@ -1027,7 +1027,7 @@ def _while_sitting(intent: str, params: dict) -> str:
     if intent == "intent_global_stop_extend":
         return "Timer canceled." if timers.cancel() else "No timer is running."
     if intent == "intent_clock_time":
-        return "It's " + datetime.datetime.now().strftime(timefmt.nopad("%-I:%M %p")).replace("AM", "a.m.").replace("PM", "p.m.") + "."
+        return "It's " + datetime.datetime.now().strftime(timefmt.nopad("%-I:%M %p")).replace("AM", "a.m.").replace("PM", "p.m.")   # "p.m." ends the sentence
     if intent in MOVES:
         return "I'm staying put. Say you can move first."
     return "Okay."
