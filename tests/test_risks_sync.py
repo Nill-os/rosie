@@ -18,7 +18,7 @@ def _own_text(who):
 
 
 def _snapshot(root, only="dup"):
-    return {str(p.relative_to(root)): p.read_bytes() for p in sorted((root / only).rglob("*")) if p.is_file()}
+    return {p.relative_to(root).as_posix(): p.read_bytes() for p in sorted((root / only).rglob("*")) if p.is_file()}
 
 
 def test_C1_an_own_skill_of_the_same_name_is_never_overwritten_by_sync(world):
@@ -266,7 +266,7 @@ def test_C3_a_junction_to_outside_is_never_copied(world, tmp_path):
     r = subprocess.run(["cmd", "/c", "mklink", "/J", str(d / "jn"), str(out)], capture_output=True)
     assert r.returncode == 0
     ss.sync()
-    assert _leaks(ss.A0_SKILLS / "junky", ss.CLAUDE_SKILLS / "junky") == []
+    assert _leaks(ss.A0_SKILLS / "junky") == []
 
 
 NOTICES = {

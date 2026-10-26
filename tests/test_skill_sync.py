@@ -1,6 +1,10 @@
 # board #894 owner-same-skills-everywhere
+import io
 import json
+import os
+import shutil
 import subprocess
+import tarfile
 
 import pytest
 
@@ -34,9 +38,12 @@ def world(monkeypatch):
         cmd = args[-1]
         if args[:2] == ("exec", "-i"):
             target = cmd.split("'")[1].replace(ss.A0_PATH, str(ss.A0_SKILLS))
-            subprocess.run(["sh", "-c", f"rm -rf '{target}' && mkdir -p '{target}' && tar -C '{target}' -xf -"], input=data, check=True)
+            shutil.rmtree(target, ignore_errors=True)
+            os.makedirs(target)
+            with tarfile.open(fileobj=io.BytesIO(data), mode="r") as tar:
+                tar.extractall(target, filter="data")
         elif args[-3:-1] == ("rm", "-rf"):
-            subprocess.run(["rm", "-rf", cmd.replace(ss.A0_PATH, str(ss.A0_SKILLS))], check=True)
+            shutil.rmtree(cmd.replace(ss.A0_PATH, str(ss.A0_SKILLS)), ignore_errors=True)
         return subprocess.CompletedProcess(args, 0, b"", b"")
     monkeypatch.setattr(ss, "_docker", docker)
     return calls
