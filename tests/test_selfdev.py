@@ -17,7 +17,7 @@ def idle(tmp_path, monkeypatch):
     (live / "data").mkdir(parents=True)
     (live / "data" / "tasks.db").write_text("precious")
     (live / "secrets").mkdir()
-    (root / "data").symlink_to(live / "data")                         # shared state, linked in like the real slot B
+    (root / "data").symlink_to(live / "data")
     (root / "secrets").symlink_to(live / "secrets")
     monkeypatch.setattr(selfdev, "OPS", tmp_path / "ops")
     (tmp_path / "ops").mkdir()
@@ -35,7 +35,7 @@ def test_only_code_inside_the_idle_copy_is_editable(idle):
 
 
 def test_a_link_that_leads_to_shared_state_is_refused(idle):
-    (idle / "app" / "sneaky").symlink_to(idle / "data")                # a link inside app/ pointing at the real data
+    (idle / "app" / "sneaky").symlink_to(idle / "data")
     with pytest.raises(ValueError):
         selfdev.safe_path("app/sneaky/tasks.db", idle)
     assert (idle / "data" / "tasks.db").read_text(encoding="utf-8") == "precious"
@@ -48,7 +48,7 @@ def test_edit_must_match_exactly_once_and_undoes_breakage(idle):
     (idle / "app" / "thing.py").write_text("a = 1\na = 1\n")
     assert "2 times" in selfdev.edit("app/thing.py", "a = 1", "a = 3")["error"]
     (idle / "app" / "thing.py").write_text("x = 1\n")
-    r = selfdev.edit("app/thing.py", "x = 1", "x = (")                 # would break the file
+    r = selfdev.edit("app/thing.py", "x = 1", "x = (")
     assert "put it back" in r["error"] and (idle / "app" / "thing.py").read_text(encoding="utf-8") == "x = 1\n"
 
 
@@ -69,7 +69,7 @@ def test_switch_needs_a_passing_check_for_the_exact_code_and_then_asks(idle, mon
     monkeypatch.setattr(selfdev, "status", lambda: dict(base))
     assert "not passed" in selfdev.switch()["error"]
     monkeypatch.setattr(selfdev, "status", lambda: {**base, "last_stage": {"ok": True, "head": "OLD", "tests": {"summary": "74 passed"}, "smoke": {"ok": True}, "eval": {"score": "13/13"}}})
-    assert "not passed" in selfdev.switch()["error"]                                    # passed for different code
+    assert "not passed" in selfdev.switch()["error"]  # board #892 safety-switch-needs-same-code
     monkeypatch.setattr(selfdev, "status", lambda: {**base, "last_stage": {"ok": True, "head": "abc", "tests": {"summary": "74 passed"}, "smoke": {"ok": True}, "eval": {"score": "13/13"}}})
     monkeypatch.setattr(selfdev, "diff", lambda: {"summary": "2 files changed"})
     q = selfdev.switch()
@@ -88,7 +88,7 @@ def test_the_tools_are_registered_guarded_and_hidden_until_asked(idle):
 
 
 def test_a_javascript_change_without_node_is_refused_not_a_crash(idle, monkeypatch):
-    """Without node on PATH the JavaScript check used to raise FileNotFoundError (a crash, and two failing tests on such a machine)."""
+    # board #892 fix-no-node-crash
     import subprocess
     real = subprocess.run
     monkeypatch.setattr(selfdev.subprocess, "run", lambda args, *a, **k: (_ for _ in ()).throw(FileNotFoundError("node")) if args[0] == "node" else real(args, *a, **k))

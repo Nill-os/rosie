@@ -1,5 +1,4 @@
-"""Claude Code token use from its transcripts (~/.claude/projects/**/*.jsonl), read incrementally: each refresh() reads only the
-bytes added since the last one. Each assistant message counts once (Claude Code repeats its usage on one line per content block)."""
+# board #708 quirk-usage-repeats-per-block
 import datetime as dt
 import json
 import os
@@ -7,7 +6,7 @@ import re
 from pathlib import Path
 
 FIELDS = (("input", "input_tokens"), ("output", "output_tokens"), ("cache_write", "cache_creation_input_tokens"), ("cache_read", "cache_read_input_tokens"))
-MAX_AGE_DAYS = 35                    # older transcripts are skipped on the first read (they can't change today's numbers)
+MAX_AGE_DAYS = 35  # board #708 why-skip-old-transcripts
 USAGE = re.compile(rb'"usage"\s*:\s*\{')
 ROLE = re.compile(rb'"role"\s*:\s*"assistant"|"type"\s*:\s*"assistant"')
 FIELD = {k: re.compile(rb'"' + src.encode() + rb'"\s*:\s*(\d+)') for k, src in FIELDS}
@@ -29,9 +28,9 @@ def _zero() -> dict:
 class TokenCounter:
     def __init__(self, root: str):
         self.root = Path(root)
-        self.files = {}              # path -> {"offset", "ino", "ids": recent message ids, "hours": {(session, "YYYY-MM-DDTHH" UTC): totals}}
-        self.activity = {}           # session -> its latest step: {"t": ISO time (UTC), "tool": "Bash" or "", "what": short text}
-        self.titles = {}             # session -> {"aiTitle": Claude Code's own chat title, "customTitle": one the owner gave it (/rename)}
+        self.files = {}
+        self.activity = {}
+        self.titles = {}
 
     def refresh(self):
         cutoff = dt.datetime.now().timestamp() - MAX_AGE_DAYS * 86400
@@ -45,15 +44,15 @@ class TokenCounter:
                 if st.st_mtime < cutoff:
                     continue
                 f = self.files[p] = {"offset": 0, "ino": st.st_ino, "ids": [], "hours": {}}
-            if st.st_ino != f["ino"] or st.st_size < f["offset"]:            # replaced or cut short: count it again from the start
+            if st.st_ino != f["ino"] or st.st_size < f["offset"]:  # board #708 why-recount-replaced-transcript
                 f.update(offset=0, ino=st.st_ino, ids=[], hours={})
             if st.st_size == f["offset"]:
                 continue
             try:
-                with open(p, "rb") as fh:                                    # one line at a time: transcripts can be hundreds of MB
+                with open(p, "rb") as fh:  # board #708 why-read-line-by-line
                     fh.seek(f["offset"])
                     for line in fh:
-                        if not line.endswith(b"\n"):                         # a half-written line: read it when it is whole
+                        if not line.endswith(b"\n"):  # board #708 why-skip-half-line
                             break
                         f["offset"] += len(line)
                         self._line(f, line)
@@ -64,7 +63,6 @@ class TokenCounter:
         return self
 
     def _activity(self, line: bytes):
-        """The step this line shows: a tool call (its name and description, file or command) or a written reply."""
         sid, ts = SESSION.search(line), FULL_STAMP.search(line)
         if not sid or not ts:
             return
@@ -84,13 +82,11 @@ class TokenCounter:
         else:
             return
         key, t = sid.group(1).decode(), ts.group(1).decode()
-        if t >= self.activity.get(key, {}).get("t", ""):                   # files are read in any order: keep the newest step
+        if t >= self.activity.get(key, {}).get("t", ""):
             self.activity[key] = {"t": t, **step}
 
     def _line(self, f, line: bytes):
-        """Only the few fields it needs, found without parsing the whole line (an assistant line carries the full reply text). Inside
-        JSON strings quotes are escaped, so a quoted key like "usage": only matches a real key."""
-        if b'Title"' in line[:400] and (t := TITLE.search(line)):          # the chat's title line (short, no usage)
+        if b'Title"' in line[:400] and (t := TITLE.search(line)):
             sid = SESSION.search(line)
             if sid:
                 try:
@@ -104,8 +100,8 @@ class TokenCounter:
             return
         self._activity(line)
         u = line[m.end():m.end() + 1200]
-        if b"}" in u and b"{" not in u[:u.index(b"}")]:                     # stop at the end of the usage object (it may hold one
-            u = u[:u.index(b"}")]                                            # nested object, cache_creation, which this keeps)
+        if b"}" in u and b"{" not in u[:u.index(b"}")]:
+            u = u[:u.index(b"}")]
         mid = MSG_ID.search(line)
         if not mid:
             try:
@@ -117,7 +113,7 @@ class TokenCounter:
             key = (d.get("message") or {}).get("id") or d.get("uuid")
         else:
             key = mid.group(1)
-        if key in f["ids"]:                                    # a message's repeats sit next to each other: the last few ids are enough
+        if key in f["ids"]:
             return
         f["ids"] = (f["ids"] + [key])[-32:]
         sid, ts = SESSION.search(line), STAMP.search(line)
@@ -144,7 +140,6 @@ class TokenCounter:
         return out
 
     def by_day(self, tz_offset_minutes: int) -> dict:
-        """Per local day. Kept per UTC hour, so an offset that isn't whole hours rounds to the hour."""
         out, shift = {}, dt.timedelta(minutes=tz_offset_minutes)
         for (_, hour), t in self._hours():
             try:
@@ -157,6 +152,6 @@ class TokenCounter:
         return out
 
 
-if __name__ == "__main__":                                              # python3 agentdeck_tokens.py: today's use
+if __name__ == "__main__":
     c = TokenCounter(os.path.expanduser("~/.claude/projects")).refresh()
     print(json.dumps(c.by_day(dt.datetime.now().astimezone().utcoffset() // dt.timedelta(minutes=1)), indent=1))

@@ -1,4 +1,4 @@
-"""Local speech-to-text (faster-whisper, CPU). Shared by meetings and dictation. Audio never leaves this PC."""
+# board #779 safety-audio-stays-local
 import re
 import threading
 
@@ -18,7 +18,7 @@ def get_model(name="small.en"):
 
 
 def glossary(extra="") -> str:
-    """Names and terms to bias recognition toward (Whisper otherwise mangles proper nouns: 'Siobhan' -> 'SHIVON')."""
+    # board #779 quirk-whisper-mangles-names
     words: list[str] = []
     cfg = config.load()
     words += [w.strip() for w in re.split(r"[,\n]", cfg.get("glossary", "")) if w.strip()]
@@ -41,7 +41,6 @@ def glossary(extra="") -> str:
 
 
 def transcribe(pcm, extra_glossary="", model="small.en"):
-    """pcm: float32 mono 16 kHz numpy array. Returns [{start, end, text}] with silence and known hallucinations removed."""
     segs, _ = get_model(model).transcribe(pcm, language="en", vad_filter=True, condition_on_previous_text=False,
                                           initial_prompt=glossary(extra_glossary) or None, no_speech_threshold=0.6)
     out = []

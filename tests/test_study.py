@@ -1,5 +1,4 @@
-"""The study helper (owner 2026-10-24: "lets also make a study helper for my partner in rosie"): import of her Claude's cards.json,
-FSRS review, cards drafted from notes only when a quote backs them, Life Quest XP from the review log, and the print page."""
+# board #901 owner-study-helper
 import datetime as dt
 import hashlib
 import hmac
@@ -38,7 +37,7 @@ def client(tmp_path, monkeypatch):
 def test_her_cards_file_imports_once_with_decks_clues_and_tips():
     r = study.import_cards(CARDS, "BIOL 100")
     assert (r["decks"], r["added"], r["skipped"]) == (2, 3, 0)
-    assert study.import_cards(CARDS, "biol 100")["added"] == 0          # same course (any case), same questions: nothing twice
+    assert study.import_cards(CARDS, "biol 100")["added"] == 0
     o = study.overview()
     (co,) = o["courses"]
     assert co["name"] == "BIOL 100" and co["cards"] == 3 and co["due"] == 3 and "Sleep locks memories in." in co["notes"]
@@ -54,10 +53,10 @@ def test_a_review_moves_the_card_out_and_a_missed_one_comes_back_soon():
     good = study.review(first["id"], 3, now=now)
     again = study.review(second["id"], 1, now=now)
     assert dt.datetime.fromisoformat(good["due"]) > now and dt.datetime.fromisoformat(again["due"]) - now < dt.timedelta(hours=1)
-    later = now + dt.timedelta(minutes=5)                             # Good on a new card: its first learning step is 10 minutes
+    later = now + dt.timedelta(minutes=5)  # board #901 why-first-step-ten
     left = {c["id"] for c in study.due_cards(now=later)}
     assert first["id"] not in left and second["id"] in left
-    assert len(study.due_cards(now=now, every=True)) == 3                 # a walk through everything still has every card
+    assert len(study.due_cards(now=now, every=True)) == 3
     with pytest.raises(ValueError):
         study.review(first["id"], 5)
 
@@ -73,7 +72,7 @@ def test_a_drafted_card_needs_a_real_quote_and_an_answer_the_quote_backs(monkeyp
     r = study.draft_from_notes(did, NOTES, 5)
     assert (r["drafted"], r["dropped"]) == (1, 2)
     o = study.overview()
-    assert o["due"] == 0 and len(o["drafts"]) == 1 and o["drafts"][0]["quote"].startswith("Photosynthesis")   # a draft is not studied yet
+    assert o["due"] == 0 and len(o["drafts"]) == 1 and o["drafts"][0]["quote"].startswith("Photosynthesis")
     study.keep_card(o["drafts"][0]["id"])
     assert study.overview()["due"] == 1
     with pytest.raises(ValueError):
@@ -81,17 +80,17 @@ def test_a_drafted_card_needs_a_real_quote_and_an_answer_the_quote_backs(monkeyp
 
 
 def test_reviews_earn_knowledge_xp_once_and_never_past_the_daily_cap(monkeypatch):
-    lifequest.state()                                                    # first use makes the default stats (Knowledge among them)
+    lifequest.state()
     study.import_cards(CARDS, "BIOL 100")
     for c in study.due_cards():
         study.review(c["id"], 3)
     got = study.award_xp()
     assert got["xp"] == 3 * study.XP_PER_CARD and got["stat"] == "Knowledge"
-    assert study.award_xp() is None                                      # the same reviews never count twice
+    assert study.award_xp() is None
     monkeypatch.setattr(study, "XP_MAX_DAY", 7)
     for c in study.due_cards(every=True):
         study.review(c["id"], 3)
-    assert study.award_xp()["xp"] == 1                                   # 6 given already, cap 7
+    assert study.award_xp()["xp"] == 1  # board #901 why-xp-cap-seven
 
 
 def test_the_page_api_and_the_badge(client):
@@ -111,7 +110,7 @@ def test_print_page_mirrors_the_backs_and_escapes_text(client):
     front = client.get(f"/api/study/print?course={cid}&side=front").text
     back = client.get(f"/api/study/print?course={cid}&side=back").text
     assert "Q0 &lt;b&gt;" in front and "<b>" not in front.split("</div>", 1)[1].replace("<b>Fronts", "")
-    assert re.findall(r"A\d", back)[:2] == ["A1", "A0"]                  # each row swaps left and right for a long-edge flip
+    assert re.findall(r"A\d", back)[:2] == ["A1", "A0"]  # board #901 quirk-long-edge-flip
     assert "size:5in 3in" in client.get(f"/api/study/print?course={cid}&layout=index").text
 
 
@@ -121,7 +120,6 @@ def test_the_page_has_the_menu_entry_walk_mode_and_headphone_buttons():
     assert "setActionHandler('nexttrack'" in js and "/api/speak" in js and "every=1" in js
 
 
-# ================================================================ Phase 2: ideas, tests, tutor, next study block
 def test_phone_ideas_wait_for_the_pc_and_become_checked_drafts(monkeypatch):
     cid = study.course("Bio")
     did = study.deck(cid, "Plants")
@@ -132,7 +130,7 @@ def test_phone_ideas_wait_for_the_pc_and_become_checked_drafts(monkeypatch):
     good = {"q": "Where does photosynthesis happen?", "a": "In the chloroplasts of plant cells.", "quote": "Photosynthesis happens in the chloroplasts of plant cells.", "clue": ""}
     monkeypatch.setattr(workflows, "llm_json", lambda system, user, schema: (seen.update(user=user), {"cards": [good]})[1])
     assert study.cards_from_ideas(did)["drafted"] == 1 and "glucose" in seen["user"]
-    assert study.overview()["courses"][0]["ideas"] == []                  # used ideas leave the list
+    assert study.overview()["courses"][0]["ideas"] == []
     with pytest.raises(ValueError):
         study.cards_from_ideas(did)
 
@@ -151,7 +149,7 @@ def test_a_practice_test_mixes_decks_hides_answers_and_only_uses_her_answers_as_
     with study._db() as c:
         deck_of = {r["q"]: r["deck_id"] for r in c.execute("SELECT q, deck_id FROM cards")}
         answers = {r["a"] for r in c.execute("SELECT a FROM cards")}
-    assert [deck_of[q["q"]] for q in qs[:2]] in ([1, 2], [2, 1]) or deck_of[qs[0]["q"]] != deck_of[qs[1]["q"]]   # interleaved
+    assert [deck_of[q["q"]] for q in qs[:2]] in ([1, 2], [2, 1]) or deck_of[qs[0]["q"]] != deck_of[qs[1]["q"]]
     choice = [q for q in qs if q["kind"] == "choice"]
     assert choice and all(set(q["options"]) <= answers and len(q["options"]) == 4 for q in choice)
 
@@ -164,7 +162,7 @@ def test_her_written_wrong_answers_and_details_import_and_drive_the_test():
     cid = study.import_cards(data, "BIOL")["course_id"]
     t = study.make_test(cid, 2, seed=3)
     first = t["questions"][0]
-    assert first["q"] == "What does interdisciplinary mean?" and first["kind"] == "choice"     # the lecture item comes first
+    assert first["q"] == "What does interdisciplinary mean?" and first["kind"] == "choice"
     assert set(first["options"]) == {"It combines several sciences", "It studies only living things", "It is a branch of chemistry", "It focuses only on laws"}
     back = study.export_cards(cid)["cards"][0]
     assert back["wrong"][0] == "It studies only living things" and back["pri"] == 1 and back["ch"] == "Ch 1"
@@ -206,10 +204,10 @@ def test_the_tutor_only_answers_from_her_material_and_cites_what_it_had(monkeypa
     calls = []
     monkeypatch.setattr(workflows, "llm_json", lambda system, user, schema: (calls.append(user), {"reply": "What do sea otters eat?", "cites": [1, 7, 1]})[1])
     r = study.tutor(cid, "Explain a keystone species")
-    assert r["reply"] == "What do sea otters eat?" and len(r["sources"]) == 1 and "keystone" in r["sources"][0]["text"]   # 7 was not given: dropped
+    assert r["reply"] == "What do sea otters eat?" and len(r["sources"]) == 1 and "keystone" in r["sources"][0]["text"]
     assert "PASSAGES" in calls[0] and "keystone" in calls[0]
     off = study.tutor(cid, "Who won the 1998 World Cup?")
-    assert "don't cover" in off["reply"] and len(calls) == 1                # nothing of hers matches: no model call, no made-up answer
+    assert "don't cover" in off["reply"] and len(calls) == 1
 
 
 def test_the_next_study_block_is_read_from_her_calendar_and_planned(monkeypatch):
@@ -244,13 +242,12 @@ def test_notes_used_for_drafts_are_kept_for_the_tutor(monkeypatch):
     did = study.deck(cid, "Plants")
     monkeypatch.setattr(workflows, "llm_json", lambda system, user, schema: {"cards": []})
     study.draft_from_notes(did, NOTES)
-    study.draft_from_notes(did, NOTES)                                   # the same notes twice are kept once
+    study.draft_from_notes(did, NOTES)
     with study._db2() as c:
         assert c.execute("SELECT count(*) FROM sources").fetchone()[0] == 1
     assert any(p["kind"] == "notes" for p in study._passages(cid, "keystone species kelp forests"))
 
 
-# ================================================================ Phase 3: Anki import and export, deck audio, concept map
 def _apkg(tmp_path, notes, name="collection.anki21", extra=()):
     import sqlite3
     import zipfile
@@ -293,8 +290,8 @@ def test_anki_import_reads_tsv_csv_and_anki_text_and_skips_duplicates():
     _, d = _deck()
     tsv = b"Q one\tA one\tweek1 bio\nQ two\tA two\n"
     assert study.anki_import(d, tsv) | {"error_samples": 0} == {"deck_id": d, "added": 2, "skipped": 0, "errors": 0, "error_samples": 0}
-    assert study.anki_import(d, tsv)["skipped"] == 2                      # the same notes again add nothing
-    r = study.anki_import(d, b'Q three,"A, three"\nQ four,\n')            # plain CSV with a quoted comma; the empty answer is an error
+    assert study.anki_import(d, tsv)["skipped"] == 2
+    r = study.anki_import(d, b'Q three,"A, three"\nQ four,\n')
     assert (r["added"], r["errors"]) == (1, 1)
     r = study.anki_import(d, ("#separator:tab\n#html:false\n#guid column:1\n#deck column:4\n#tags column:5\n"
                               "g1\tQ five\tA five\tSome::Deck\tt1 t2\n").encode())
@@ -302,7 +299,7 @@ def test_anki_import_reads_tsv_csv_and_anki_text_and_skips_duplicates():
     cards = study.deck_cards(d)["cards"]
     assert [c["q"] for c in cards] == ["Q one", "Q two", "Q three", "Q five"] and cards[2]["a"] == "A, three"
     assert study._tags(study._db().execute("SELECT meta FROM cards WHERE q='Q five'").fetchone()[0]) == ["t1", "t2"]
-    _, text = study.anki_export(deck_id=d)                                  # her own export goes back in as the same cards
+    _, text = study.anki_export(deck_id=d)
     c2 = study.deck(study.course("Other"), "Copy")
     assert study.anki_import(c2, text.encode())["added"] == 4
 
@@ -347,7 +344,7 @@ def test_deck_audio_is_a_wav_with_a_question_and_an_answer_per_card(monkeypatch,
 
     def fake(text):
         spoken.append(text)
-        return [0.1] * 240, 24000                                      # 0.01 s of tone: never loads Kokoro, never plays anything
+        return [0.1] * 240, 24000
     monkeypatch.setattr(study, "SYNTH", fake)
     r = client.get("/api/study/audio?limit=2")
     assert r.status_code == 200 and r.content[:4] == b"RIFF" and r.content[8:12] == b"WAVE" and "attachment" in r.headers["content-disposition"]
@@ -357,7 +354,7 @@ def test_deck_audio_is_a_wav_with_a_question_and_an_answer_per_card(monkeypatch,
         want = 2 * (240 * 2 + int(24000 * 1.5) + int(24000 * 1.0))
         assert w.getnframes() == want
     assert client.get("/api/study/audio?deck=999").status_code == 400
-    assert client.get("/api/study/audio?deck=1&limit=500").status_code == 200   # the limit is capped, a whole deck still works
+    assert client.get("/api/study/audio?deck=1&limit=500").status_code == 200
 
 
 def test_concept_map_is_course_decks_tags_cards_from_her_data(client):
@@ -374,7 +371,7 @@ def test_concept_map_is_course_decks_tags_cards_from_her_data(client):
     assert (f"c{cid}", "d1") in edges and ("d1", "t1:term") in edges
     long = next(n for n in m["nodes"] if n.get("q", "").startswith("xxx"))
     assert len(long["label"]) <= 60 and long["label"].endswith("…")
-    assert all(a in by and b in by for a, b in edges) and len(edges) == len(m["nodes"]) - 1     # a tree: every node hangs from one parent
+    assert all(a in by and b in by for a, b in edges) and len(edges) == len(m["nodes"]) - 1
     assert client.get("/api/study/map?course=999").status_code == 400
 
 

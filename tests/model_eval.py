@@ -1,7 +1,3 @@
-"""Compare local models on what Rosie really does. Not part of the automatic tests (it needs Ollama and the models).
-Usage:  .venv/bin/python tests/model_eval.py qwen3.5:9b gemma4:12b ...
-Everything runs on throwaway data with a fake calendar and a fake phone; nothing real is changed or sent. Each task is scored automatically:
-the right tool was called with sensible arguments, no pointless question or offer at the end, and a real answer."""
 import datetime as dt
 import json
 import re
@@ -25,16 +21,15 @@ import tasks  # noqa: E402
 import workflows  # noqa: E402
 
 TMP = Path(tempfile.mkdtemp(prefix="rosie-eval-"))
-LIVE_CTX = config.load().get("ctx") or {}          # the owner's tuned context window per model (Settings > Context window)
+LIVE_CTX = config.load().get("ctx") or {}  # board #835 owner-tuned-context
 config.PATH = TMP / "config.json"
-config.save({**config.load(), "ctx": LIVE_CTX})    # the same num_ctx as Rosie and Agent Zero: a different one reloads the model on the
-                                                   # 8 GB GPU for every call they make during the benchmark (210 reloads on 2026-10-21)
+config.save({**config.load(), "ctx": LIVE_CTX})  # board #835 why-same-num-ctx
 tasks.DB, inbox.DB, chats.DB, memory.DB, lessons.DB = TMP / "t.db", TMP / "i.db", TMP / "c.db", TMP / "m.db", TMP / "l.db"
-fastpath.try_fast = lambda *a, **k: None          # judge the MODEL, not the exact-code shortcuts
+fastpath.try_fast = lambda *a, **k: None  # board #835 why-no-fastpath
 import corner_graph  # noqa: E402
-corner_graph.recall = lambda *a, **k: ""          # and not what the live corner happens to hold today
+corner_graph.recall = lambda *a, **k: ""  # board #835 why-corner-recall-stubbed
 import mind  # noqa: E402
-mind.DB = TMP / "mind.db"                          # her memory: an empty throwaway one
+mind.DB = TMP / "mind.db"
 JOBS = []
 
 
@@ -100,7 +95,6 @@ def names(calls):
     return [n for n, _ in calls]
 
 
-# (prompt, check(calls, reply, pending) -> (ok, why))
 def t_reminder(c, r, p):
     x = [a for n, a in c if n == "set_reminder"]
     return bool(x) and "bank" in json.dumps(x[0]).lower() and ("4" in json.dumps(x[0])), "set_reminder with 'bank' and 4pm"

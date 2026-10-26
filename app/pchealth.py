@@ -1,9 +1,4 @@
-"""The PC's own health, for Rosie's background work (owner 2026-10-23: "cap rosies browsing ram when i am using the pc so i can run other
-stuff while she is browsing also keep in mind my pc health throughout all of this. this is on a laptop").
-
-Every reading is cheap, cached for a few seconds, and None when this PC can't tell (a desktop has no battery, Windows hides the CPU
-temperature, a session without GNOME or X has no idle time); the rule that needs a missing reading is skipped. Works on Linux and Windows.
-"""
+# board #761 owner-cap-browsing-ram
 from __future__ import annotations
 
 import ctypes
@@ -20,7 +15,7 @@ _cache: dict = {}
 WIN = sys.platform == "win32"
 HWMON = Path("/sys/class/hwmon")
 POWER = Path("/sys/class/power_supply")
-CPU_CHIPS = ("k10temp", "coretemp", "zenpower", "cpu_thermal", "soc_thermal")   # the CPU's own sensor; acpitz only when none of these
+CPU_CHIPS = ("k10temp", "coretemp", "zenpower", "cpu_thermal", "soc_thermal")  # board #761 why-cpu-sensor-order
 
 
 def _cached(name: str, fn):
@@ -29,7 +24,7 @@ def _cached(name: str, fn):
         return hit[1]
     try:
         v = fn()
-    except Exception:                                      # a sensor that breaks must never stop Rosie
+    except Exception:  # board #761 why-sensor-errors-ignored
         v = None
     _cache[name] = (time.monotonic(), v)
     return v
@@ -42,7 +37,6 @@ def _read(p: Path) -> str:
         return ""
 
 
-# ---------------------------------------------------------------- memory
 def _mem_linux():
     for line in Path("/proc/meminfo").read_text().splitlines():
         if line.startswith("MemAvailable:"):
@@ -61,13 +55,11 @@ def _mem_windows():
 
 
 def mem_available(fresh: bool = False) -> int | None:
-    """Bytes of memory other programs can still get without swapping."""
     if fresh:
         _cache.pop("mem", None)
     return _cached("mem", _mem_windows if WIN else _mem_linux)
 
 
-# ---------------------------------------------------------------- CPU temperature
 def _temp_linux():
     chips = {}
     for d in HWMON.glob("hwmon*"):
@@ -81,18 +73,16 @@ def _temp_linux():
 
 
 def cpu_temp() -> float | None:
-    """The hottest CPU sensor in °C (Linux only: Windows needs admin rights to read it)."""
     return None if WIN else _cached("temp", _temp_linux)
 
 
-# ---------------------------------------------------------------- battery
 def _battery_linux():
     has_battery = False
     for d in POWER.glob("*"):
         kind = _read(d / "type")
         if kind in ("Mains", "USB") and _read(d / "online") == "1" and _read(d / "scope") != "Device":
             return False
-        if kind == "Battery" and _read(d / "scope") != "Device":       # scope Device = a mouse or headset battery
+        if kind == "Battery" and _read(d / "scope") != "Device":  # board #761 quirk-battery-scope-device
             has_battery = True
     return True if has_battery else None
 
@@ -108,21 +98,19 @@ def _battery_windows():
 
 
 def on_battery() -> bool | None:
-    """True on a laptop running off its battery; None on a desktop."""
     return _cached("battery", _battery_windows if WIN else _battery_linux)
 
 
-# ---------------------------------------------------------------- keyboard and mouse
 def _idle_linux():
     env = dict(os.environ)
     bus = Path(f"/run/user/{os.getuid()}/bus")
-    if "DBUS_SESSION_BUS_ADDRESS" not in env and bus.exists():           # Rosie runs as a service, outside the desktop session
+    if "DBUS_SESSION_BUS_ADDRESS" not in env and bus.exists():  # board #761 why-service-outside-session
         env["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path={bus}"
     if shutil.which("gdbus"):
         r = subprocess.run(["gdbus", "call", "--session", "--dest", "org.gnome.Mutter.IdleMonitor", "--object-path",
                             "/org/gnome/Mutter/IdleMonitor/Core", "--method", "org.gnome.Mutter.IdleMonitor.GetIdletime"],
                            capture_output=True, text=True, timeout=3, env=env)
-        m = re.search(r"uint64 (\d+)", r.stdout)                         # "(uint64 6620,)" in milliseconds
+        m = re.search(r"uint64 (\d+)", r.stdout)
         if r.returncode == 0 and m:
             return int(m.group(1)) / 1000
     if env.get("DISPLAY") and shutil.which("xprintidle"):
@@ -143,17 +131,14 @@ def _idle_windows():
 
 
 def input_idle_s() -> float | None:
-    """Seconds since the last key press or mouse move on this PC."""
     return _cached("idle", _idle_windows if WIN else _idle_linux)
 
 
 def disk_free(path) -> int:
-    """Free bytes on the disk holding path (Linux and Windows). Raises OSError like os.statvfs did."""
     return shutil.disk_usage(path).free
 
 
 def snapshot() -> dict:
-    """For the Settings pages: what Rosie sees right now."""
     mem, idle = mem_available(), input_idle_s()
     return {"mem_free_gb": round(mem / 1024 ** 3, 1) if mem is not None else None, "cpu_temp": cpu_temp(), "on_battery": on_battery(),
             "idle_s": round(idle) if idle is not None else None}

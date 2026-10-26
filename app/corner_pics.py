@@ -1,12 +1,4 @@
-"""Pictures for Rosie's corner (owner 2026-10-14: "allow her to see pictures also and save them for later but run them through a virus tool").
-
-Every picture goes through these checks, in this order, before it is saved or shown. Any failure throws it away and logs it as blocked:
-  1. type: only JPEG, PNG, GIF or WebP, judged by the file's first bytes (never its name or the server's word);
-  2. size: at most 10 MB and 40 megapixels (read from the file header, before anything decodes it);
-  3. virus scan: ClamAV (`clamscan`); anything flagged, or any scanner error, is deleted;
-  4. clean copy: Pillow opens it and saves a fresh PNG or JPEG with no metadata. Only that copy is kept, in data/corner/images/.
-
-Fails closed: without `clamscan` or without Pillow no picture is saved at all."""
+# board #725 owner-pictures-virus-scan
 import hashlib
 import importlib
 import importlib.util
@@ -38,7 +30,7 @@ def scanner() -> str | None:
     found = shutil.which("clamscan")
     if found or not plat.IS_WIN:
         return found
-    for var in ("ProgramFiles", "ProgramW6432"):                       # winget's ClamAV doesn't add itself to the PATH
+    for var in ("ProgramFiles", "ProgramW6432"):  # board #725 quirk-clamav-not-on-path
         exe = Path(os.environ.get(var, "")) / "ClamAV" / "clamscan.exe"
         if os.environ.get(var) and exe.exists():
             return str(exe)
@@ -46,7 +38,6 @@ def scanner() -> str | None:
 
 
 def _pil():
-    """Pillow, imported only when a picture is cleaned (it is not in every Rosie install). None when missing."""
     if importlib.util.find_spec("PIL") is None:
         return None
     try:
@@ -63,7 +54,6 @@ def ready() -> tuple[bool, str]:
     return True, "Pictures are on: each one is virus-checked and cleaned before it is kept."
 
 
-# ---------------------------------------------------------------- 1. type by the file's own bytes
 def sniff(b: bytes) -> str | None:
     if b[:3] == b"\xff\xd8\xff":
         return "jpeg"
@@ -76,7 +66,6 @@ def sniff(b: bytes) -> str | None:
     return None
 
 
-# ---------------------------------------------------------------- 2. size from the header (no decoder touches it yet)
 def dimensions(b: bytes, kind: str) -> tuple[int, int] | None:
     try:
         if kind == "png":
@@ -128,7 +117,6 @@ def dimensions(b: bytes, kind: str) -> tuple[int, int] | None:
 
 
 def precheck(b: bytes) -> tuple[str | None, str, tuple[int, int] | None]:
-    """Checks 1 and 2. Returns (kind, problem, (w, h)); problem is '' when the picture may go on to the virus scan."""
     kind = sniff(b)
     if not kind:
         return None, "not a real picture (JPEG, PNG, GIF or WebP)", None
@@ -144,17 +132,14 @@ def precheck(b: bytes) -> tuple[str | None, str, tuple[int, int] | None]:
     return kind, "", wh
 
 
-# ---------------------------------------------------------------- 3. ClamAV
 def scan(paths: list) -> dict:
-    """Scan files with clamscan in one run (it loads its virus database once). Returns {path: 'ok' | 'flagged: …' | 'error: …'}.
-    Anything clamscan doesn't explicitly call OK counts as not OK."""
     out = {str(p): "error: not scanned" for p in paths}
     exe = scanner()
     if not exe:
         return {p: "error: no virus scanner" for p in out}
     if not paths:
         return {}
-    low = ["nice", "-n", "19"] if shutil.which("nice") else []            # Windows has no nice: its own idle priority class instead
+    low = ["nice", "-n", "19"] if shutil.which("nice") else []
     cmd = low + [exe, "--no-summary", "--stdout", "--"] + [str(p) for p in paths]
     flags = (getattr(subprocess, "IDLE_PRIORITY_CLASS", 0) | plat.NO_WINDOW) if plat.IS_WIN else 0
     try:
@@ -172,15 +157,12 @@ def scan(paths: list) -> dict:
             out[m.group(1)] = "flagged: " + verdict[:-5].strip()[:120]
         else:
             out[m.group(1)] = "error: " + verdict[:120]
-    if r.returncode not in (0, 1):                  # 2 = the scanner itself had trouble: trust nothing from this run
+    if r.returncode not in (0, 1):  # board #725 safety-scanner-trouble-distrust
         return {p: (v if v.startswith("flagged") else f"error: scanner exit {r.returncode}") for p, v in out.items()}
     return out
 
 
-# ---------------------------------------------------------------- 4. clean copy with Pillow
 def reencode(src, kind: str, wh: tuple[int, int]) -> tuple[bytes, str, tuple[int, int]]:
-    """Open the scanned file, check it is what its header said, and draw a brand-new picture from its pixels (no metadata, no extra
-    chunks, first frame only). Returns (bytes, 'png' | 'jpg', (w, h)). Raises on anything odd."""
     import io
     Image = _pil()
     if Image is None:
@@ -215,9 +197,7 @@ THUMB_SIDE = 320
 
 
 def thumbnail(b: bytes) -> tuple[bytes | None, str]:
-    """A small preview for the corner's Live view: checks 1 and 2 (type by bytes, size from the header), then Pillow draws a fresh
-    JPEG of at most 320 px from the pixels. It stays in memory and is served only from Rosie; the remote picture never reaches the
-    owner's browser. Returns (jpeg, '') or (None, why it is blocked). Not a kept picture: those still go through ClamAV."""
+    # board #725 safety-preview-served-by-rosie
     import io
     kind, problem, wh = precheck(b or b"")
     if problem:
@@ -247,17 +227,13 @@ def thumbnail(b: bytes) -> tuple[bytes | None, str]:
 
 
 def check_and_keep(items: list[dict]) -> list[dict]:
-    """Run downloaded pictures through all four checks and keep the clean copies.
-
-    items: [{"bytes": b, "src_url", "page_url", "page_title", "alt"}]. Returns one result per item: {"ok": True, "id": picture id} or
-    {"ok": False, "why": reason}. Every blocked picture is written to the trail."""
     ok, why = ready()
     if not ok:
         for it in items:
             corner.log("picture", it.get("src_url", ""), it.get("page_title", ""), "blocked", why)
         return [{"ok": False, "why": why} for _ in items]
     results: list[dict | None] = [None] * len(items)
-    staged = []                                               # (index, path, kind, wh)
+    staged = []
     tmp = corner.tmp_dir()
     testguard.check(tmp)
     tmp.mkdir(parents=True, exist_ok=True)
@@ -266,7 +242,7 @@ def check_and_keep(items: list[dict]) -> list[dict]:
         if problem:
             results[i] = {"ok": False, "why": problem}
             continue
-        p = tmp / (secrets.token_hex(16) + ".bin")            # never the picture's own name or extension
+        p = tmp / (secrets.token_hex(16) + ".bin")
         fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(fd, "wb") as f:
             f.write(it["bytes"])
@@ -285,18 +261,18 @@ def check_and_keep(items: list[dict]) -> list[dict]:
                 continue
             results[i] = {"ok": True, "data": data, "ext": ext, "size": size}
     finally:
-        for _, p, _, _ in staged:                             # the downloaded originals never stay
+        for _, p, _, _ in staged:
             p.unlink(missing_ok=True)
     out = []
     for it, r in zip(items, results):
-        if r["ok"] and corner.disk_low():                     # disk safety: never fill the disk (on top of the storage budget)
+        if r["ok"] and corner.disk_low():
             r = {"ok": False, "why": "less than 5 GB free on the disk"}
         if not r["ok"]:
             corner.log("picture", it.get("src_url", ""), it.get("page_title", ""), "blocked", r["why"])
             out.append(r)
             continue
         out.append({"ok": True, "id": _store(it, r["data"], r["ext"], r["size"])})
-    corner.enforce_storage()                                  # nonstop too (owner 2026-10-22: "10 gb for pictures")
+    corner.enforce_storage()
     return out
 
 
@@ -304,7 +280,7 @@ def _store(it: dict, data: bytes, ext: str, size: tuple[int, int]) -> int:
     sha = hashlib.sha256(data).hexdigest()
     with corner._db() as db:
         old = db.execute("SELECT id FROM pictures WHERE sha256=?", (sha,)).fetchone()
-    if old:                                                   # the same picture again (another page used it): keep one copy
+    if old:
         return old["id"]
     d = corner.images_dir()
     testguard.check(d)

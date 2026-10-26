@@ -1,10 +1,4 @@
-"""Where Agent Zero runs on this PC (owner 2026-10-23: "she has agent zero so add that and just make it the main chat/brain"). Agent Zero
-is a Docker container, but each install differs: its name, the port its web page is on, and the folder holding its /a0/usr (on Linux
-~/agent-zero/usr; on Windows wherever its Docker Desktop install put it). detect() asks Docker once and saves the answer in
-data/a0_host.json; Settings values (a0_container, a0_url, a0_usr_dir) win over it. With neither, the owner's original layout applies.
-
-Agent Zero reaches Rosie's tools (a0_mcp) at host.docker.internal: on Linux that is the docker0 bridge (172.17.0.1), so a0_mcp listens
-there; Docker Desktop (Windows, Mac) routes it to this PC's own loopback, so there a0_mcp listens on 127.0.0.1."""
+# board #697 owner-agent-zero-main-brain
 import json
 import subprocess
 import sys
@@ -27,7 +21,7 @@ def _saved() -> dict:
 
 
 def info() -> dict:
-    """container, url and usr for this PC: Settings first, then what detect() found, then the original layout."""
+    # board #697 why-settings-first-order
     cfg, found = config.load(), _saved()
     return {k: (cfg.get(f"a0_{'usr_dir' if k == 'usr' else k}") or found.get(k) or v) for k, v in DEFAULT.items()}
 
@@ -50,8 +44,6 @@ def _docker(*args, timeout=20):
 
 
 def detect(save: bool = True) -> dict:
-    """Find the Agent Zero container with Docker: by name, or by its image (agent0ai/agent-zero, frdel/agent-zero-run). Returns what it
-    found ({"found": False, "why": ...} when there is none) and saves it for info()."""
     try:
         r = _docker("ps", "-a", "--format", "{{.Names}}\t{{.Image}}\t{{.State}}")
     except (OSError, subprocess.SubprocessError):

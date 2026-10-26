@@ -1,6 +1,3 @@
-"""MCP server for the agent board (app/agentboard.py): lets each Claude Code session read what Rosie, Agent Zero and the other
-Claude sessions are doing, post its own progress, leave notes, and claim shared things before changing them. It speaks over stdio;
-nothing listens on the network. The session is named after its Claude Code process (claude-<pid>), so every session is told apart."""
 import json
 import sys
 from pathlib import Path

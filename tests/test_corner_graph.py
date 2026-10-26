@@ -1,8 +1,4 @@
-"""Rosie's corner memory graph (owner 2026-10-19): corner data goes into a Graphiti graph in the
-background, only when the GPU is free; Rosie's agent searches it read-only and gets facts with their corner source links.
-
-No real graph, database or model here: the graph is a fake client, the model answers come from an httpx.MockTransport. Tests that
-need graphiti-core itself (the Ollama adapters) are skipped when it isn't installed (it isn't in ~/assistant/.venv until the deploy step)."""
+# board #857 owner-graph-only-gpu-free
 import ast
 import asyncio
 import datetime as dt
@@ -32,7 +28,6 @@ NOW = dt.datetime(2026, 10, 16, 14, 0).astimezone()
 
 
 class FakeGraph:
-    """Stands in for Graphiti: records every episode and search."""
     def __init__(self):
         self.added, self.searches, self.edges, self.fail = [], [], [], None
 
@@ -49,7 +44,6 @@ class FakeGraph:
 
 @pytest.fixture(autouse=True)
 def fresh(monkeypatch, tmp_path):
-    """A fresh corner (owner away an hour, midday, nothing running) and a fresh graph module state."""
     monkeypatch.setattr(corner, "state", {"running": False, "doing": "", "started": None, "last_end": None, "last_stop": "", "session_pages": 0,
                                           "nonstop": False, "paused": ""})
     monkeypatch.setattr(corner, "_now", lambda: NOW)
@@ -63,13 +57,12 @@ def fresh(monkeypatch, tmp_path):
     monkeypatch.setattr(cg, "_graph", {"g": None})
     monkeypatch.setattr(cg, "_counts", {"t": 0.0, "v": None})
     monkeypatch.setattr(cg, "_ollama_transport", httpx.MockTransport(lambda r: httpx.Response(500, text="no model in tests")))
-    assert tmp_path in cg.SECRET.parents                                    # conftest points the password file at a stand-in
+    assert tmp_path in cg.SECRET.parents
 
 
 @pytest.fixture
 def graph(monkeypatch):
-    """The graph is "running": a password file and a fake Graphiti."""
-    corner.save_settings({"corner_interests": ["RF", "ham radio", "Meshtastic", "SDR", "science"]})   # the groups these tests use
+    corner.save_settings({"corner_interests": ["RF", "ham radio", "Meshtastic", "SDR", "science"]})
     cg.SECRET.parent.mkdir(parents=True, exist_ok=True)
     cg.SECRET.write_text("test-password\n")
     fake = FakeGraph()
@@ -94,7 +87,6 @@ def _set(table, rid, **cols):
 
 
 def _seed():
-    """Finds (one grouped, one hidden, one brand new without a group, one older without a group), a note, two pictures, two days of trail."""
     f1 = corner.add_find("https://meshtastic.org/docs/antenna", "LoRa antennas | Meshtastic", "Good for the owner's nodes.", ["A 915 MHz antenna matters."])
     _set("finds", f1, grp="meshtastic", grp_by="kw", at="2026-10-16T10:00:00-07:00")
     f2 = corner.add_find("https://spam.example/x", "Hidden find", "", ["Nope."])
@@ -126,25 +118,24 @@ def _fill(n=20):
     return total
 
 
-# ---------------------------------------------------------------- 1. what goes in, once, newest first
 def test_back_fill_puts_each_corner_piece_in_once_newest_first(graph):
     import corner_groups
     f1, f2, f3, f4, n1 = _seed()
     first = cg.step()
-    assert first == cg.BATCH                                                 # a batch per round, not everything at once
+    assert first == cg.BATCH
     _fill()
     keys = [a["name"] for a in graph.added]
     want = {f"corner find {f1}", f"corner find {f4}", f"corner note {n1}", "corner picture 1", "corner day 2026-10-15"}
     want |= {f"corner group {g['id']}" for g in corner_groups.groups()}
-    assert set(keys) == want and len(keys) == len(want)                      # each once
-    assert f"corner find {f2}" not in keys                                   # "Not interested" stays out
-    assert f"corner find {f3}" not in keys                                   # a brand-new find waits for its group (up to an hour)
-    assert "corner picture 2" not in keys                                    # a picture with no words at all has nothing to say
-    assert "corner day 2026-10-16" not in keys                               # today's trail waits until the day is over
+    assert set(keys) == want and len(keys) == len(want)
+    assert f"corner find {f2}" not in keys
+    assert f"corner find {f3}" not in keys
+    assert "corner picture 2" not in keys
+    assert "corner day 2026-10-16" not in keys
     assert all(a["group_id"] == "rosie-corner" for a in graph.added)
-    assert all(a["reference_time"].tzinfo == dt.timezone.utc for a in graph.added)   # Graphiti keeps the clock reading, not the zone
+    assert all(a["reference_time"].tzinfo == dt.timezone.utc for a in graph.added)  # board #857 quirk-graphiti-clock-not-zone
     dated = [a["reference_time"] for a in graph.added if not a["name"].startswith("corner group")]
-    assert dated == sorted(dated, reverse=True)                              # newest first: the back-fill runs behind new finds
+    assert dated == sorted(dated, reverse=True)
     find = next(a for a in graph.added if a["name"] == f"corner find {f1}")
     assert find["reference_time"] == dt.datetime.fromisoformat("2026-10-16T10:00:00-07:00")
     for part in ("https://meshtastic.org/docs/antenna", "LoRa antennas | Meshtastic", "A 915 MHz antenna matters.", "Good for the owner's nodes.", "Meshtastic"):
@@ -156,8 +147,8 @@ def test_back_fill_puts_each_corner_piece_in_once_newest_first(graph):
     day = next(a for a in graph.added if a["name"] == "corner day 2026-10-15")["episode_body"]
     assert "read 1 web page" in day and '"meshtastic antenna"' in day and "today search" not in day
     n = len(graph.added)
-    assert cg.step() == 0 and cg.pending() == [] and len(graph.added) == n   # nothing twice
-    later = dt.datetime(2026, 10, 16, 15, 30).astimezone()                   # an hour and a half later the new find goes in, ungrouped
+    assert cg.step() == 0 and cg.pending() == [] and len(graph.added) == n
+    later = dt.datetime(2026, 10, 16, 15, 30).astimezone()
     assert [it["key"] for it in cg.pending(now=later)] == [f"find:{f3}"]
     st = cg.status()
     assert st["on"] and st["done"] == n and st["total"] == n and "pieces are in her memory graph" in st["line"]
@@ -173,7 +164,7 @@ def test_a_find_moved_to_another_group_adds_one_moved_episode(graph):
     mv = graph.added[-1]
     assert mv["name"] == f"corner move {f1}" and "https://meshtastic.org/docs/antenna" in mv["episode_body"] and '"RF"' in mv["episode_body"]
     _fill()
-    assert len(graph.added) == n + 1                                         # once
+    assert len(graph.added) == n + 1
 
 
 def test_a_failing_piece_is_tried_three_times_then_left(graph):
@@ -198,7 +189,6 @@ def test_skipped_pieces_are_left_out_and_not_counted_as_waiting_or_failed(graph)
     st = cg.status()
     assert st["done"] == st["total"] and cg.pending() == []
 
-# ---------------------------------------------------------------- 2. only when the GPU is free
 @pytest.mark.parametrize("case, why", [
     ("owner", "Waiting while you use Rosie."),
     ("grace", "Waiting while you use Rosie."),
@@ -231,7 +221,7 @@ def test_it_only_adds_when_the_gpu_is_free(graph, monkeypatch, case, why):
 
 def test_nonstop_reading_shares_the_model_between_steps(graph):
     _seed()
-    corner.state.update(running=True, nonstop=True, doing="Reading meshtastic.org")     # same model and context size: Ollama queues, no reload
+    corner.state.update(running=True, nonstop=True, doing="Reading meshtastic.org")
     assert cg.step() == cg.BATCH
 
 
@@ -257,19 +247,19 @@ def test_model_calls_use_her_model_one_at_a_time_and_stop_when_the_owner_comes(m
         return await asyncio.gather(cg.ollama_chat([{"role": "user", "content": "x"}], schema, 99999),
                                     cg.ollama_chat([{"role": "user", "content": "y"}], schema, 100))
     assert asyncio.run(two()) == ['{"a": 1}', '{"a": 1}']
-    assert live["max"] == 1                                                  # one model call at a time
+    assert live["max"] == 1
     b = bodies[0]
-    assert b["model"] == agent.MODEL and {k: b["options"].get(k) for k in ctxsize.options(agent.MODEL)} == ctxsize.options(agent.MODEL)   # never a reload of her chat model
+    assert b["model"] == agent.MODEL and {k: b["options"].get(k) for k in ctxsize.options(agent.MODEL)} == ctxsize.options(agent.MODEL)
     assert b["think"] is False and b["format"] == schema and b["keep_alive"] == "30m" and b["stream"] is True
     assert b["options"]["num_predict"] == cg.MAX_PREDICT and bodies[1]["options"]["num_predict"] == 100
 
-    def owner_arrives(request):                                              # the owner sends a message while the answer streams
+    def owner_arrives(request):
         corner._activity["last"] = time.time() + 5
         return httpx.Response(200, text=_stream('{"a":', ' 1}'))
     monkeypatch.setattr(cg, "_ollama_transport", httpx.MockTransport(owner_arrives))
     with pytest.raises(cg.OwnerBusy):
         asyncio.run(cg.ollama_chat([{"role": "user", "content": "x"}], schema))
-    corner._activity["in_flight"] = 1                                        # and none starts while the owner is here
+    corner._activity["in_flight"] = 1
     calls = []
     monkeypatch.setattr(cg, "_ollama_transport", httpx.MockTransport(lambda r: (calls.append(r), httpx.Response(200, text=_stream("{}")))[1]))
     with pytest.raises(cg.OwnerBusy):
@@ -293,12 +283,12 @@ def test_a_runaway_answer_is_cut_short_and_asked_once_more_a_little_warmer(monke
     llm = cg.adapters().OllamaLLM()
     ask = lambda: asyncio.run(llm.generate_response([Message(role="system", content="s"), Message(role="user", content="u")], response_model=Out))
     blank = '{"names": ["Meshtastic",' + " " * 60
-    answers[:] = [_stream(blank, " " * 60, '"never read"]}'), _stream('{"names": ["Meshtastic"]}')]     # empty space: stopped at once
+    answers[:] = [_stream(blank, " " * 60, '"never read"]}'), _stream('{"names": ["Meshtastic"]}')]
     assert ask() == {"names": ["Meshtastic"]} and temps == [0.0, cg.RETRY_TEMPERATURE]
     long = "\n".join(json.dumps({"message": {"content": c}, "done": False}) for c in ('{"names": ["a", ', '"b", ')) + "\n"
     long += json.dumps({"message": {"content": ""}, "done": True, "done_reason": "length"}) + "\n"
     temps.clear()
-    answers[:] = [long, long, _stream('{"names": []}')]                     # cut off at the cap twice: this piece fails, no 4 retries
+    answers[:] = [long, long, _stream('{"names": []}')]
     with pytest.raises(cg.RanAway):
         ask()
     assert temps == [0.0, cg.RETRY_TEMPERATURE] and len(answers) == 1
@@ -316,7 +306,7 @@ def test_backlog_counts_the_last_days_pieces_not_in_yet(graph):
     before = cg.backlog()
     waiting = [it for it in cg.pending(10 ** 6) if it["kind"] in ("find", "picture", "note")]
     assert 0 < before <= len(waiting)
-    assert cg.backlog(NOW + dt.timedelta(days=3)) == 0                       # all older than a day by then
+    assert cg.backlog(NOW + dt.timedelta(days=3)) == 0
     cg.step()
     assert cg.backlog() < before
 
@@ -341,10 +331,9 @@ def test_an_owner_interruption_is_not_a_failure(graph, monkeypatch):
     graph.fail = cg.OwnerBusy("You started using Rosie.")
     assert cg.step() == 0 and cg.state["waiting"] == "You started using Rosie."
     graph.fail = None
-    assert cg.step() == cg.BATCH                                             # nothing was counted as a failed try
+    assert cg.step() == cg.BATCH
 
 
-# ---------------------------------------------------------------- 3. off when a piece is missing, and the corner page says so
 def test_no_password_file_turns_it_off_and_the_page_says_so(client):
     f1 = corner.add_find("https://meshtastic.org/docs/antenna", "LoRa antennas", "", ["A 915 MHz antenna matters."])
     assert not cg.SECRET.exists()
@@ -352,7 +341,7 @@ def test_no_password_file_turns_it_off_and_the_page_says_so(client):
     st = client.get("/api/corner/status").json()["graph"]
     assert st["on"] is False and st["line"].startswith("Corner memory is off: The graph's password file is missing")
     assert client.get("/api/corner").json()["status"]["graph"]["on"] is False
-    r = cg.search("antenna")                                                 # the tool still answers, from her finds
+    r = cg.search("antenna")
     assert r["facts"] == [] and r["finds"][0]["url"] == "https://meshtastic.org/docs/antenna" and "off" in r["graph"]
     assert f1
 
@@ -361,7 +350,7 @@ def test_missing_graphiti_core_turns_it_off(monkeypatch):
     import sys
     cg.SECRET.parent.mkdir(parents=True, exist_ok=True)
     cg.SECRET.write_text("pw")
-    monkeypatch.setitem(sys.modules, "graphiti_core", None)                  # as if it weren't installed
+    monkeypatch.setitem(sys.modules, "graphiti_core", None)
     monkeypatch.setattr(cg, "_adapt", {})
     assert cg.ready() is False and cg.state["why"] == "graphiti-core is not installed."
     assert cg.status()["line"] == "Corner memory is off: graphiti-core is not installed."
@@ -377,12 +366,12 @@ def test_a_database_that_is_down_turns_it_off_and_is_retried_later(monkeypatch, 
     cg.SECRET.write_text("pw")
     tries = []
 
-    class ConnectionError_(Exception):                                       # redis.exceptions.ConnectionError is not the builtin one
+    class ConnectionError_(Exception):  # board #857 quirk-redis-error-not-builtin
         pass
     ConnectionError_.__name__ = "ConnectionError"
     monkeypatch.setattr(cg, "make_graph", lambda pw: (tries.append(pw), (_ for _ in ()).throw(ConnectionError_("refused")))[1])
     corner.add_find("https://meshtastic.org/docs/antenna", "LoRa antennas", "", ["A 915 MHz antenna matters."])
-    assert cg.step() == 0 and cg.ready() is False and len(tries) == 1        # not hammered: tried again after RETRY_S
+    assert cg.step() == 0 and cg.ready() is False and len(tries) == 1
     assert cg.state["why"] == "The graph database is not answering on 127.0.0.1:6380 (ConnectionError)."
     assert "not answering" in client.get("/api/corner/status").json()["graph"]["line"]
     assert "off" in cg.search("antenna")["graph"]
@@ -400,11 +389,11 @@ def test_a_database_lost_mid_way_turns_it_off_and_a_piece_that_keeps_crashing_it
         cg.state["checked"] -= cg.RETRY_S + 1
         assert cg.step() == 0 and cg.state["on"] is False and "not answering" in cg.state["why"]
         if n < cg.MAX_TRIES - 1:
-            assert cg.pending(1)[0]["key"] == first                         # the same piece is tried again after a restart
-    assert cg.pending(1)[0]["key"] != first                                 # three database crashes on it: it is left
+            assert cg.pending(1)[0]["key"] == first
+    assert cg.pending(1)[0]["key"] != first  # board #857 why-three-crashes-left
     graph.fail = None
     cg.state["checked"] -= cg.RETRY_S + 1
-    assert cg.step() == cg.BATCH                                             # the rest go in
+    assert cg.step() == cg.BATCH
 
 
 def test_search_never_waits_for_a_hanging_connect(monkeypatch):
@@ -413,14 +402,14 @@ def test_search_never_waits_for_a_hanging_connect(monkeypatch):
     corner.add_find("https://meshtastic.org/docs/antenna", "LoRa antennas", "", ["A 915 MHz antenna matters."])
     inside, release = threading.Event(), threading.Event()
 
-    def hanging(pw):                                                        # a database that accepts the connection, then hangs
+    def hanging(pw):
         inside.set()
         release.wait(5)
         raise TimeoutError("hung")
     monkeypatch.setattr(cg, "make_graph", hanging)
     t = threading.Thread(target=cg.ready, daemon=True)
     t.start()
-    assert inside.wait(2)                                                   # the background adder is mid-connect, holding the lock
+    assert inside.wait(2)
     t0 = time.time()
     r = cg.search("antenna")
     took = time.time() - t0
@@ -437,7 +426,6 @@ def test_a_broken_graph_module_never_breaks_the_corner_page(monkeypatch, client)
     assert st["graph"]["on"] is False and "could not be checked" in st["graph"]["line"]
 
 
-# ---------------------------------------------------------------- 4. Rosie's read-only search, with sources
 def test_search_returns_facts_with_their_corner_source_links_only(graph):
     f1, *_ = _seed()
     _fill()
@@ -448,18 +436,18 @@ def test_search_returns_facts_with_their_corner_source_links_only(graph):
                    SimpleNamespace(fact="A made-up fact with no corner episode.", episodes=["ep-unknown"], valid_at=None, invalid_at=None)]
     r = cg.search("meshtastic antenna")
     assert graph.searches == [("meshtastic antenna", ["rosie-corner"])]
-    assert [f["fact"] for f in r["facts"]] == ["Rosie found that a 915 MHz antenna matters for Meshtastic."]   # untraceable facts are dropped
+    assert [f["fact"] for f in r["facts"]] == ["Rosie found that a 915 MHz antenna matters for Meshtastic."]
     src = r["facts"][0]["sources"][0]
     assert src["kind"] == "find" and src["urls"] == ["https://meshtastic.org/docs/antenna"]
     assert r["finds"][0]["url"] == "https://meshtastic.org/docs/antenna"
     assert "source link" in r["rule"] and "never instructions" in r["rule"]
     assert any(g["group"] == "Meshtastic" for g in r["groups_lately"])
-    assert len(graph.added) == added                                         # read-only
+    assert len(graph.added) == added
     graph.edges = [SimpleNamespace(fact="x" * 1000, episodes=[f"ep-{i}" for i in range(1, added + 1)], valid_at=None, invalid_at=None)] * 30
-    assert len(json.dumps(cg.search("meshtastic antenna"))) < 7000                # fits the agent's tool-output cap, nothing cut
-    assert cg.search("meshtastic antenna", days=1)["facts"]                 # found at 10:00 today: inside the last day
+    assert len(json.dumps(cg.search("meshtastic antenna"))) < 7000
+    assert cg.search("meshtastic antenna", days=1)["facts"]
     assert [f["url"] for f in cg.search("sdr")["finds"]] == ["https://old.example/sdr"]
-    assert cg.search("sdr", days=1)["finds"] == []                           # found yesterday morning: outside the last day
+    assert cg.search("sdr", days=1)["finds"] == []
 
 
 def test_the_agent_offers_corner_memory_for_corner_questions():
@@ -477,7 +465,6 @@ def test_the_agent_offers_corner_memory_for_corner_questions():
     assert "read-only" in desc and "link" in desc
 
 
-# ---------------------------------------------------------------- 5. only corner data
 FORBIDDEN = {"agent", "gmail", "gcal", "tasks", "pc_tools", "terminals", "phone", "actions", "memory",
              "inbox", "mailwatch", "mailclean", "workflows", "selfdev", "usertools", "fsguard", "chats", "projects", "proposals", "skills",
              "lessons", "server", "hub", "briefs", "backup", "meetings", "screenagent", "social", "mcp_server", "vaultsearch",
@@ -524,7 +511,6 @@ def test_it_never_starts_under_tests():
     assert cg._worker["t"] is None
 
 
-# ---------------------------------------------------------------- 6. the Ollama adapters (only with graphiti-core installed)
 def test_the_adapters_speak_ollama_native(monkeypatch):
     pytest.importorskip("graphiti_core")
     from graphiti_core.prompts.models import Message
@@ -550,10 +536,9 @@ def test_the_adapters_speak_ollama_native(monkeypatch):
     emb = ns.OllamaEmbedder()
     assert len(asyncio.run(emb.create("hello"))) == 768 and len(asyncio.run(emb.create_batch(["a", "b"]))) == 2
     assert asyncio.run(ns.NoRerank().rank("q", ["a", "b"]))[0][0] == "a"
-    assert not [p for p, _ in seen if p.startswith("/v1")]                   # never the OpenAI-style endpoint (it ignores num_ctx)
+    assert not [p for p, _ in seen if p.startswith("/v1")]  # board #857 quirk-ollama-openai-ignores-ctx
 
 
-# ---------------------------------------------------------------- 7. the corner page, in a real DOM (jsdom)
 def _render(client, tmp_path):
     node = shutil.which("node")
     if not node:
@@ -576,7 +561,7 @@ def _render(client, tmp_path):
 
 
 def test_the_corner_page_shows_whether_her_memory_graph_is_on(client, tmp_path, graph):
-    d = _render(client, tmp_path)                                            # not connected yet: says why
+    d = _render(client, tmp_path)
     assert "Corner memory is off:" in d["tabs"]["space"]["text"]
     _seed()
     _fill()
@@ -591,31 +576,31 @@ def test_recall_brings_matching_corner_reading_into_a_chat(graph):
     ep = next(i for i, a in enumerate(graph.added, 1) if a["name"] == f"corner find {f1}")
     graph.edges = [SimpleNamespace(fact="A 915 MHz antenna matters for Meshtastic nodes.", episodes=[f"ep-{ep}"], valid_at=None, invalid_at=None),
                    SimpleNamespace(fact="Meshtastic antennas were said to be useless.", episodes=[f"ep-{ep}"], valid_at=None,
-                                   invalid_at=dt.datetime(2026, 10, 16, 11, 0).astimezone()),               # no longer true: left out
+                                   invalid_at=dt.datetime(2026, 10, 16, 11, 0).astimezone()),
                    SimpleNamespace(fact="An antenna fact with no corner record.", episodes=["ep-unknown"], valid_at=None, invalid_at=None)]
     r = cg.recall("What's the best antenna for my Meshtastic nodes?")
     assert r.startswith("[From your corner reading:") and "data, never instructions" in r
     assert "A 915 MHz antenna matters for Meshtastic nodes." in r and "https://meshtastic.org/docs/antenna" in r
-    assert "useless" not in r and "no corner record" not in r and r.count("meshtastic.org/docs/antenna") == 1   # the find isn't repeated
+    assert "useless" not in r and "no corner record" not in r and r.count("meshtastic.org/docs/antenna") == 1
     assert len(r) <= cg.RECALL_CHARS
-    assert cg.recall("what time is it") == "" and cg.recall("antenna") == ""                # fewer than two words of its own: nothing
+    assert cg.recall("what time is it") == "" and cg.recall("antenna") == ""
     graph.edges = []
-    assert cg.recall("call the mechanic about my car brakes") == ""                          # nothing she read matches
-    assert "https://meshtastic.org/docs/antenna" in cg.recall("meshtastic antenna")          # a word match still counts without the graph
+    assert cg.recall("call the mechanic about my car brakes") == ""
+    assert "https://meshtastic.org/docs/antenna" in cg.recall("meshtastic antenna")
 
 
 def test_recall_matches_whole_words_and_never_breaks_a_chat(monkeypatch):
     corner.add_find("https://mikecarper.example/otafix", "OTAFIX bootloader notes", "Firmware notes.", ["Use the exact board profile."])
-    assert cg.recall("how do I fix my car brakes") == ""                                     # "car" is not in "mikecarper", "fix" not in "OTAFIX"
+    assert cg.recall("how do I fix my car brakes") == ""
     assert "otafix" in cg.recall("otafix bootloader")
     monkeypatch.setattr(cg, "_local_finds", lambda *a, **k: 1 / 0)
-    assert cg.recall("otafix bootloader") == ""                                              # any failure: the chat goes on without it
+    assert cg.recall("otafix bootloader") == ""
 
 
 def test_recall_skips_commands_and_everyday_words():
     corner.add_find("https://example.org/mom-texts", "How to text your mom about GPU temps", "A page about texting.", ["Text Mom about GPU heat."])
-    assert cg.recall("Text Mom that I'll be there at six") == ""                             # an action, not a question
-    assert cg.recall("What did Mom text me?") == ""                                         # only everyday words in common
+    assert cg.recall("Text Mom that I'll be there at six") == ""
+    assert cg.recall("What did Mom text me?") == ""
     assert cg.recall("Add a task about the gpu temps page") == ""
 
 
@@ -632,7 +617,7 @@ def test_a_slow_call_is_skipped_but_never_turns_the_graph_off(graph, monkeypatch
         await asyncio.sleep(2)
     monkeypatch.setattr(graph, "search", search)
     monkeypatch.setattr(cg, "RECALL_TIMEOUT_S", 0.2)
-    cg.recall("LoRa antennas for meshtastic nodes")                         # a slow recall during a chat
+    cg.recall("LoRa antennas for meshtastic nodes")
     assert cg._graph["g"] is graph and cg.state["on"] is True
 
 
@@ -643,7 +628,7 @@ def test_an_ollama_outage_waits_and_charges_no_tries(graph):
         assert cg.step() == 0
     assert "Ollama isn't answering" in cg.state["waiting"] and cg.state["on"] is True
     graph.fail = None
-    assert cg.step() == cg.BATCH                                             # nothing was used up meanwhile
+    assert cg.step() == cg.BATCH
 
 
 def test_a_board_post_that_keeps_crashing_the_database_is_left(graph, monkeypatch):
@@ -655,4 +640,4 @@ def test_a_board_post_that_keeps_crashing_the_database_is_left(graph, monkeypatc
     cg.ready()
     graph.fail = ConnectionRefusedError("gone")
     ag.step()
-    assert tried and "stopped while adding" in tried[0]                      # the post's try is counted
+    assert tried and "stopped while adding" in tried[0]

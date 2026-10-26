@@ -22,7 +22,6 @@ import android.view.WindowManager;
 
 import java.util.Random;
 
-/** The glitchy pixel-octopus popup that shows over any app while Rosie listens, thinks and speaks (the phone version of the desktop overlay). */
 public class RosieOverlay {
     private final Context ctx;
     private final WindowManager wm;

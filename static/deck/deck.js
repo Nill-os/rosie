@@ -1,14 +1,12 @@
 'use strict';
-// Agent Deck page: polls the snapshot and draws the agents, the board, the system and every process. All text goes in through
-// textContent (h()), never as HTML, because process names, board posts and commands are data from other programs.
-// Two homes: inside Rosie (/deck/, her login cookie, /api/deck/*) and the desktop window (~/agent-deck: a per-launch token, /api/*).
+// board #823 safety-text-never-html
 const TOKEN = new URLSearchParams(location.hash.slice(1)).get('t') || '';
 const BASE = TOKEN ? '/api/' : '/api/deck/';
-if (window.self !== window.top) document.documentElement.classList.add('framed');   // inside Rosie: her header already names the page
+if (window.self !== window.top) document.documentElement.classList.add('framed');
 const $ = (s) => document.querySelector(s);
 const store = {
   get(k, d) { try { const v = localStorage.getItem('deck.' + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
-  set(k, v) { try { localStorage.setItem('deck.' + k, JSON.stringify(v)); } catch { /* private window: fine */ } },
+  set(k, v) { try { localStorage.setItem('deck.' + k, JSON.stringify(v)); } catch { } },
 };
 
 function h(tag, attrs, ...kids) {
@@ -25,7 +23,6 @@ function h(tag, attrs, ...kids) {
   return el;
 }
 
-// ---------------------------------------------------------------- formatting
 const KB = 1024, MB = KB * 1024, GB = MB * 1024;
 const bytes = (b) => b == null ? '–' : b >= GB ? (b / GB).toFixed(1) + ' GB' : b >= MB ? (b / MB).toFixed(b >= 100 * MB ? 0 : 1) + ' MB' : b >= KB ? (b / KB).toFixed(0) + ' KB' : Math.round(b) + ' B';
 const rate = (b) => b == null ? '–' : bytes(b) + '/s';
@@ -37,10 +34,9 @@ const clock = (t) => new Date(t * 1000).toLocaleTimeString([], { hour: 'numeric'
 const ago = (t) => dur(Date.now() / 1000 - t) + ' ago';
 const level = (p) => p >= 85 ? 'hi' : p >= 60 ? 'mid' : '';
 const bar = (p, cls = '') => h('div', { class: 'bar ' + cls }, h('i', { class: level(p), style: `width:${Math.min(100, Math.max(0, p || 0))}%` }));
-const cpuOf = (g) => g.cores >= 0.95 ? `${pct(g.cpu)} · ${g.cores.toFixed(1)} cores` : pct(g.cpu);   // % of the whole CPU, plus cores when it matters
+const cpuOf = (g) => g.cores >= 0.95 ? `${pct(g.cpu)} · ${g.cores.toFixed(1)} cores` : pct(g.cpu);
 const tokTotal = (t) => (t.input || 0) + (t.output || 0) + (t.cache_write || 0) + (t.cache_read || 0);
 
-// ---------------------------------------------------------------- API
 async function api(path, body) {
   const headers = TOKEN ? { 'X-Deck-Token': TOKEN } : {};
   const r = await fetch(BASE + path, body ? { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : { headers });
@@ -63,7 +59,6 @@ async function act(body, confirmText) {
   tick(true);
 }
 
-// ---------------------------------------------------------------- modal
 function modal(...content) {
   $('#modalbody').replaceChildren(...content);
   $('#modal').hidden = false;
@@ -82,7 +77,6 @@ function ask(text, yes = 'Yes', danger = true) {
   });
 }
 
-// ---------------------------------------------------------------- state
 const S = {
   tab: new URLSearchParams(location.hash.slice(1)).get('tab') || store.get('tab', 'monitor'), snap: null, paused: false, every: store.get('every', 3000), timer: null, busy: false,
   sort: store.get('sort', { key: 'cpu', dir: -1 }), page: 0, per: store.get('per', 25), q: '',
@@ -99,7 +93,6 @@ const COLS = {
 const NUMERIC = new Set(['pid', 'ppid', 'cpu', 'rss', 'mem', 'virt', 'vram', 'threads', 'nice', 'disk', 'age']);
 const STATUSES = ['Running', 'Sleeping', 'Idle', 'Disk wait', 'Stopped', 'Zombie'];
 
-// remember which drop-downs are open, across redraws and restarts
 function keepOpen(el, key, dflt = false) {
   el.open = key in S.open ? S.open[key] : dflt;
   el.addEventListener('toggle', () => { S.open[key] = el.open; store.set('open', S.open); });
@@ -107,11 +100,10 @@ function keepOpen(el, key, dflt = false) {
 }
 document.querySelectorAll('details.sec').forEach((d) => keepOpen(d, 'sec:' + d.dataset.sec, true));
 
-// ---------------------------------------------------------------- header
 function drawTop(s) {
   const memUsed = s.mem.total - s.mem.available, memP = 100 * memUsed / s.mem.total;
   const swapUsed = s.mem.swap_total - s.mem.swap_free, swapP = s.mem.swap_total ? 100 * swapUsed / s.mem.swap_total : 0;
-  const W = { CPU: 6, RAM: 17, Swap: 6, GPU: 6, VRAM: 15, 'Claude tokens today': 6, out: 6, 'CPU temp': 5 };   // widest value of each, in characters
+  const W = { CPU: 6, RAM: 17, Swap: 6, GPU: 6, VRAM: 15, 'Claude tokens today': 6, out: 6, 'CPU temp': 5 };
   const chip = (label, val, p) => h('span', { class: 'chip ' + (p >= 90 ? 'hot' : p >= 70 ? 'warm' : ''), style: `--w:${W[label] || 0}ch` }, label, h('b', {}, val));
   const tt = s.agents.tokens_today || {};
   const g = s.gpu;
@@ -122,8 +114,7 @@ function drawTop(s) {
     s.cpu.temp ? chip('CPU temp', Math.round(s.cpu.temp) + '°C', s.cpu.temp >= 90 ? 95 : s.cpu.temp >= 80 ? 75 : 0) : null);
 }
 
-// ---------------------------------------------------------------- at a glance
-const vramOf = (g) => (g.vram ? [['VRAM', bytes(g.vram)]] : []);     // video memory the agent's processes hold on the graphics card
+const vramOf = (g) => (g.vram ? [['VRAM', bytes(g.vram)]] : []);
 function drawGlance(s) {
   const a = s.agents, now = Date.now() / 1000, rows = [];
   const row = (kind, state, name, sub, what, verb, why, nums) => h('div', { class: 'grow ' + kind },
@@ -138,7 +129,7 @@ function drawGlance(s) {
   }
   const r = a.rosie, gl = r.graph && r.graph.last ? Date.parse(r.graph.last) / 1000 : 0;
   const talking = r.seen && now - r.seen < 300;
-  const graphing = r.up && s.gpu && s.gpu.util > 25 && now - gl < 1800;     // one memory-graph piece can take minutes on a busy GPU
+  const graphing = r.up && s.gpu && s.gpu.util > 25 && now - gl < 1800;  // board #823 why-graph-waits-busy-gpu
   rows.push(row('rosie', r.up ? (talking || graphing ? '' : 'idle') : 'off', 'Rosie', r.up ? `slot ${r.slot}` : 'down',
     !r.up ? (r.stopped ? 'Shut down' : 'Not answering') : talking ? 'Talking with you' : graphing ? `Adding to her memory graph (${r.graph.today} today, last ${ago(gl)})` : 'Idle',
     '', [r.browsing ? 'Browsing when idle' : 'Browsing off', r.planning ? 'plans with Claude' : 'plans on her own', r.orchestrator ? 'orchestrator on' : 'orchestrator off'].join(' · '),
@@ -147,7 +138,7 @@ function drawGlance(s) {
   rows.push(row('ollama', o.up ? (o.models.length && gpuBusy ? '' : 'idle') : 'off', 'Ollama', 'local models',
     !o.up ? 'Not running' : !o.models.length ? 'No model loaded' : (gpuBusy ? 'Running ' : 'Loaded ') + o.models.map((m) => m.name.split(':')[0].split('/').pop()).join(', '),
     '', s.gpu ? `GPU ${pct(s.gpu.util)} · VRAM ${bytes(s.gpu.mem_used)} of ${bytes(s.gpu.mem_total)}` : '', [['CPU', cpuOf(o)], ['RAM', bytes(o.rss)], ['GPU', s.gpu ? pct(s.gpu.util) : '–'], ...vramOf(o)]));
-  // busy: it saved a chat in the last 45 s (it saves as it works), took a turn through Rosie in the last 2 min, or uses real CPU itself
+  // board #823 why-agent-zero-busy-rules
   const z = a.agent_zero, zon = z.status === 'running', zlast = Math.max(z.last_active || 0, z.seen || 0);
   const zbusy = zon && ((z.last_active && now - z.last_active < 45) || (z.seen && now - z.seen < 120) || z.cpu > 3);
   rows.push(row('a0', zon ? (zbusy ? '' : 'idle') : 'off', 'Agent Zero', z.status, !zon ? 'Stopped' : zbusy ? `Working${z.chat ? ' · chat ' + z.chat : ''}` : 'Idle',
@@ -176,7 +167,6 @@ function drawGlance(s) {
   $('#glance-sum').textContent = `${busy} of ${a.claude.length} Claude busy · Rosie ${r.up ? 'live' : 'down'} · GPU ${s.gpu ? pct(s.gpu.util) : '–'}`;
 }
 
-// ---------------------------------------------------------------- agents
 function metrics(g, extra = []) {
   return h('div', { class: 'metrics' },
     h('div', { class: 'metric', title: `${(g.cores || 0).toFixed(2)} of ${S.snap ? S.snap.cpu.cores.length : ''} cores` }, h('small', {}, 'CPU'), h('b', {}, pct(g.cpu))),
@@ -264,7 +254,6 @@ function drawAgents(s) {
   $('#agents-sum').textContent = `${a.claude.length} Claude session${a.claude.length === 1 ? '' : 's'} · Rosie ${r.up ? 'live' : 'down'} · Agent Zero ${z.status}`;
 }
 
-// ---------------------------------------------------------------- the Agent board tab
 const KINDS = ['doing', 'done', 'blocked', 'note', 'task'];
 const B = { data: null, kinds: store.get('bkinds', []), agent: '', q: '', old: store.get('bold', false), seen: store.get('bseen', Date.now() / 1000 - 86400) };
 function who(agent, names) {
@@ -365,7 +354,6 @@ function drawMiniBoard(s) {
   $('#mboard-sum').textContent = `${around.length} around · ${b.claims.length} claim${b.claims.length === 1 ? '' : 's'}`;
 }
 
-// ---------------------------------------------------------------- tabs
 function showTab(t) {
   S.tab = t; store.set('tab', t);
   $('#tab-monitor').hidden = t !== 'monitor';
@@ -375,7 +363,6 @@ function showTab(t) {
 }
 document.querySelectorAll('#tabs button').forEach((b) => b.addEventListener('click', () => showTab(b.dataset.tab)));
 
-// ---------------------------------------------------------------- system
 function spark(vals, max, color) {
   const n = vals.length, w = 300, ht = 42;
   if (n < 2) return h('div', { class: 'spark' });
@@ -396,7 +383,7 @@ function drawSystem(s) {
   const H = S.hist, push = (k, v) => { H[k].push(v); if (H[k].length > 90) H[k].shift(); };
   const memUsed = s.mem.total - s.mem.available;
   push('cpu', s.cpu.total); push('mem', 100 * memUsed / s.mem.total); push('gpu', s.gpu ? s.gpu.util || 0 : 0);
-  const real = s.net.filter((n) => !/^(veth|br-|docker|virbr)/.test(n.name));     // container bridges repeat the same traffic
+  const real = s.net.filter((n) => !/^(veth|br-|docker|virbr)/.test(n.name));
   const rx = real.reduce((a, n) => a + n.rx_rate, 0), tx = real.reduce((a, n) => a + n.tx_rate, 0);
   push('rx', rx); push('tx', tx);
   const cards = [
@@ -425,7 +412,6 @@ function drawSystem(s) {
   $('#sys-sum').textContent = `CPU ${pct(s.cpu.total)} · RAM ${bytes(memUsed)} of ${bytes(s.mem.total)} · load ${s.load[0]}`;
 }
 
-// ---------------------------------------------------------------- processes
 function matcher(q) {
   const parts = q.trim().split(/\s+/).filter(Boolean), tests = [];
   for (const part of parts) {
@@ -437,7 +423,7 @@ function matcher(q) {
       continue;
     }
     let re = null;
-    try { re = new RegExp(part, 'i'); } catch { /* not a regex: plain words */ }
+    try { re = new RegExp(part, 'i'); } catch { }
     const low = part.toLowerCase();
     tests.push(re ? (p) => re.test(p.name) || re.test(p.cmd) || re.test(p.user) || String(p.pid) === part
       : (p) => p.name.toLowerCase().includes(low) || p.cmd.toLowerCase().includes(low) || p.user.toLowerCase().includes(low));
@@ -455,8 +441,6 @@ function drawFilterMenu() {
     S.cols = Object.keys(COLS).filter((c) => (c === k ? v : S.cols.includes(c))); store.set('cols', S.cols);
   })));
 }
-// a narrow window (half a screen, a phone, inside Rosie) can't fit nine columns: Process (with PID, status, user and run time under the
-// name), CPU and RAM, then the buttons
 const NARROW = 720;
 const isNarrow = () => { const w = $('#ptable') && $('#ptable').closest('.tablewrap'); return !!w && w.clientWidth > 0 && w.clientWidth < NARROW; };
 const shownCols = () => (isNarrow() ? ['name', 'cpu', 'rss'] : S.cols);
@@ -514,7 +498,7 @@ document.querySelectorAll('[data-pg]').forEach((b) => b.addEventListener('click'
   S.page = { first: 0, prev: Math.max(0, S.page - 1), next: S.page + 1, last: total }[b.dataset.pg];
   drawProcs();
 }));
-document.addEventListener('click', (e) => {                                // close the Filters / Columns menus when clicking elsewhere
+document.addEventListener('click', (e) => {
   document.querySelectorAll('details.dd[open]').forEach((d) => { if (!d.contains(e.target)) { d.open = false; drawHead(); } });
 });
 
@@ -542,7 +526,6 @@ async function info(pid) {
     h('div', { class: 'row', style: 'justify-content:flex-end;margin-top:12px' }, h('button', { class: 'btn ghost', onclick: closeModal }, 'Close')));
 }
 
-// ---------------------------------------------------------------- loop
 async function tick(force) {
   clearTimeout(S.timer);
   if (S.busy) return;
@@ -583,7 +566,6 @@ $('#pause').addEventListener('click', () => {
   $('#live').className = S.paused ? 'dot idle' : 'dot';
   if (!S.paused) tick();
 });
-// ---------------------------------------------------------------- dark drop-downs (GTK draws a <select> and its list in the light theme)
 function fancy(sel) {
   const btn = h('button', { type: 'button', class: 'btn selbtn', 'aria-haspopup': 'listbox', 'aria-label': sel.getAttribute('aria-label') || '' });
   const wrap = h('div', { class: 'selwrap' }, btn);
@@ -614,11 +596,9 @@ function fancy(sel) {
 }
 document.querySelectorAll('select').forEach(fancy);
 
-// ---------------------------------------------------------------- settings (this monitor scales everything up: zoom and text size help)
 const SECTIONS = [['glance', 'At a glance'], ['agents', 'Agent details'], ['board', 'Agent board'], ['system', 'System'], ['procs', 'Processes']];
 const SET = Object.assign({ zoom: 1, text: 13, density: 'normal', glow: 'medium', tokens: true, hide: [], order: [] }, store.get('settings', {}));
-// the owner's own order of the Monitor sections (owner 2026-10-21: "make it so i can reorganize them myself"): drag a section by its ⋮⋮
-// handle, or use ↑ ↓ in Settings. Sections added later go to the end.
+// board #823 owner-monitor-sections-order
 const order = () => [...SET.order.filter((k) => SECTIONS.some(([s]) => s === k)), ...SECTIONS.map(([k]) => k).filter((k) => !SET.order.includes(k))];
 function placeSections() {
   const box = $('#tab-monitor');
@@ -632,7 +612,7 @@ function moveSection(k, to) {
 document.querySelectorAll('#tab-monitor details.sec').forEach((d) => {
   const k = d.dataset.sec, grip = h('span', { class: 'grip', draggable: 'true', title: 'Drag to move this section', 'aria-label': 'Move section' }, '⋮⋮');
   d.querySelector('summary').prepend(grip);
-  grip.addEventListener('click', (e) => e.preventDefault());                       // the handle never opens or closes the section
+  grip.addEventListener('click', (e) => e.preventDefault());
   grip.addEventListener('dragstart', (e) => { e.dataTransfer.setData('text/plain', k); e.dataTransfer.effectAllowed = 'move'; d.classList.add('dragging'); });
   grip.addEventListener('dragend', () => { d.classList.remove('dragging'); document.querySelectorAll('.dropbefore,.dropafter').forEach((x) => x.classList.remove('dropbefore', 'dropafter')); });
   d.addEventListener('dragover', (e) => {
@@ -651,12 +631,10 @@ document.querySelectorAll('#tab-monitor details.sec').forEach((d) => {
     SET.order = o; applySettings();
   });
 });
-// Zoom, text size, spacing and background light are Rosie's own Display settings (owner 2026-10-23: "add this setting to the main settings
-// and make it control the whole ui"), shared through localStorage rosie.look; inside Rosie's frame her page zoom already scales this one.
 const LOOK = 'rosie.look', FRAMED = window.parent !== window;
 function readLook() {
   let v = null;
-  try { v = JSON.parse(localStorage.getItem(LOOK)); } catch { /* none yet */ }
+  try { v = JSON.parse(localStorage.getItem(LOOK)); } catch { }
   if (!v || typeof v !== 'object') return;
   if (typeof v.zoom === 'number') SET.zoom = v.zoom;
   if (typeof v.text === 'number') SET.pct = v.text;
@@ -664,12 +642,12 @@ function readLook() {
   if (['off', 'low', 'medium', 'high'].includes(v.glow)) SET.glow = v.glow;
   SET.theme = v.theme;
 }
-function lookTheme() {                                   // Rosie's theme (Settings > Display): this device's pick, else the install's default
+function lookTheme() {
   let d = null;
-  try { d = JSON.parse(localStorage.getItem('rosie.theme.default')); } catch { /* none yet */ }
+  try { d = JSON.parse(localStorage.getItem('rosie.theme.default')); } catch { }
   return ['cyberdeck', 'jetsons'].includes(SET.theme) ? SET.theme : (d === 'jetsons' ? 'jetsons' : 'cyberdeck');
 }
-if (typeof SET.pct !== 'number') SET.pct = Math.round(SET.text / 13 * 20) * 5;   // the Deck's old text size in px
+if (typeof SET.pct !== 'number') SET.pct = Math.round(SET.text / 13 * 20) * 5;
 readLook();
 window.addEventListener('storage', (e) => { if (e.key === LOOK || e.key === 'rosie.theme.default') { readLook(); applySettings(false); } });
 function applySettings(share = true) {
@@ -685,8 +663,8 @@ function applySettings(share = true) {
   store.set('settings', SET);
   if (share) {
     let v = {};
-    try { v = JSON.parse(localStorage.getItem(LOOK)) || {}; } catch { /* none yet */ }
-    try { localStorage.setItem(LOOK, JSON.stringify({ ...v, zoom: SET.zoom, text: SET.pct, density: SET.density, glow: SET.glow })); } catch { /* private window */ }
+    try { v = JSON.parse(localStorage.getItem(LOOK)) || {}; } catch { }
+    try { localStorage.setItem(LOOK, JSON.stringify({ ...v, zoom: SET.zoom, text: SET.pct, density: SET.density, glow: SET.glow })); } catch { }
   }
 }
 const zoomBy = (d) => { SET.zoom = Math.round(Math.min(2, Math.max(0.5, (d ? SET.zoom + d : 1))) * 100) / 100; applySettings(); if (!$('#modal').hidden) settings(); };

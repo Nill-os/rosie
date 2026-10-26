@@ -20,7 +20,7 @@ def test_parses_real_recipe_data_from_a_graph():
 
 def test_sectioned_instructions_and_thin_pages():
     assert len(web.parse_recipe(recipe_page("A", 4, 5, steps=3, shape="section"))["steps"]) == 3
-    assert web.parse_recipe(recipe_page("B", 4, 5, ings=1)) is None                     # too little data to trust
+    assert web.parse_recipe(recipe_page("B", 4, 5, ings=1)) is None
     assert web.parse_recipe("<html>no data</html>") is None
 
 

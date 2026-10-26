@@ -1,6 +1,3 @@
-// Loads the real page shell (static/index.html + app.js + paper.js) in jsdom with canned API answers, opens #/paper at a
-// desktop width and at 360 px, presses the page's buttons and prints what it saw as JSON (tests/test_paper_ui.py checks it).
-// Usage: node paper_ui.js <static dir> <answers.json>. No network: fetch is a stub; anything not in the answers is a 404.
 const fs = require('fs');
 const vm = require('vm');
 const path = require('path');

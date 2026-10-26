@@ -1,4 +1,3 @@
-"""Rosie's mind (app/mind.py): retain, recall, consolidate, reflect, standing summaries, on a fake Ollama (no model, no network)."""
 import datetime as dt
 import hashlib
 import json
@@ -19,7 +18,6 @@ DIM = 256
 
 
 def _vec(text: str) -> list[float]:
-    """A bag-of-words vector: texts that share words point the same way (stands in for nomic-embed-text)."""
     v = np.zeros(DIM)
     for w in re.findall(r"[a-z0-9]+", text.lower().replace("search_query:", "").replace("search_document:", "")):
         if len(w) > 2:
@@ -68,10 +66,10 @@ def test_a_chat_is_read_into_self_contained_dated_facts(fake):
     assert sent["format"] == mind.EXTRACT_SCHEMA and sent["think"] is False and "Event Date: Tuesday, October 20, 2026" in sent["messages"][1]["content"]
     assert "Sam: I switched my laptop" in sent["messages"][1]["content"] and "Rosie: Nice, noted." in sent["messages"][1]["content"]
     st = mind.status()
-    assert st["facts"] == 2 and st["queued"] == 0                                       # "ok" is too thin to keep
+    assert st["facts"] == 2 and st["queued"] == 0  # board #870 why-thin-replies-skipped
     got = mind.recall("what operating system is on my laptop", today=TODAY)
     assert got[0]["text"].startswith("Sam switched Sam's laptop to Ubuntu") and got[0]["when"] == "2026-10-19"
-    assert mind.retain_next(background=False) is False                                  # nothing left
+    assert mind.retain_next(background=False) is False
 
 
 def test_a_turn_that_read_outside_text_keeps_only_the_owners_words(fake):
@@ -125,13 +123,13 @@ def test_new_facts_become_beliefs_that_grow_with_evidence(fake):
                                  {"observation_id": 12345, "text": "Not shown to the model, never written.", "source_fact_ids": [c3]}]}]
     assert mind.consolidate_next(background=False)
     pool = json.loads(fake.chats[-1]["messages"][1]["content"].split("EXISTING OBSERVATIONS:\n", 1)[1])
-    assert [o["id"] for o in pool] == [oid]                                             # the model saw the belief it may update
+    assert [o["id"] for o in pool] == [oid]
     with mind._db() as c:
         o = c.execute("SELECT * FROM units WHERE id=?", (oid,)).fetchone()
         hist = c.execute("SELECT text FROM obs_history WHERE obs_id=?", (oid,)).fetchall()
     assert o["text"].startswith("Sam used Linux Mint") and o["proof_count"] == 3 and o["mentioned_at"].startswith("2026-10-19")
     assert [h["text"] for h in hist] == ["Sam uses Linux Mint with the Cinnamon desktop."]
-    assert not mind.consolidate_next(background=False)                                 # every fact is folded in
+    assert not mind.consolidate_next(background=False)
 
 
 def test_a_repeated_belief_adds_evidence_instead_of_a_twin(fake):
@@ -151,9 +149,9 @@ def test_reflect_answers_only_from_memories_it_was_shown(fake):
                           "chat", "2026-10-20T09:00:00-07:00")
     fake.answers = [{"answer": "Bridget is visiting on Friday, October 23.", "used": [a, 777], "found": True}]
     r = mind.reflect("when is my sister visiting")
-    assert r["found"] and r["answer"].startswith("Bridget") and [u["id"] for u in r["used"]] == [a]       # an id it wasn't shown is dropped
+    assert r["found"] and r["answer"].startswith("Bridget") and [u["id"] for u in r["used"]] == [a]  # board #870 why-unshown-ids-dropped
     fake.answers = [{"answer": "She loves jazz.", "used": [999], "found": True}]
-    assert mind.reflect("what music does my sister like")["found"] is False                               # nothing it used was real
+    assert mind.reflect("what music does my sister like")["found"] is False
 
 
 def test_the_owner_summary_is_refreshed_from_beliefs_and_goes_into_the_prompt(fake):
@@ -166,7 +164,7 @@ def test_the_owner_summary_is_refreshed_from_beliefs_and_goes_into_the_prompt(fa
     fake.answers = [{"answer": "- Building a Meshtastic handheld.", "used": [oid], "found": True}]
     assert mind.refresh_models(background=False)
     assert "Building a Meshtastic handheld." in mind.about_owner()
-    assert not mind.refresh_models(background=False)                                    # nothing new since
+    assert not mind.refresh_models(background=False)
 
 
 def test_background_work_steps_aside_the_moment_the_owner_uses_rosie(fake, monkeypatch):
@@ -178,19 +176,19 @@ def test_background_work_steps_aside_the_moment_the_owner_uses_rosie(fake, monke
 
     def owner_arrives(request):
         if request.url.path == "/api/chat":
-            corner._activity["last"] = 9e18                   # the owner sends a message mid-answer
+            corner._activity["last"] = 9e18
         return real(request)
     monkeypatch.setattr(mind, "_transport", httpx.MockTransport(owner_arrives))
     fake.answers = [{"facts": [_fact("Sam's bike is a Trek.", ents=["Sam"])]}]
     assert mind.step() == ""
     assert "You started using Rosie" in mind.state["waiting"]
     with mind._db() as c:
-        assert c.execute("SELECT done_at, tries FROM docs").fetchone()["tries"] == 0          # not counted as a failure: tried again later
+        assert c.execute("SELECT done_at, tries FROM docs").fetchone()["tries"] == 0  # board #870 why-not-a-failure
     monkeypatch.setitem(corner._activity, "last", 0)
 
 
 def test_auto_context_brings_only_clearly_matching_memories(fake):
-    assert mind.auto_context("what bike do I have") == ""                                   # an empty mind adds nothing
+    assert mind.auto_context("what bike do I have") == ""
     mind.add_units([{"text": "Sam's bike is a blue Trek road bike.", "kind": "world", "entities": ["Sam", "Trek"]},
                     {"text": "Sam's cat is called Miso.", "kind": "world", "entities": ["Sam", "Miso"]}], "chat", "2026-10-10T09:00:00-07:00")
     ctx = mind.auto_context("is my bike the blue Trek road bike")
@@ -222,9 +220,9 @@ def test_forgetting_a_fact_retires_the_beliefs_built_on_it_and_rethinks_the_rest
     assert mind.forget(a)["status"] == "forgotten"
     with mind._db() as c:
         live = {r["text"]: r["proof_count"] for r in c.execute("SELECT text, proof_count FROM units WHERE invalidated_at IS NULL")}
-    assert live == {"Sam paddles on Saturdays.": 1}                                     # no belief keeps a detail of the forgotten fact
+    assert live == {"Sam paddles on Saturdays.": 1}  # board #870 safety-forgotten-fact-gone
     with mind._db() as c:
-        assert c.execute("SELECT consolidated_at FROM units WHERE id=?", (b,)).fetchone()["consolidated_at"] is None   # thought over again
+        assert c.execute("SELECT consolidated_at FROM units WHERE id=?", (b,)).fetchone()["consolidated_at"] is None
     assert all("kayak" not in m["text"] or "Saturdays" in m["text"] for m in mind.recall("red kayak", today=TODAY))
 
 
@@ -242,7 +240,6 @@ def test_squeeze_keeps_errors_and_the_ends_and_the_rest_is_retrievable():
     assert squeeze.squeeze({"a": 1}) == '{"a": 1}' and "error" in squeeze.more_result("r0")
 
 
-# ---------------------------------------------------------------- wiring: her tools, both brains, the saved turn, skills
 def test_her_tools_and_prompts_use_the_mind(fake, monkeypatch):
     import agent
     for name in ("memory_search", "memory_reflect", "memory_forget", "more_result", "find_skills", "install_skill"):
@@ -269,7 +266,7 @@ def test_a_chat_turn_carries_what_she_remembers_and_is_saved_for_later(fake, mon
     assert "[What you remember ...]" in sent[0]["messages"][0]["content"] and out["reply"] == "Your bike is the blue Trek."
     with mind._db() as c:
         assert c.execute("SELECT text FROM docs").fetchone()["text"] == "Sam: which bike do I have again\nRosie: Your bike is the blue Trek."
-    agent.TURN_OUTSIDE[out["chat_id"]] = True                                           # as if this turn read a web page
+    agent.TURN_OUTSIDE[out["chat_id"]] = True
     monkeypatch.setattr(agent, "chat", lambda hist, text, *a, **k: ("The page says X.", [], hist + [{"role": "user", "content": text}, {"role": "assistant", "content": "The page says X."}]))
     server._run_turn(out["chat_id"], "please read that page for me")
     with mind._db() as c:
@@ -298,7 +295,7 @@ def test_skill_search_results_are_parsed_and_unsafe_skills_refused(monkeypatch, 
     assert ("pdf-forms", "Use when filling in PDF forms.") in skills.listing()
     (skills.DIR / "plan-my-day.md").write_text("Use when planning.\n\nOwner's own steps.\n")
     monkeypatch.setattr(skill_finder, "fetch_skill", lambda p: {"package": p, "name": "plan-my-day", "url": "u", "text": good.replace("pdf-forms", "plan-my-day"), "files": []})
-    assert "own playbook" in skill_finder.install_skill("o/r@plan-my-day")["error"]           # never replaces one of hers
+    assert "own playbook" in skill_finder.install_skill("o/r@plan-my-day")["error"]
     assert "owner/repo@skill" in real_fetch("not a package")["error"]
 
 
@@ -308,7 +305,7 @@ def test_deleting_a_chat_forgets_what_she_learned_from_it(fake, monkeypatch):
     mind.queue_turn(cid, "my locker code is 4417 at the gym", "Noted.")
     fake.answers = [{"facts": [_fact("Sam's gym locker code is 4417.", ents=["Sam"])]}]
     mind.retain_next(background=False)
-    mind.queue_turn(cid, "and my bike lock is the blue one", "Okay.")                # not read yet
+    mind.queue_turn(cid, "and my bike lock is the blue one", "Okay.")
     assert mind.status()["facts"] == 1 and mind.status()["queued"] == 1
     assert server.delete_chat(cid) == {"ok": True}
     st = mind.status()
@@ -330,10 +327,10 @@ def test_mail_days_are_redone_with_only_the_owners_words(fake):
                          {"role": "assistant", "content": "", "tool_calls": [{"function": {"name": "check_email", "arguments": {}}}]},
                          {"role": "tool", "tool_name": "check_email", "content": "Your bank: new device signed in"},
                          {"role": "assistant", "content": "Your bank says a new device signed in."}])
-    with mind._db() as c:                                                                # as the first back-fill kept it
+    with mind._db() as c:
         c.execute("INSERT INTO meta(k, v) VALUES('backfilled', 'x')")
     import sqlite3
-    with sqlite3.connect(chats.DB) as cc:                                                # the chat's own day (real clock), not mind's frozen one
+    with sqlite3.connect(chats.DB) as cc:  # board #870 quirk-chat-real-clock
         day = cc.execute("SELECT created FROM msgs WHERE role='tool'").fetchone()[0][:10]
     doc = mind.queue("Sam: check my mail please\nRosie: Your bank says a new device signed in.", "chat", f"backfill:chat:{cid}:{day}",
                      "an earlier chat with Rosie")
@@ -354,7 +351,7 @@ def test_the_daily_briefs_mail_section_is_never_memorized(fake):
              "- Google: new app password for your account\n- Bank: payment due\n\n**Overdue**\n- Laundry (due 2026-10-05)")
     kept = mind.drop_mail(brief)
     assert "Google" not in kept and "Bank" not in kept and "Install insulation" in kept and "Laundry" in kept
-    with mind._db() as c:                                                                # as the first back-fill kept it
+    with mind._db() as c:
         c.execute("INSERT INTO docs(source, ref, text, context, mentioned_at, created_at, done_at) VALUES('chat','backfill:chat:1:2026-10-06',?,'',?,?,?)",
                   (brief, mind._iso(), mind._iso(), mind._iso()))
         doc = c.execute("SELECT id FROM docs").fetchone()["id"]
@@ -369,13 +366,13 @@ def test_the_daily_briefs_mail_section_is_never_memorized(fake):
 
 def test_the_owner_is_never_he_even_when_the_model_writes_it(fake):
     assert mind.neutral("Sam packs his gym bag, and he takes it with him.") == "Sam packs their gym bag, and Sam takes it with them."
-    assert mind.neutral("Kai fixed his bike.") == "Kai fixed his bike."                   # not about the owner: left alone
+    assert mind.neutral("Kai fixed his bike.") == "Kai fixed his bike."
     assert mind.neutral("Owner: Sam\nHow he likes help: His way.", about_owner=True) == "Owner: Sam\nHow Sam likes help: Their way."
     mind.queue_turn(9, "pack my gym bag on Sundays at 8:30 in the evening", "Okay.")
     fake.answers = [{"facts": [_fact("Sam packs his gym bag every Sunday at 8:30 PM.", ents=["Sam"])]}]
     mind.retain_next(background=False)
     assert mind.recall("gym bag", today=TODAY)[0]["text"] == "Sam packs their gym bag every Sunday at 8:30 PM."
-    with mind._db() as c:                                                                # as an old memory was written
+    with mind._db() as c:
         c.execute("UPDATE units SET text='Sam said he likes his tea black.'")
         c.execute("UPDATE models SET content='How he likes to be helped: quickly.' WHERE name='owner'")
     assert mind.repair_pronouns() == 1 and mind.repair_pronouns() == 0
@@ -394,11 +391,11 @@ def test_a_fact_said_again_is_kept_once_but_a_changed_number_is_new(fake):
     with mind._db() as c:
         rows = [dict(r) for r in c.execute("SELECT text, mentioned_at FROM units WHERE invalidated_at IS NULL ORDER BY id")]
     assert [r["text"] for r in rows] == ["Sam has 22 overdue tasks on the list.", "Sam has 31 overdue tasks on the list."]
-    assert rows[0]["mentioned_at"].startswith("2026-10-06")                               # said again: the newer mention counts
+    assert rows[0]["mentioned_at"].startswith("2026-10-06")
 
 
 def test_old_repeats_are_merged_into_one_fact_behind_beliefs(fake, monkeypatch):
-    monkeypatch.setattr(mind, "FACT_SAME_MIN", 1.01)                                      # stored the old way, before repeats were caught
+    monkeypatch.setattr(mind, "FACT_SAME_MIN", 1.01)
     ids = mind.add_units([{"text": "Sam walks the dogs at noon.", "kind": "world", "entities": ["Sam"], "start": None, "end": None}] * 3
                          + [{"text": "Sam walks the dogs at 5 PM.", "kind": "world", "entities": ["Sam"], "start": None, "end": None}],
                          "chat", "2026-10-06T08:00:00-07:00")
@@ -427,8 +424,8 @@ def test_a_belief_stays_one_short_facet(fake):
     long = "Sam walks the dogs at noon. " + "Sam also has many other unrelated tasks and plans this week. " * 10
     fake.answers = [{"creates": [{"text": long, "source_fact_ids": ids}], "updates": [], "deletes": []}]
     mind.consolidate_next(background=False)
-    assert mind.status()["observations"] == 0                                            # a run-on belief is refused
-    with mind._db() as c:                                                                # as an old run-on belief was stored
+    assert mind.status()["observations"] == 0
+    with mind._db() as c:
         c.execute("INSERT INTO units(kind, text, source, mentioned_at, created_at, proof_count, source_ids) VALUES('observation', ?, "
                   "'consolidation', ?, ?, 1, ?)", (long, mind._iso(), mind._iso(), json.dumps(ids)))
     assert mind.repair_sprawl() == 1 and mind.repair_sprawl() == 0

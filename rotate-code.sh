@@ -1,6 +1,4 @@
 #!/bin/bash
-# Replace the access code and sign out EVERY device (PC browser, phone app). You will enter the new code once on each.
-# Usage: ./rotate-code.sh        (prints the new code in your terminal)
 cd "$(dirname "$0")" || exit 1
 python3 - <<'PY'
 import secrets, string, pathlib

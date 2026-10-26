@@ -1,4 +1,3 @@
-"""The Agent Zero page (a0_api.py) and Shut down all (power.py, ops/power.sh)."""
 import hashlib
 import hmac
 import subprocess
@@ -33,7 +32,6 @@ def client(tmp_path, monkeypatch):
 
 @pytest.fixture
 def docker(monkeypatch):
-    """A fake `docker` command: what it was asked, and a running container with a short log."""
     calls = []
     log = "\x1b[32mExternal API message:\x1b[0m\n> plan my week\nReasoning: thinking\nA0: Using tool 'rosie.call'\nnoise line\n"
 
@@ -63,10 +61,10 @@ def test_the_page_shows_what_agent_zero_is_doing(client, docker):
     finally:
         a0.end_turn()
     assert d["container"]["state"] == "running" and d["container"]["restarts"] == 1 and d["answers"] is True
-    assert d["container"]["started"].startswith("2026-10-19")                  # shown in the PC's own time
+    assert d["container"]["started"].startswith("2026-10-19")  # board #841 quirk-pc-local-time
     assert d["turn"]["text"] == "plan my week" and [c["tool"] for c in d["turn"]["calls"]] == ["get_schedule"]
-    assert d["calls"] == [{"at": "2026-10-19 12:01:00", "tool": "get_schedule", "args": "day"}]      # only Agent Zero's calls
-    assert d["activity"] == ["External API message:", "A0: Using tool 'rosie.call'"] and d["chats"] == 3   # colour codes gone, noise left out
+    assert d["calls"] == [{"at": "2026-10-19 12:01:00", "tool": "get_schedule", "args": "day"}]
+    assert d["activity"] == ["External API message:", "A0: Using tool 'rosie.call'"] and d["chats"] == 3
     assert a0.current_turn() is None
 
 
@@ -91,7 +89,7 @@ def test_shut_down_all_runs_outside_rosie_and_she_clears_the_flag_when_she_start
     monkeypatch.setattr(power.testguard, "active", lambda: False)
     seen = []
     assert power.shutdown_all(run=lambda cmd, **k: seen.append(cmd) or Done()) == {"started": True}
-    assert seen[0][:2] == ["systemd-run", "--user"] and seen[0][-1].endswith("power.sh stop")      # its own job: stopping Rosie can't cut it short
+    assert seen[0][:2] == ["systemd-run", "--user"] and seen[0][-1].endswith("power.sh stop")  # board #841 why-own-job-shutdown
     (tmp_path / "stopped").write_text("x")
     power.clear_flag()
     assert not (tmp_path / "stopped").exists()

@@ -1,12 +1,4 @@
-"""Connect a fresh Agent Zero container to Rosie (setup.sh step 7). Safe to run again.
-
-    .venv/bin/python ops/agent-zero/configure.py MODEL
-
-- a model preset "Local (Rosie)" on Ollama with MODEL for chat and utility (thinking off for the utility model's background
-  work), selected; ctxsize.sync_agent_zero() later keeps its context window equal to Rosie's;
-- the MCP server "rosie" (Rosie's tools, on the Docker bridge, with a token);
-- the two prompt files Rosie writes (a0.write_include), owned by you so Rosie can update them;
-- Agent Zero's API key saved in secrets/agent_zero.json for Rosie."""
+# board #807 why-utility-thinking-off
 import json
 import subprocess
 import sys
@@ -77,12 +69,12 @@ def main():
     global CONTAINER
     model = sys.argv[1] if len(sys.argv) > 1 and not sys.argv[1].startswith("-") else "qwen3.5:9b"
     import os
-    if not os.environ.get("ROSIE_A0_CONTAINER"):               # this PC's container, whatever it is called (a0_host)
+    if not os.environ.get("ROSIE_A0_CONTAINER"):
         found = a0_host.detect()
         if not found["found"]:
             sys.exit("Agent Zero could not be configured: " + found["why"])
         CONTAINER = found["container"]
-    keys = a0.keys()                                           # makes the MCP token on first use
+    keys = a0.keys()
     want = {"preset": PRESET, "model": model, "token": keys["mcp_token"], "uid": getattr(os, "getuid", lambda: None)(), "gid": getattr(os, "getgid", lambda: None)(),
             **ctxsize.options(model)}
     want.setdefault("num_gpu", None)
@@ -91,17 +83,17 @@ def main():
     if r.returncode:
         sys.exit("Agent Zero could not be configured: " + (r.stderr or r.stdout).strip()[-400:])
     key = r.stdout.strip().splitlines()[-1]
-    if "--check" in sys.argv:                                  # a trial run against a spare container: save nothing, restart nothing
+    if "--check" in sys.argv:
         print(f"   configured {CONTAINER} (check only); API key length {len(key)}")
         return
     keys["api_key"] = key
     a0.SECRETS.write_text(json.dumps(keys, indent=1))
     a0.SECRETS.chmod(0o600)
-    a0.relocate()                                              # this PC's Agent Zero folder, found by a0_host
+    a0.relocate()
     a0.write_include()
     import config
     cfg = config.load()
-    cfg["brain"] = "agent_zero"                                # owner 2026-10-23: Agent Zero is the brain behind Rosie's one chat box
+    cfg["brain"] = "agent_zero"  # board #807 owner-agent-zero-brain
     config.save(cfg)
     subprocess.run(["docker", "restart", CONTAINER], capture_output=True, timeout=120)
     print("   Agent Zero is connected to Rosie and answers her chat (preset " + PRESET + ", model " + model + ").")

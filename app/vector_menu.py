@@ -1,16 +1,4 @@
-"""A settings menu on Vector's face while he sits (owner 2026-10-21: "make the button for menu settings and the arm to go
-through them when she sits").
-
-His backpack button (or the game controller's D-pad, vector_pad.py) opens the menu; after that each press (or Cross)
-changes the highlighted setting. The D-pad moves the highlight, Circle closes. His lift moves it too where it can be
-moved by hand, but it stays locked while Rosie holds him (owner 2026-10-24), so the controller is the way to pick a line. The menu closes after
-MENU_IDLE_S without a press or a lift move, or with "Done".
-
-His firmware lets the button do only two things, start his listening or start Alexa (BUTTON_WAKEWORD_HEY_VECTOR or
-_ALEXA in libcozmo_engine.so, WireOS 3.0.2.34d), and WireOS has no Alexa. So Rosie reads the press herself from his
-state stream (RobotState.status, ROBOT_STATUS_IS_BUTTON_PRESSED). A press also starts his listening: Rosie answers
-that request the safe way (his greeting intent, then control 0.2 s later, vector_pod) and shows the menu. The hold stays
-at DEFAULT: at OVERRIDE_BEHAVIORS his wake word is dropped and his engine can stop hearing it until a restart."""
+# board #796 owner-face-settings-menu
 import threading
 import time
 
@@ -18,13 +6,12 @@ import config
 import vector_face
 
 MENU_IDLE_S = 15.0
-LIFT_DOWN_MM, LIFT_UP_MM = 32.0, 92.0                # his lift's travel (lift_height_mm)
+LIFT_DOWN_MM, LIFT_UP_MM = 32.0, 92.0
 HYSTERESIS_MM = 2.0
-HINT = "▲▼ move  ✕ change  ○ close"              # the controller's D-pad, Cross and Circle
-WAKE_AFTER_PRESS_S = 4.0                             # a voice request this soon after a press came from the press
-OPEN_FALLBACK_S = 3.5                                # no voice request after a press: open the menu without it
+HINT = "▲▼ move  ✕ change  ○ close"
+WAKE_AFTER_PRESS_S = 4.0  # board #796 why-press-wake-window
+OPEN_FALLBACK_S = 3.5
 
-# (settings key on the Vector page API, label, [(value, shown)]); a None list is an action.
 ITEMS = [
     ("face_panels", "Screens", [(["clock", "system"], "Clock + PC"), (["clock"], "Clock"), (["system"], "PC"),
                                 (["clock", "system", "next_event", "battery"], "All")]),
@@ -64,22 +51,20 @@ def next_value(key: str, choices, cfg: dict | None = None):
 
 
 def lift_index(mm: float, count: int) -> int:
-    """Lift down = first line, up = last, in equal bands."""
     frac = (mm - LIFT_DOWN_MM) / (LIFT_UP_MM - LIFT_DOWN_MM)
     return max(0, min(count - 1, int(frac * count)))
 
 
 class Menu:
-    """The menu's state and drawing. vector_pod opens it; Watcher feeds it his button and lift."""
 
     def __init__(self, apply, on_close=None, on_stand=None):
-        self.apply, self.on_close, self.on_stand = apply, on_close, on_stand   # apply({"talk_volume": "HIGH"}) saves a setting
+        self.apply, self.on_close, self.on_stand = apply, on_close, on_stand
         self.open = False
         self.index = 0
         self.last_activity = 0.0
-        self.pressed_at = 0.0                            # his button's last press (the watcher saw it)
+        self.pressed_at = 0.0
         self.lift_mm = None
-        self.redraw = None                               # set by vector_pod: draw the menu now (FaceLoop.next_screen)
+        self.redraw = None
         self.lock = threading.RLock()
 
     def recent_press(self, within: float = WAKE_AFTER_PRESS_S) -> bool:
@@ -106,11 +91,10 @@ class Menu:
             self.redraw()
 
     def press(self):
-        """His backpack button: open the menu, or change the highlighted line."""
         with self.lock:
             self.pressed_at = time.time()
             if not self.open:
-                return False                             # vector_pod opens it (after his listening is answered)
+                return False
             self.last_activity = time.time()
             key, _, choices = ITEMS[self.index]
         if key == "done":
@@ -125,7 +109,6 @@ class Menu:
         return True
 
     def move(self, step: int):
-        """The controller's D-pad: the highlight one line up (-1) or down (+1), wrapping round."""
         with self.lock:
             if not self.open:
                 return
@@ -134,7 +117,6 @@ class Menu:
         self._redraw()
 
     def lift(self, mm: float):
-        """His lift moved (by hand): move the highlight when it crosses into another band."""
         with self.lock:
             self.lift_mm = mm
             if not self.open:
@@ -144,7 +126,7 @@ class Menu:
                 return
             edge = LIFT_DOWN_MM + (LIFT_UP_MM - LIFT_DOWN_MM) * max(band, self.index) / len(ITEMS)
             if abs(band - self.index) == 1 and abs(mm - edge) < HYSTERESIS_MM:
-                return                                       # stay put until it is clearly in the next band
+                return  # board #796 why-menu-band-hysteresis
             self.index = band
             self.last_activity = time.time()
         self._redraw()
@@ -153,7 +135,6 @@ class Menu:
         return self.open and time.time() - self.last_activity > MENU_IDLE_S
 
     def draw(self):
-        """The menu as a face image: the highlighted line in the middle, one line above and below."""
         img, d = vector_face.canvas()
         w, h = img.size
         cfg = config.load()
@@ -176,7 +157,6 @@ class Menu:
 
 
 class Watcher:
-    """Reads his button and lift from his state stream while he sits."""
 
     def __init__(self, bot, menu: Menu, on_press):
         self.bot, self.menu, self.on_press = bot, menu, on_press
@@ -201,7 +181,7 @@ class Watcher:
                     if self._stop.is_set():
                         return
                     if ev.event.WhichOneof("event_type") != "robot_state":
-                        continue                         # the stream's first message is empty
+                        continue
                     s = ev.event.robot_state
                     pressed = bool(s.status & 0x10)
                     if pressed and not down:
@@ -211,5 +191,5 @@ class Watcher:
                     if self.menu.expired():
                         self.menu.close()
             except Exception:
-                pass                                     # his services restarting, or the stream was cancelled
+                pass
             self._stop.wait(2.0)

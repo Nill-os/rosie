@@ -1,4 +1,4 @@
-"""Rosie's corner page API. Login-protected like every /api/ route (server.py middleware). The logic is in corner*.py."""
+# board #720 safety-api-login-required
 import re
 import threading
 
@@ -22,7 +22,7 @@ def err(msg, code=400):
 def safe(fn, *a, **kw):
     try:
         return fn(*a, **kw)
-    except ValueError as e:                     # corner_layout.Bad is a ValueError too
+    except ValueError as e:
         return err(str(e))
 
 
@@ -99,7 +99,7 @@ def corner_reset():
 
 @router.get("/api/corner/img/{name}")
 def corner_img(name: str):
-    """Only clean copies from her gallery, always with a fixed picture type, never sniffed, never run."""
+    # board #720 safety-clean-picture-copies
     if not IMG_RE.fullmatch(name):
         return err("Not a picture", 404)
     p = corner.picture_by_file(name)
@@ -117,7 +117,7 @@ def corner_img(name: str):
 
 @router.post("/api/corner/nonstop")
 def corner_nonstop(o: On):
-    """The big Start browsing / Stop button. Start begins at once (no waiting for the next automation tick)."""
+    # board #720 why-start-without-tick-wait
     corner.set_nonstop(o.on)
     if o.on and not corner.state["running"]:
         import corner_browse
@@ -127,7 +127,7 @@ def corner_nonstop(o: On):
 
 @router.get("/api/corner/live")
 def corner_live():
-    """The Live tab (polled every ~2 s; not counted as the owner using Rosie). Only what she already read; no fetches."""
+    # board #720 why-live-tab-not-owner-use
     import corner_browse
     st = corner.status()
     return {"live": corner_browse.live_snapshot(), "running": st["running"], "nonstop": st["nonstop"], "nonstop_since": st["nonstop_since"],
@@ -139,7 +139,6 @@ THUMB_RE = re.compile(r"[0-9a-f]{32}\.jpg")
 
 @router.get("/api/corner/live/thumb/{name}")
 def corner_live_thumb(name: str):
-    """A Live preview: a JPEG Rosie drew herself from a checked picture, kept only while she is on that page."""
     import corner_browse
     data = corner_browse.live_thumb(name) if THUMB_RE.fullmatch(name) else None
     if data is None:
@@ -150,7 +149,6 @@ def corner_live_thumb(name: str):
 
 @router.get("/api/corner/groups")
 def corner_groups_view(look: bool = False):
-    """The Finds tab: finds in topic groups, All, and New since you looked."""
     return corner_groups.view(look=look)
 
 

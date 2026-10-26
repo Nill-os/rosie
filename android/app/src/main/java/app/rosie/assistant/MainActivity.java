@@ -35,13 +35,11 @@ import android.widget.Toast;
 
 import org.json.JSONObject;
 
-/** The assistant as an app: a full-screen window onto your own assistant server (over Tailscale), with microphone, file upload,
- *  share-to-assistant and a "Talk" shortcut. All the thinking happens on your PC; nothing is stored here except the address and the login cookie. */
 public class MainActivity extends Activity {
     static final String DEFAULT_URL = "";   // your PC's address, e.g. https://my-pc.my-tailnet.ts.net (asked on first start)
     static final int REQ_MIC = 1, REQ_FILE = 2, REQ_WAKE = 3, REQ_PHONE = 4;
     static final String[] PHONE_PERMS = {Manifest.permission.READ_CONTACTS, Manifest.permission.SEND_SMS, Manifest.permission.READ_SMS, Manifest.permission.CALL_PHONE};
-    static volatile boolean visible = false;          // the wake-word listener lets go of the microphone while the app is on screen
+    static volatile boolean visible = false;  // board #685 why-release-mic-when-visible
     boolean askedOverlay = false;
 
     WebView web;
@@ -79,14 +77,14 @@ public class MainActivity extends Activity {
                 return true;
             }
             @Override public void onPageFinished(WebView v, String url) {
-                CookieManager.getInstance().flush();               // keep the login even if Android stops the app
+                CookieManager.getInstance().flush();  // board #685 why-flush-login-cookies
                 if (pendingJs != null && sameHost(Uri.parse(url))) { String js = pendingJs; pendingJs = null; v.evaluateJavascript(js, null); }
             }
             @Override public void onReceivedError(WebView v, WebResourceRequest r, WebResourceError e) {
                 if (r.isForMainFrame()) showOffline(e.getDescription().toString());
             }
         });
-        web.setDownloadListener((url, ua, cd, mime, len) -> {          // lets the app download its own updates (and any file you save) with your login
+        web.setDownloadListener((url, ua, cd, mime, len) -> {  // board #685 why-download-with-login
             try {
                 DownloadManager.Request r = new DownloadManager.Request(Uri.parse(url));
                 r.addRequestHeader("Cookie", CookieManager.getInstance().getCookie(url));
@@ -217,7 +215,6 @@ public class MainActivity extends Activity {
         @JavascriptInterface public void log(String m) { android.util.Log.i("Rosie", "js: " + m); }
         @JavascriptInterface public void selfTestStart() { runOnUiThread(() -> SelfTest.start(MainActivity.this, web, MainActivity.this, false)); }
         @JavascriptInterface public void selfTestQuick() { runOnUiThread(() -> SelfTest.start(MainActivity.this, web, MainActivity.this, true)); }
-        /** Pops up the right Android prompt for one thing the self-test found missing. */
         @JavascriptInterface public void fix(final String code) { runOnUiThread(() -> doFix(code)); }
         @JavascriptInterface public void askBatteryUnrestricted() {
             runOnUiThread(() -> {
@@ -259,13 +256,12 @@ public class MainActivity extends Activity {
         @JavascriptInterface public void changeAddress() { runOnUiThread(MainActivity.this::askAddress); }
     }
 
-    /** Keeps the phone link running while "Let Rosie use my phone" is on. */
     void ensureLink() {
         if (!prefs.getBoolean("phonectl", false)) return;
         if (!PhoneLink.running) startForegroundService(new Intent(this, LinkService.class));
     }
 
-    /** Android does not let an app ask for the assistant role with a pop-up: the user picks it on the 'Digital assistant app' settings page, so open that page. */
+    // board #685 quirk-assistant-role-by-settings
     void openAssistantSettings() {
         Toast.makeText(this, "Tap \"Digital assistant app\" and choose Rosie.", Toast.LENGTH_LONG).show();
         try { startActivity(new Intent(Settings.ACTION_VOICE_INPUT_SETTINGS)); }
@@ -290,7 +286,6 @@ public class MainActivity extends Activity {
         } catch (Exception e) { Toast.makeText(this, "Could not open that screen: " + e.getMessage(), Toast.LENGTH_LONG).show(); }
     }
 
-    /** Walks through what "Hey Rosie" needs (microphone, notifications, then optionally "display over other apps") and starts the listener. */
     void ensureWake() {
         if (!prefs.getBoolean("wake", false)) return;
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) { requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, REQ_WAKE); return; }
@@ -308,7 +303,7 @@ public class MainActivity extends Activity {
         web.evaluateJavascript("setTimeout(function(){ window.onAppResumeWizard && window.onAppResumeWizard(); }, 400)", null);
         if (code == REQ_PHONE) { web.evaluateJavascript("window.onAppResume && window.onAppResume()", null); return; }
         if (code == REQ_WAKE) {
-            if (res.length == 0 || res[0] != PackageManager.PERMISSION_GRANTED) {                   // denied: stop asking (it would loop forever); the user can switch Hey Rosie on again later
+            if (res.length == 0 || res[0] != PackageManager.PERMISSION_GRANTED) {
                 prefs.edit().putBoolean("wake", false).apply();
                 Toast.makeText(this, "Hey Rosie needs that permission, so it is off. You can turn it on again in Settings.", Toast.LENGTH_LONG).show();
                 ensureLink(); return;

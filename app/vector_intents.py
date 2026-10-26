@@ -1,9 +1,3 @@
-"""What Vector does with a sentence he heard: one of Rosie's own commands ("sit"), one of Vector's built-in skills
-(timer, photo, fist bump), or nothing here, in which case Rosie answers it as a question.
-
-Built-in intent names and their parameters are the ones Vector's firmware understands (taken from the open-source
-wire-pod, MIT). Matching is strict on purpose: Whisper hears words correctly, and a loose match would take a real
-question away from Rosie ("what's good for dinner" is not praise)."""
 import re
 
 import vector_audio
@@ -14,27 +8,24 @@ FILLER = re.compile(r"^(?:(?:hey|ok|okay|hi)\s+)?(?:vector|victor|rosie|rosy)\b[
 def normalize(text: str) -> str:
     t = re.sub(r"[^a-z0-9' ]+", " ", text.lower())
     t = FILLER.sub(" ", t)
-    t = FILLER.sub(" ", t)                            # "hey vector, please sit" loses both
+    t = FILLER.sub(" ", t)
     return " ".join(t.split())
 
 
-# Backchannels and noise words: a transcript of only these is not a request (false requests from "uh-huh" and noise, 2026-10-24)
+# board #793 why-filler-not-requests
 FILLER_WORDS = {"uh", "um", "umm", "uh-huh", "uhhuh", "mm", "mmm", "hmm", "hm", "mhm", "ah", "oh", "er", "erm", "huh",
-                "vector", "victor", "rosie", "rosy"}   # his name alone: speech to text echoes its hint words for unclear audio
-                                                        # ("Sit." from the PC speakers came out "Vector.", 2026-10-24)
+                "vector", "victor", "rosie", "rosy"}  # board #793 quirk-name-alone-ignored
 
 
 def is_filler(text: str) -> bool:
-    """True when the transcript is only filler words ("Uh-huh.", "Hmm, hmm"); "oh hi" and "hmm what time is it" are not."""
     words = re.sub(r"[^a-z' -]+", " ", text.lower()).replace(" -", " ").replace("- ", " ").split()
     return bool(words) and all(w.strip("-") in FILLER_WORDS for w in words)
 
 
-# Rosie's own commands: handled by her through Vector's SDK port. Users can add more in Settings > Vector.
 DEFAULT_COMMANDS = [
     {"phrases": ["sit", "stay", "sit down", "sit still", "stay there", "stay here", "don't move", "freeze", "hold still",
                  "stop moving", "park", "be still",
-                 # how the quick speech model hears a lone "sit" (base.en heard "Set." on the robot, 2026-10-21)
+                 # board #793 quirk-sit-misheard
                  "set", "sat", "sid", "sip", "zit", "set down", "sat down", "sits", "sit sit", "please sit"],
      "action": "hold", "reply": "Okay. I'll stay right here."},
     {"phrases": ["you can move", "you can go", "go play", "free", "at ease", "release", "you're free", "carry on",
@@ -79,7 +70,6 @@ def _photo(t):
     return {"entity_photo_selfie": "photo_selfie" if re.search(r"\b(me|selfie|us|myself)\b", t) else ""}
 
 
-# (pattern on the normalized text, intent, parameter function or None). Patterns are anchored: the sentence is the command.
 BUILTIN = [
     (r"(?:what time is it|what's the time|what is the time|tell me the time|time)", "intent_clock_time", None),
     (r"(?:set|start) (?:a |the )?timer(?: for)? .+|.+ timer", "intent_clock_settimer_extend", _timer),
@@ -128,7 +118,6 @@ for _pat, _name in _PLAY.items():
 _COMPILED = [(re.compile(rf"^(?:{p})$"), name, fn) for p, name, fn in BUILTIN]
 
 
-# Questions about what is in front of him: Rosie looks through his camera with her own vision model.
 LOOK = re.compile(r"^(?:what do you see|what can you see|what are you looking at|what(?:'s| is) in front of you|"
                   r"describe what you see|tell me what you see|look at this|what(?:'s| is) this|who(?:'s| is) this|what am i holding|"
                   r"what color is (?:this|it)|(?:do|can) you see .+|how many .+ (?:do|can) you see|is there (?:a|an|any) .+ (?:in front of you|near you)|"
@@ -139,8 +128,6 @@ def wants_look(text: str) -> bool:
     return bool(LOOK.match(normalize(text)))
 
 
-# Orders that need his eyes and wheels (vector_look.py). His own skills (find your cube, go to sleep, go home) match
-# BUILTIN first, so they still go to him.
 LOOK_AROUND = re.compile(r"^(?:look around(?: you| the room)?|have a look around|scan the room|where are you|"
                          r"(?:tell me )?what(?:'s| is) around you|what(?:'s| is) (?:near|next to) you)$")
 GO_TO = re.compile(r"^(?:(?:go|drive|move|roll|head|get) (?:over )?(?:to|toward|towards|up to)|"
@@ -152,7 +139,6 @@ def wants_look_around(text: str) -> bool:
 
 
 def go_to_target(text: str) -> str:
-    """The thing in "go to the mug" / "find my phone", or ""."""
     m = GO_TO.match(normalize(text))
     return m.group("thing").strip() if m else ""
 
@@ -167,14 +153,13 @@ def match_command(text: str, commands: list[dict]) -> dict | None:
 
 
 def match_builtin(text: str) -> tuple[str, dict] | None:
-    """(intent, parameters) when the whole sentence is one of Vector's own skills, else None."""
     t = normalize(text)
     if not t:
         return None
     for rx, name, fn in _COMPILED:
         if rx.match(t):
             params = fn(t) if fn else {}
-            if fn and params is None:                     # "check the timer" is not a timer to set; "set a timer" with no time goes to Rosie
+            if fn and params is None:  # board #793 why-check-timer-not-set
                 continue
             return name, params
     return None

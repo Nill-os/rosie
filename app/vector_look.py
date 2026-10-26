@@ -1,22 +1,13 @@
-"""Vector does what you ask with his eyes (owner 2026-10-21: "make it actual ai detection so i can tell him to do things and
-he will know whats around him").
-
-- look_around: he turns a full circle in four steps, Rosie's vision model names what each view shows, and he sums it up.
-  What he saw stays in vector_pod.status["scene"], so for ten minutes Rosie's answers through him know what is around him.
-- go_to: "go to the mug", "find my phone": picture, ask where the thing is, turn toward it, drive a little, again, until it
-  fills enough of his view (there), he has looked all the way round (not found), or MAX_STEPS.
-
-Rosie's own chat model looks at the pictures (it has vision, so nothing else loads on the GPU). He moves with control
-borrowed at DEFAULT priority, so his cliff and pick-up reactions still win."""
+# board #795 owner-ai-detection-around-him
 import json
 import re
 
 VIEWS = (("in front of me", 0), ("to my left", 90), ("behind me", 90), ("to my right", 90))
 MAX_STEPS = 12
-SEARCH_TURN = 60                                     # degrees per look while the thing is not in view
+SEARCH_TURN = 60
 STEP_MM = 120
-THERE_SIZE = 0.38                                    # the thing is this wide in his picture (0..1): he has arrived
-FOV_DEG = 90                                         # his camera's horizontal field of view, about
+THERE_SIZE = 0.38  # board #795 why-arrived-size-threshold
+FOV_DEG = 90  # board #795 quirk-camera-fov-degrees
 
 LIST_PROMPT = ("You are looking through the camera of a small desk robot. Name the main things you can see, most noticeable first, "
                "as a short comma-separated list of at most six plain nouns with one adjective each when useful. Nothing else. "
@@ -28,7 +19,6 @@ FIND_PROMPT = ("You are looking through the camera of a small desk robot. The ow
 
 
 def parse_find(text: str) -> dict:
-    """The vision model's answer as {"found", "x", "size"}; anything unreadable is "not found"."""
     m = re.search(r"\{.*\}", text or "", re.S)
     try:
         d = json.loads(m.group(0)) if m else {}
@@ -44,7 +34,6 @@ def parse_find(text: str) -> dict:
 
 
 def look_around(bot, vision, say=None) -> list[tuple[str, str]]:
-    """[(where, what he saw)] for four views round him; he ends facing the way he started."""
     seen = []
     bot.head_angle(5)
     for where, turn in VIEWS:
@@ -56,12 +45,10 @@ def look_around(bot, vision, say=None) -> list[tuple[str, str]]:
 
 
 def describe(seen: list[tuple[str, str]]) -> str:
-    """A plain record of the views (data for Rosie's answers)."""
     return "; ".join(f"{where}: {what}" for where, what in seen if what)
 
 
 def go_to(bot, thing: str, vision, say=None) -> str:
-    """Drive to `thing`. Returns what happened, in a short spoken sentence."""
     bot.head_angle(0)
     unseen_turns = 0
     for _ in range(MAX_STEPS):
@@ -78,6 +65,6 @@ def go_to(bot, thing: str, vision, say=None) -> str:
                 bot.turn(-spot["x"] * FOV_DEG / 2)
             return f"Found it. {thing[0].upper() + thing[1:]}, right here."
         if abs(spot["x"]) > 0.2:
-            bot.turn(-spot["x"] * FOV_DEG / 2)       # positive turns left; the thing on the right is positive x
+            bot.turn(-spot["x"] * FOV_DEG / 2)  # board #795 quirk-turn-sign-left
         bot.forward(STEP_MM)
     return f"I got close to {thing}, I think. That's as far as I go."

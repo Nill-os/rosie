@@ -9,7 +9,6 @@ import android.content.Intent;
 import android.content.pm.ServiceInfo;
 import android.os.IBinder;
 
-/** Keeps the phone connected to your PC so Rosie can use the phone. Starts again after a reboot. No microphone involved. */
 public class LinkService extends Service {
     private PhoneLink link;
     private Thread thread;

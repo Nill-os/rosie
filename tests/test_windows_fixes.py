@@ -1,4 +1,4 @@
-"""Fixes for the Windows install (partner's issues #3, #5, #7, #8, 2026-10-23). Systems are faked, so these run on Linux and Windows."""
+# board #911 fix-windows-partner-issues
 import subprocess
 import types
 
@@ -13,7 +13,6 @@ import health
 import plat
 
 
-# ---------------------------------------------------------------- #3 Google sign-in messages
 def test_login_messages_name_the_command_that_exists_on_each_system(monkeypatch):
     monkeypatch.setattr(plat, "IS_WIN", False)
     assert plat.google_login() == "run ~/assistant/login.sh"
@@ -39,7 +38,6 @@ def test_gmail_login_message_is_per_system(monkeypatch):
         gmail.service("nobody")
 
 
-# ---------------------------------------------------------------- #5 health rows
 def test_linux_only_rows_are_off_not_problems_without_systemctl(monkeypatch):
     monkeypatch.setattr(health.shutil, "which", lambda n: None)
     rows = health.check_user_services()
@@ -66,7 +64,6 @@ def test_the_agent_zero_row_uses_this_pcs_container(monkeypatch):
     assert seen[0] == "a0-inst-her-7" and rows["Agent Zero (her brain)"]["level"] == "ok"
 
 
-# ---------------------------------------------------------------- #7 Agent Deck
 def test_the_deck_asks_for_the_real_container_and_keeps_its_own_name(monkeypatch):
     monkeypatch.setattr(a0_host, "container", lambda: "a0-inst-her-7")
     asked = []
@@ -86,7 +83,7 @@ def test_the_decks_chats_folder_comes_from_a0_host(monkeypatch, tmp_path):
 
 def test_the_deck_snapshot_and_sample_do_not_raise_without_proc(monkeypatch):
     monkeypatch.setattr(agentdeck, "LINUX", False)
-    monkeypatch.setattr(agentdeck, "WIN", None)                  # no psutil either (with it, agentdeck_win.py does the readings)
+    monkeypatch.setattr(agentdeck, "WIN", None)  # board #911 quirk-agentdeck-psutil-readings
     monkeypatch.setattr(agentdeck, "AVAILABLE", False)
     assert "error" in agentdeck.snapshot()
     monkeypatch.setattr(agentdeck.os, "listdir", lambda p: (_ for _ in ()).throw(FileNotFoundError(p)))
@@ -94,7 +91,6 @@ def test_the_deck_snapshot_and_sample_do_not_raise_without_proc(monkeypatch):
     assert procs == {}
 
 
-# ---------------------------------------------------------------- #8 corner pictures
 def _fake_scan_run(monkeypatch, seen):
     def run(cmd, **kw):
         seen.append((cmd, kw))

@@ -37,14 +37,14 @@ def snap(w):
 
 def test_backup_verifies_and_contains_the_right_things(world):
     f = snap(world)
-    assert f.name.endswith(".tar.gz.gpg") and b"one" not in f.read_bytes()          # encrypted, not readable
+    assert f.name.endswith(".tar.gz.gpg") and b"one" not in f.read_bytes()  # board #849 safety-backup-encrypted
     v = backup.verify(f)
     assert v["ok"] and v["databases"] == 1
     out = world["tmp"] / "restored"
     backup.restore(f, out)
     names = {str(p.relative_to(out)) for p in out.rglob("*") if p.is_file()}
     assert {"data/tasks.db", "data/config.json", "vault/note.md", "secrets/google_client.json", "MANIFEST.json"} <= names
-    assert not any("token" in n or "access_code" in n or "voices" in n or "hub.log" in n for n in names)        # secrets, models and logs stay out
+    assert not any("token" in n or "access_code" in n or "voices" in n or "hub.log" in n for n in names)
     assert sqlite3.connect(out / "data" / "tasks.db").execute("select count(*) from tasks").fetchone()[0] == 3
 
 
@@ -76,7 +76,7 @@ def test_consistent_copy_while_the_database_is_in_use(world):
     con = sqlite3.connect(world["data"] / "tasks.db")
     con.execute("begin")
     con.execute("insert into tasks(title) values ('uncommitted')")
-    f = snap(world)                                            # an open write transaction must not break or leak into the backup
+    f = snap(world)  # board #849 why-open-write-transaction
     con.rollback()
     con.close()
     out = world["tmp"] / "r"

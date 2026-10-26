@@ -10,8 +10,7 @@ import android.os.Build;
 
 import java.util.List;
 
-/** Picks the microphone to listen with: a wired/USB headset first, then (if allowed) a Bluetooth headset, otherwise the phone itself.
- *  Bluetooth needs a phone-call style link (SCO) while listening: music through the headset sounds like a phone call for as long as it is open. */
+// board #686 quirk-bluetooth-call-mode
 public class MicRoute {
     private static int refs = 0;
     private static boolean btOn = false;
@@ -42,7 +41,6 @@ public class MicRoute {
         return null;
     }
 
-    /** What would be used right now (for the Settings page). */
     static String describe(Context c, boolean allowBt) {
         AudioDeviceInfo w = wired(c);
         if (w != null) return "wired headset microphone";
@@ -51,7 +49,6 @@ public class MicRoute {
         return "phone microphone";
     }
 
-    /** Opens the route. Always pair with release(). */
     static synchronized void acquire(Context c, boolean allowBt) {
         refs++;
         if (refs == 1 && allowBt && wired(c) == null) {
@@ -73,10 +70,10 @@ public class MicRoute {
             if (Build.VERSION.SDK_INT >= 31) a.setCommunicationDevice(b);
             else { a.startBluetoothSco(); a.setBluetoothScoOn(true); }
             btOn = true;
-            Thread.sleep(700);                                   // the link takes a moment to come up
+            Thread.sleep(700);  // board #686 why-wait-link-700ms
         } catch (Throwable t) {
             android.util.Log.e("Rosie", "bluetooth mic failed: " + t);
-            if (!btOn) { try { am(c).setMode(savedMode); } catch (Throwable ignored) { } }          // undo the call mode we switched on
+            if (!btOn) { try { am(c).setMode(savedMode); } catch (Throwable ignored) { } }  // board #686 why-restore-audio-mode
         }
     }
 
@@ -89,7 +86,6 @@ public class MicRoute {
         btOn = false;
     }
 
-    /** A microphone recorder on the current route. */
     static AudioRecord record(Context c, int rate) {
         AudioDeviceInfo dev = wired(c);
         if (dev == null && btOn) {
@@ -101,6 +97,5 @@ public class MicRoute {
         return r;
     }
 
-    /** Changes when headphones are plugged in or out, so the listener can switch microphones. */
     static String key(Context c, boolean allowBt) { return describe(c, allowBt); }
 }

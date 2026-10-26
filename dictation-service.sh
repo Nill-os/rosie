@@ -1,5 +1,4 @@
 #!/bin/bash
-# Install / remove the dictation background service for YOUR user (no sudo). Usage: ./dictation-service.sh install|remove|status|restart
 UNIT="$HOME/.config/systemd/user/assistant-dictation.service"
 OVERLAY_UNIT="$HOME/.config/systemd/user/assistant-overlay.service"
 case "$1" in

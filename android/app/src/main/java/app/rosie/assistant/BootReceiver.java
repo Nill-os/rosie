@@ -8,7 +8,7 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 
-/** After a restart: reconnect the phone link, and remind you to open Rosie to turn "Hey Rosie" back on (Android does not let a microphone service start by itself at boot). */
+// board #684 quirk-no-mic-service-at-boot
 public class BootReceiver extends BroadcastReceiver {
     @Override public void onReceive(Context c, Intent i) {
         if (!Intent.ACTION_BOOT_COMPLETED.equals(i.getAction())) return;

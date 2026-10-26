@@ -9,7 +9,6 @@ public class RosieSessionService extends VoiceInteractionSessionService {
 
     static class Session extends VoiceInteractionSession {
         Session(android.content.Context c) { super(c); }
-        /** The system asks the assistant to show up (headphone button hold, assistant gesture): start the conversation and get out of the way. */
         @Override public void onShow(Bundle args, int flags) {
             super.onShow(args, flags);
             android.content.Intent i = new android.content.Intent(getContext(), AssistTriggerActivity.class).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);

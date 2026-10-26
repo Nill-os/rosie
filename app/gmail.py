@@ -1,5 +1,4 @@
-"""Gmail. Permission requested: gmail.modify = read, label, archive, move to Trash and send. Rosie sends exactly one thing: the morning paper, to your
-OWN address(es) only (send_own refuses anyone else). It never permanently deletes. Old read-only logins keep working for reading (they can't send)."""
+# board #731 safety-send-own-only
 import base64
 import json
 import re
@@ -23,7 +22,7 @@ READ_SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
 
 
 class MailLoginExpired(Exception):
-    """Gmail login is missing or expired; run ./login-gmail.sh"""
+    pass
 
 
 def _safe(name):
@@ -123,14 +122,11 @@ def get_meta(name, msg_id) -> dict:
             "thread_id": m.get("threadId", m["id"]), "ts": int(m.get("internalDate", 0)) // 1000}
 
 
-# ---------- sending: your own address only ----------
 class NotYourAddress(ValueError):
-    """A recipient that isn't the account's own address or one the owner listed for the morning paper."""
+    pass
 
 
 def own_addresses(name) -> set[str]:
-    """The only addresses Rosie may send to: this Gmail account's own address, plus the extra ones YOU listed in the morning paper's
-    settings (e.g. another address of yours). Read fresh from the config every time."""
     cfg = config.load()
     own = {a["email"].strip().lower() for a in cfg.get("gmail_accounts", []) if a.get("name") == _safe(name) and a.get("email")}
     extra = (cfg.get("paper") or {}).get("email_to") if isinstance(cfg.get("paper"), dict) else []
@@ -138,8 +134,7 @@ def own_addresses(name) -> set[str]:
 
 
 def send_own(name, to: list[str], subject: str, html_body: str, text_body: str, attachments=(), service_fn=None) -> str:
-    """Send one message from account `name` to your own address(es). Hard rule: every recipient must be in own_addresses(name); no Cc,
-    no Bcc, no reply-to. Returns Gmail's message id."""
+    # board #731 safety-no-cc-bcc
     from email.message import EmailMessage
     allowed = own_addresses(name)
     rcpt = [str(t).strip().lower() for t in (to or [])]

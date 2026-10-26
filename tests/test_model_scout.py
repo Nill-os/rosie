@@ -1,4 +1,3 @@
-"""Rosie's model scout (model_scout.py): which new abliterated models she keeps as candidates, when she tests one, and when she flags it."""
 import datetime as dt
 import sys
 from pathlib import Path
@@ -30,7 +29,7 @@ def fresh(monkeypatch, tmp_path):
     monkeypatch.setattr(corner, "GPU_HOLD", "")
     monkeypatch.setattr(corner, "owner_recent", lambda s: False)
     monkeypatch.setattr(ms.shutil, "disk_usage", lambda p: type("U", (), {"free": 100e9})())
-    monkeypatch.setattr(corner, "STAGE_FLAG", tmp_path / "no-staging")      # never the real PC's load, jobs or stage flag
+    monkeypatch.setattr(corner, "STAGE_FLAG", tmp_path / "no-staging")
     monkeypatch.setattr(corner.os, "getloadavg", lambda: (0.0, 0.0, 0.0), raising=False)
     monkeypatch.setattr(corner, "_busy_probe", None)
 
@@ -43,7 +42,7 @@ def test_only_chat_models_that_fit_her_graphics_card_and_are_new_become_candidat
     assert j(hf("a/x-GGUF", base="dalatexcoder/Rice-Cracker-Qwen3.5-8B-Abliterated-Base"))["why"] == "not a chat model"
     assert j(hf("b/Huihui-Qwen3.5-9B-abliterated-GGUF", 9.6e9, base="huihui-ai/Huihui-Qwen3.5-9B-abliterated"))["why"] == "the same model she is on"
     assert j(hf("c/Llama-3.1-8B-abliterated-GGUF", base="meta-llama/llama-3.1-8b"), bases={"meta-llama/llama-3.1-8b"})["why"] == "a copy of one already found"
-    assert j(hf("d/m-GGUF"))["status"] == ""                                            # passes the cheap checks: its files are looked at next
+    assert j(hf("d/m-GGUF"))["status"] == ""
     assert j(hf("d/m-GGUF"), files(quant="Q8_0"))["why"] == "no Q4_K_M file"
     assert "too big for the graphics card" in j(hf("d/m-GGUF"), files(7.4e9))["why"]
     c = j(hf("d/m-GGUF"), files(4.9e9))
@@ -64,9 +63,9 @@ def test_research_judges_each_model_once_and_keeps_one_copy_of_each(monkeypatch)
     seen = ms.load()["seen"]
     assert seen["a/Llama-3.1-8B-abliterated-GGUF"]["status"] == "candidate"
     assert seen["b/Llama-3.1-8B-abliterated-i1-GGUF"]["why"] == "a copy of one already found"
-    assert len(asked) == 2                                                               # one search, one file list (the big one isn't opened)
+    assert len(asked) == 2  # board #871 quirk-big-file-unopened
     asked.clear()
-    assert ms.research() == 0 and len(asked) == 1                                       # already judged: not looked at again
+    assert ms.research() == 0 and len(asked) == 1
     assert not ms.research_due(ms.load(), ms._now()) and ms.research_due({}, ms._now())
 
 
@@ -75,13 +74,13 @@ def test_the_best_candidate_a_day_old_is_tested_first():
                   "old/y": {"status": "candidate", "created": "2026-10-17T09:00:00Z", "downloads": 300, "likes": 0},
                   "old/z": {"status": "candidate", "created": "2026-10-17T09:00:00Z", "downloads": 100, "likes": 5},
                   "old/t": {"status": "tested", "created": "2026-10-10T09:00:00Z", "downloads": 99999, "likes": 99}}}
-    assert ms.next_candidate(d, NIGHT)[0] == "old/z"                                    # 100 + 5 likes beats 300; the 9000 one is too new
+    assert ms.next_candidate(d, NIGHT)[0] == "old/z"
     assert ms.next_candidate({"seen": {}}, NIGHT) is None
 
 
 def test_she_tests_only_at_night_while_the_owner_is_away_once_a_night(monkeypatch):
     assert ms.test_due({}, NIGHT) is None
-    assert ms.test_due({}, NIGHT.replace(hour=2, minute=30)) == "outside the test window"   # the hair-clip batch has the PC from 2:00
+    assert ms.test_due({}, NIGHT.replace(hour=2, minute=30)) == "outside the test window"  # board #871 why-test-window-two-am
     assert ms.test_due({"tested_on": "2026-10-23"}, NIGHT) == "already tested one tonight"
     monkeypatch.setattr(corner, "GPU_HOLD", "Paused while the context window is being tuned.")
     assert ms.test_due({}, NIGHT) == corner.GPU_HOLD
@@ -106,7 +105,6 @@ def test_the_benchmark_score_line_is_read_as_model_eval_prints_it():
 
 @pytest.fixture
 def lab(monkeypatch):
-    """A fake Ollama and benchmark for test()."""
     lab = {"pulled": [], "deleted": [], "caps": ["completion", "tools"], "evals": [], "inbox": [], "warm": 0, "holds": []}
     monkeypatch.setattr(ms, "_pull", lambda n: lab["pulled"].append(n))
     monkeypatch.setattr(ms, "_delete", lambda n: lab["deleted"].append(n))
@@ -137,7 +135,7 @@ def test_a_model_that_wins_twice_is_flagged_and_kept(lab):
     r = ms.load()["seen"]["d/m-GGUF"]
     assert r["status"] == "flagged" and r["score"] == "26/26" and r["current_score"] == "24/26" and r["runs"] == 2
     assert lab["deleted"] == [] and len(lab["inbox"]) == 1 and "Settings > AI model" in lab["inbox"][0][0][2]
-    assert lab["holds"] == [ms.HOLD, ms.HOLD] and corner.GPU_HOLD == "" and lab["warm"] == 1   # corner and graph waited, then go on
+    assert lab["holds"] == [ms.HOLD, ms.HOLD] and corner.GPU_HOLD == "" and lab["warm"] == 1
     assert ms.load()["tested_on"] == "2026-10-23" and ms.status()["flagged"] == ["d/m-GGUF"]
 
 
@@ -174,14 +172,14 @@ def test_the_job_never_runs_under_tests_and_can_be_turned_off(monkeypatch):
     started = []
     monkeypatch.setattr(ms.threading, "Thread", lambda **k: started.append(k) or type("T", (), {"start": lambda s: None})())
     ms.job(NIGHT, {"model_scout": True})
-    assert started == []                                                    # under pytest: never the real Hugging Face or Ollama
+    assert started == []  # board #871 safety-no-real-hf-or-ollama
     monkeypatch.setattr(ms.testguard, "active", lambda: False)
     ms.job(NIGHT, {"model_scout": False})
     assert started == []
     ms.job(NIGHT, {"model_scout": True})
     assert started and ms.state["running"]
     called = []
-    monkeypatch.setattr(ms, "_research_thread", lambda: called.append(1) or 1 / 0)    # even a crash in it
+    monkeypatch.setattr(ms, "_research_thread", lambda: called.append(1) or 1 / 0)
     ms.state["running"] = False
     started.clear()
     ms.job(NIGHT, {"model_scout": True})

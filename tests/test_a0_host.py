@@ -1,4 +1,4 @@
-"""Where Agent Zero runs on this PC (owner 2026-10-23: her Agent Zero on Windows Docker Desktop becomes Rosie's brain too)."""
+# board #840 owner-windows-a0-brain
 import json
 import subprocess
 
@@ -59,7 +59,7 @@ def test_relocate_moves_every_agent_zero_path_to_this_pcs_folder(tmp_path, monke
     monkeypatch.setattr(a0_host, "FILE", tmp_path / "a0_host.json")
     (tmp_path / "a0_host.json").write_text(json.dumps({"container": "my-a0", "url": "http://127.0.0.1:50001", "usr": str(tmp_path / "usr")}))
     for name in ("INCLUDE", "INCLUDE_CLAUDE", "INCLUDE_TOOLS", "EXT_DIR", "TURNS", "CONTAINER", "URL"):
-        monkeypatch.setattr(a0, name, getattr(a0, name))              # put them back after the test
+        monkeypatch.setattr(a0, name, getattr(a0, name))
     a0.relocate()
     assert a0.INCLUDE == tmp_path / "usr" / "workdir" / "rosie.promptinclude.md" and a0.TURNS == tmp_path / "usr" / "rosie_turns"
     assert a0.EXT_DIR == tmp_path / "usr" / "extensions" / "python" and a0.CONTAINER == "my-a0" and a0.URL == "http://127.0.0.1:50001"

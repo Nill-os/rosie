@@ -1,5 +1,4 @@
 #!/bin/bash
-# Downloads the small offline speech model the "Hey Rosie" listener needs and puts it where the app build expects it.
 set -e
 cd "$(dirname "$0")"
 mkdir -p /tmp/rosie-model && cd /tmp/rosie-model

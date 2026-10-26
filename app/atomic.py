@@ -1,5 +1,4 @@
-"""Write a file so a reader (or a crash) only ever sees the old content or the new one, never half (audit 2026-10-20: settings and
-keys were rewritten in place or through one shared temp file). The temp file is private (0600) from its first byte."""
+# board #710 fix-atomic-writes-audit
 import os
 import tempfile
 from pathlib import Path

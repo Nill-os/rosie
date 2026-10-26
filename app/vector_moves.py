@@ -1,10 +1,4 @@
-"""Vector moves while he talks (owner 2026-10-24, after a robot build where the AI moves the robot "how he thinks he
-should" while it answers: https://www.youtube.com/watch?v=FG5cwNxvOp8).
-
-Rosie's model puts move tags in her reply ("Oh, a cat! [look_up] Hi there."); the tags are taken out before her
-voice says the sentence, and the moves run while that sentence plays. Only motor moves, never his animations: an
-animation's own sound next to Rosie's voice stream is what crashed vic-anim before (vector_bot.play). While he sits,
-moves that use his wheels are left out (sit means he stays in place)."""
+# board #797 owner-moves-while-talking
 import re
 import threading
 import time
@@ -17,7 +11,6 @@ _busy = threading.Lock()
 
 
 def split(text: str) -> tuple[str, list[str]]:
-    """("Hi there.", ["look_up"]) from "Hi [look_up] there." Unknown tags are dropped and never spoken."""
     moves = []
     for m in TAG.finditer(text or ""):
         name = m.group(1).strip().lower().replace(" ", "_")
@@ -31,14 +24,13 @@ def allowed(sitting: bool) -> tuple[str, ...]:
 
 
 def prompt_hint(sitting: bool) -> str:
-    """The rule for Rosie's prompt: which tags she may use, and how."""
     tags = " ".join(f"[{m}]" for m in allowed(sitting))
     return (" You have a body and can move it while you talk: put a move tag right where it fits, at most two in a reply, "
             f"from: {tags}. Tags are not spoken, so never mention them.")
 
 
 def perform(bot, moves: list[str], sitting: bool = False):
-    """Run the moves one after another (a move already running: these are skipped, never queued behind it)."""
+    # board #797 why-moves-skip-not-queue
     if not moves or not _busy.acquire(blocking=False):
         return
     try:
@@ -46,7 +38,7 @@ def perform(bot, moves: list[str], sitting: bool = False):
             if name in allowed(sitting):
                 _MOVE[name](bot)
     except Exception:
-        pass                                             # control went away (his wake word): the words still play
+        pass  # board #797 why-words-play-anyway
     finally:
         _busy.release()
 

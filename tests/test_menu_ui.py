@@ -1,5 +1,3 @@
-"""The menu layout: the merge of the built-in menu with a saved layout, and the Settings > Menu editor (tests/js/menu_ui.js drives the
-real app.js in jsdom, like test_paper_ui.py). The server side: what /api/settings accepts as menu_layout."""
 import hashlib
 import hmac
 import json
@@ -36,15 +34,14 @@ def ui():
     return d
 
 
-# ---------------- the merge ----------------
 def test_without_a_layout_the_menu_is_the_built_in_one(ui):
     assert ui["defFlatSame"] is True and ui["defLabels"][-1] == "" and ui["defPages"][-1] == "settings"
 
 
 def test_a_new_page_joins_its_own_group_and_a_removed_page_is_dropped(ui):
-    assert ui["newPageHome"] == "Work"                                   # left out of the saved layout: back where it belongs
-    assert ui["homeGone"] == ["", "settings"]                            # group gone: the last group, and Settings is still last in it
-    assert ui["dropped"] == [False, False, 1]                            # unknown keys and repeats are dropped
+    assert ui["newPageHome"] == "Work"
+    assert ui["homeGone"] == ["", "settings"]  # board #869 why-settings-last
+    assert ui["dropped"] == [False, False, 1]
 
 
 def test_a_page_with_tabs_moves_as_one_entry_and_its_old_route_still_lights_it(ui):
@@ -55,14 +52,13 @@ def test_hidden_pages_stay_out_of_a_custom_menu(ui):
     assert ui["navShown"][0].startswith("First") and "✓Tasks" in ui["navShown"] and "⌂Home" not in ui["navShown"]
 
 
-# ---------------- the editor ----------------
 def test_the_editor_moves_pages_up_down_to_a_group_and_by_drag(ui):
     assert ui["cards"] >= 6 and ui["hasHandles"] and ui["statusAria"] == "polite"
     assert ui["firstRows"][:3] == ["home", "inbox", "calendar"]
     assert ui["afterUp"][:2] == ["inbox", "home"]
     assert ui["afterDown"].index("inbox") == ui["afterUp"].index("inbox") + 2
     assert "mail" not in ui["afterMoveTo"][0] and ui["afterMoveTo"][1][-1] == "mail"
-    assert ui["emptyFilled"] == ["notes"]                                 # dropped into an empty group
+    assert ui["emptyFilled"] == ["notes"]
 
 
 def test_changes_save_once_after_a_pause_with_the_whole_layout(ui):
@@ -82,7 +78,6 @@ def test_reset_puts_the_built_in_order_back(ui):
     assert ui["reset"] == [{"menu_layout": []}] and ui["afterReset"] is True
 
 
-# ---------------- the server ----------------
 @pytest.fixture
 def client(isolated, monkeypatch):
     import server
@@ -110,15 +105,15 @@ def test_the_server_adds_settings_last_when_it_is_missing(client):
 
 
 @pytest.mark.parametrize("bad", [
-    [{"label": "A", "pages": ["Bad Key"]}],                                         # not a page name
-    [{"label": "A", "pages": ["home"]}, {"label": "B", "pages": ["home"]}],         # twice
+    [{"label": "A", "pages": ["Bad Key"]}],
+    [{"label": "A", "pages": ["home"]}, {"label": "B", "pages": ["home"]}],
     [{"label": "A", "pages": ["home", "home"]}],
-    [{"label": "x" * 31, "pages": ["home"]}],                                       # name too long
-    [{"label": "", "pages": ["home"]}, {"label": "B", "pages": ["settings"]}],      # only the Settings group can be nameless
-    [{"label": "A", "pages": []} for _ in range(21)],                               # too many groups
+    [{"label": "x" * 31, "pages": ["home"]}],
+    [{"label": "", "pages": ["home"]}, {"label": "B", "pages": ["settings"]}],  # board #869 why-only-settings-nameless
+    [{"label": "A", "pages": []} for _ in range(21)],
     [{"label": "A"}], ["home"], "home", [{"label": 3, "pages": []}],
 ])
 def test_the_server_refuses_a_bad_layout(client, bad):
     r = client.post("/api/settings", json={"menu_layout": bad})
     assert r.status_code == 400 or r.status_code == 422, r.text
-    assert client.get("/api/badges").json()["menu_layout"] == []                    # nothing was kept
+    assert client.get("/api/badges").json()["menu_layout"] == []

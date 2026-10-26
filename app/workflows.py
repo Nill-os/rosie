@@ -1,8 +1,4 @@
-"""Daily routine: capture -> /start, /sync, /wrap-up. Plain-text vault + tasks.db + memory.
-
-Design rules: the model only SORTS and SUMMARIZES text; plain code does dates, file moves and writes.
-Nothing is deleted: processed scratch notes are archived into the daily note first.
-"""
+# board #801 owner-model-only-sorts
 import datetime as dt
 import json
 import re
@@ -48,7 +44,6 @@ def init_vault():
         render_board()
 
 
-# ---------- small helpers ----------
 _MONTHS = {"jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6, "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12}
 _MD_NAME = re.compile(r"\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sept?(?:ember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.? (\d{1,2})(?:st|nd|rd|th)?\b(?:,? (\d{4}))?")
 _MD_DAYFIRST = re.compile(r"\b(\d{1,2})(?:st|nd|rd|th)? (?:of )?(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sept?(?:ember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b(?:,? (\d{4}))?")
@@ -56,8 +51,6 @@ _MD_NUM = re.compile(r"\b(\d{1,2})/(\d{1,2})(?:/(\d{2,4}))?\b")
 
 
 def parse_month_day(text: str, base: dt.date, past_keeps_year: bool = False):
-    """'Oct 9', 'October 9th', '9 October', '10/9', 'Oct 9 2027' -> date, or None. Without a year it means the next such date
-    (past_keeps_year=True keeps a recent past date in this year, so an overdue 'due Oct 1' stays overdue)."""
     s = text.lower()
     y = mo = d = None
     m = _MD_NAME.search(s)
@@ -87,7 +80,6 @@ def parse_month_day(text: str, base: dt.date, past_keeps_year: bool = False):
 
 
 def resolve_due(phrase: str, base: dt.date | None = None) -> str:
-    """Turn 'tomorrow' / 'friday' / '2026-10-09' into YYYY-MM-DD. Code, not the model, does date math."""
     base = base or today()
     p = (phrase or "").strip().lower()
     if not p:
@@ -107,14 +99,14 @@ def resolve_due(phrase: str, base: dt.date | None = None) -> str:
     days = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
     for i, name in enumerate(days):
         if name in p:
-            ahead = (i - base.weekday()) % 7 or 7   # next such weekday, never today
+            ahead = (i - base.weekday()) % 7 or 7
             return (base + dt.timedelta(days=ahead)).isoformat()
     if "next week" in p:
         return (base + dt.timedelta(days=(7 - base.weekday()))).isoformat()
     return base.isoformat()
 
 
-LLM_JSON_PREDICT = 4096             # no cap meant a runaway answer held the GPU until the 300 s timeout (audit 2026-10-23)
+LLM_JSON_PREDICT = 4096  # board #801 why-cap-model-output
 
 
 def llm_json(system: str, user: str, schema: dict, timeout=300):
@@ -122,7 +114,7 @@ def llm_json(system: str, user: str, schema: dict, timeout=300):
         "model": MODEL, "stream": False, "think": False, "format": schema, "keep_alive": "30m",
         "options": {**ctxsize.options(MODEL), "temperature": 0.1, "num_predict": LLM_JSON_PREDICT},
         "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]})
-    resp.raise_for_status()                                   # a crashed runner (HTTP 500) is "the model is down", not a bad answer
+    resp.raise_for_status()
     r = resp.json()
     return json.loads(r["message"]["content"])
 
@@ -136,7 +128,6 @@ def daily_path(day=None):
 
 
 def append_daily(section: str, lines: list[str], day=None):
-    """Add bullet lines under '## section' in the daily note (created if missing)."""
     if not lines:
         return
     init_vault()
@@ -154,7 +145,6 @@ def append_daily(section: str, lines: list[str], day=None):
     p.write_text(text)
 
 
-# ---------- memory.md (working context) ----------
 def read_memfile() -> dict:
     out = {k: [] for k, _ in MEM_SECTIONS}
     if not MEMFILE.exists():
@@ -192,8 +182,7 @@ def add_to_memfile(section: str, items: list[str]):
     write_memfile(d)
 
 
-# ---------- capture ----------
-_pad = threading.Lock()                                        # a capture and the sync's clear never interleave
+_pad = threading.Lock()
 
 
 def capture(text: str):
@@ -209,7 +198,6 @@ def _scratch_body() -> str:
     return SCRATCH.read_text().replace(SCRATCH_HEADER, "").strip()
 
 
-# ---------- Task Board view (generated from tasks.db) ----------
 def render_board():
     t = today().isoformat()
     open_overdue = tasks.overdue()
@@ -224,7 +212,6 @@ def render_board():
     BOARD.write_text("".join(body))
 
 
-# ---------- /sync ----------
 SORT_SCHEMA = {"type": "object", "required": ["tasks", "ideas", "decisions", "followups", "notes"], "properties": {
     "tasks": {"type": "array", "items": {"type": "object", "required": ["title", "when"],
                                            "properties": {"title": {"type": "string"}, "when": {"type": "string"}}}},
@@ -256,11 +243,11 @@ def _sync_scratch(report: list[str]):
         add_to_memfile("waiting_on", d["followups"])
     if d["decisions"]:
         add_to_memfile("decisions", d["decisions"])
-    # archive everything raw into the daily note BEFORE clearing the pad
+    # board #801 safety-archive-before-clear
     append_daily("Captured (raw)", body.splitlines())
     append_daily("Decisions", d["decisions"])
     append_daily("Notes", d["notes"] + [f"Idea: {i}" for i in d["ideas"]])
-    with _pad:                                                 # keep what was jotted down while the model was sorting (audit 2026-10-20)
+    with _pad:  # board #801 fix-keep-jotted-during-sort
         later = _scratch_body()
         rest = later[len(body):].strip() if later.startswith(body) else later.replace(body, "", 1).strip()
         SCRATCH.write_text(SCRATCH_HEADER + (rest + "\n" if rest else ""))
@@ -334,9 +321,9 @@ def _sync_meetings(report: list[str], via_proposals: bool = False):
                   + ("**Waiting on others:**\n" + "\n".join(f"- {x}" for x in waiting) + "\n\n" if waiting else "")
                   + "---\n\n## Original\n\n")
         new.write_text(header + raw)
-        f.unlink()  # the full original lives on inside the renamed file
+        f.unlink()
         for a in mine:
-            if via_proposals:   # recorded meetings: tasks wait for the user's approval
+            if via_proposals:  # board #801 owner-meeting-tasks-approval
                 import proposals
                 proposals.add("task", a["title"].strip(), {"title": a["title"].strip(), "due": resolve_due(a["when"]) if a.get("when") else ""}, detail=f"From meeting: {title}", source=f"meeting:{new.stem}",
                               key=f"mtask:{new.stem}:{a['title'].strip()[:40]}")
@@ -355,13 +342,12 @@ def sync() -> str:
     for step in (_sync_scratch, _sync_meetings):
         try:
             step(report)
-        except Exception as e:   # say so plainly; never half-hide a failure
+        except Exception as e:
             report.append(f"{step.__name__.strip('_')} FAILED and was left untouched: {type(e).__name__}: {e}")
     render_board()
     return "Sync done.\n" + "\n".join(f"- {r}" for r in report)
 
 
-# ---------- /start ----------
 def start_context() -> str:
     init_vault()
     render_board()
@@ -391,7 +377,6 @@ START_GUIDE = ("Do this in order, SHORT: 1) One sentence on how the day looks (c
 START_PROMPT = "[/start] Run my morning start like a quick standup. Facts (already fetched, do not call tools for these):\n{ctx}\n\n" + START_GUIDE
 
 
-# ---------- /wrap-up ----------
 WRAP_SCHEMA = {"type": "object", "required": ["summary", "memory"], "properties": {
     "summary": {"type": "string"},
     "memory": {"type": "object", "required": [k for k, _ in MEM_SECTIONS], "properties": {k: _arr() for k, _ in MEM_SECTIONS}}}}

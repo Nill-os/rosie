@@ -1,6 +1,5 @@
 #!/bin/bash
-# The ONLY thing systemd starts. Lives outside both code slots, so a broken slot can never break the launcher.
-# It starts whichever slot (A or B) is marked active, and falls back to the other slot if the active one cannot even be found.
+# board #812 why-launcher-outside-slots
 OPS="$(cd "$(dirname "$0")" && pwd)"
 dir_for() { [ "$1" = "B" ] && echo "${ROSIE_SLOT_B:-$HOME/assistant-b}" || echo "${ROSIE_SLOT_A:-$HOME/assistant}"; }
 ACTIVE=$(tr -d ' \n' < "$OPS/active" 2>/dev/null); ACTIVE=${ACTIVE:-A}

@@ -1,25 +1,3 @@
-"""Rosie's launcher and updater for Windows (owner 2026-10-23: "i want ota updates so when i update rosie hers also updates with the slot
-system").
-
-It lives in the Rosie folder (%LOCALAPPDATA%\\Rosie), outside both code slots, and does what ~/rosie-ops does on Linux:
-- runs Rosie from the active slot (slots\\A or slots\\B) and starts her again if she stops;
-- every few hours looks for a newer version on GitHub, and takes it only when every GitHub check on it passed (the Windows tests too);
-- builds it in the idle slot with its own Python libraries, starts it once on a spare port with copied data, and switches only when that
-  works and nobody has used the PC for a while;
-- watches the new version for 30 minutes and goes back by itself if it stops answering; a version that failed is never tried again.
-
-Data, secrets and the skill vault live once in the Rosie folder; each slot links to them (directory junctions), so a switch keeps all of
-her own things. Standard library only: it must run before any library is installed.
-
-    py launcher.py              run Rosie (Rosie.bat does this)
-    py launcher.py --install    first install: the newest passing version into slot A
-    py launcher.py --check      look for an update now, build and test it, and switch when it passes
-    py launcher.py --status     what is installed and what the last check found
-    py launcher.py --check-pc   what this PC already has (Ollama and its models, Docker, Agent Zero), changing nothing
-    py launcher.py --setup      choose the model from what Ollama has, and connect Agent Zero as the brain
-    py launcher.py --google-login   sign in to Google Calendar and Gmail (Rosie Google Sign-in.bat does this)
-    py launcher.py --start-deps start Ollama, Docker Desktop and Agent Zero when they are not running (Rosie does this at every start)
-"""
 from __future__ import annotations
 
 import hashlib
@@ -44,21 +22,20 @@ SLOTS = ROOT / "slots"
 STATE = ROOT / "state.json"
 LOG = ROOT / "update.log"
 SETTINGS = ROOT / "update.json"
-SHARED = ("data", "secrets", "vault")          # one copy in ROOT, linked into each slot
+SHARED = ("data", "secrets", "vault")
 PORT = 8765
-PROXY_PORT = 8771                                      # a0_proxy_port's default
+PROXY_PORT = 8771
 CHECK_EVERY_S = 6 * 3600
 PROBATION_S = 30 * 60
-STARTUP_GRACE_S = 5 * 60                       # a slow start is not a failure until she answered once or this long passed
-IDLE_TO_SWITCH_S = 15 * 60                     # an update waits until nobody has touched the PC this long (or the night window)
-NIGHT = (2, 5)                                 # 02:00-05:00: switch even if the PC was used recently
+STARTUP_GRACE_S = 5 * 60
+IDLE_TO_SWITCH_S = 15 * 60
+NIGHT = (2, 5)
 DEFAULTS = {"repo": "Nill-os/rosie", "branch": "main", "auto": True, "host": "127.0.0.1"}
 WIN = sys.platform == "win32"
 SIGN_IN_BAT = "Rosie Google Sign-in.bat"
 UA = {"User-Agent": "rosie-updater", "Accept": "application/vnd.github+json"}
 
 
-# ---------------------------------------------------------------- small helpers
 def log(msg: str):
     line = f"{time.strftime('%Y-%m-%d %H:%M:%S')} {msg}"
     print(line, flush=True)
@@ -98,7 +75,7 @@ def save(st: dict):
         try:
             os.replace(tmp, STATE)
             return
-        except PermissionError:                              # a virus scanner or the Rosie page holds the file for a moment
+        except PermissionError:
             if i == 2:
                 raise
             time.sleep(0.5)
@@ -130,7 +107,6 @@ def _env() -> dict:
 
 
 def idle_seconds() -> float | None:
-    """Seconds since the last key press or mouse move (Windows); None elsewhere."""
     if not WIN:
         return None
     import ctypes
@@ -145,7 +121,6 @@ def idle_seconds() -> float | None:
 
 
 def quiet_now(now: float | None = None) -> bool:
-    """A good moment to restart Rosie: nobody has used the PC for a while, or it's the middle of the night."""
     hour = time.localtime(now).tm_hour
     if NIGHT[0] <= hour < NIGHT[1]:
         return True
@@ -153,7 +128,6 @@ def quiet_now(now: float | None = None) -> bool:
     return idle is not None and idle >= IDLE_TO_SWITCH_S
 
 
-# ---------------------------------------------------------------- GitHub
 def _get(url: str, timeout=30) -> bytes:
     req = urllib.request.Request(url, headers=UA)
     with urllib.request.urlopen(req, timeout=timeout) as r:
@@ -170,11 +144,10 @@ def newest(get=_get) -> str:
 
 INSTALLED = "installed.ok"
 SMOKE_TIMEOUT = "no answer in 2 minutes"
-REQUIRED_CHECKS = {"pytest", "windows", "windows-start"}     # the job names in .github/workflows/tests.yml; each must have succeeded
+REQUIRED_CHECKS = {"pytest", "windows", "windows-start"}
 
 
 def checks_passed(sha: str, get=_get) -> bool | None:
-    """True when every GitHub check on this commit finished and passed and all REQUIRED_CHECKS ran and succeeded; None while some still run."""
     runs = gh(f"/commits/{sha}/check-runs?per_page=100", get).get("check_runs", [])
     if not runs:
         return None
@@ -184,14 +157,13 @@ def checks_passed(sha: str, get=_get) -> bool | None:
 def _verdict(runs: list) -> bool | None:
     done = {r.get("name"): r.get("conclusion") for r in runs if r.get("status") == "completed"}
     if any(r.get("status") != "completed" for r in runs):
-        return None                                          # something still runs (a missing required job may be on its way)
+        return None
     if any(done.get(n) != "success" for n in REQUIRED_CHECKS):
-        return False                                         # a required job is missing, skipped, or failed
+        return False
     return all(c in ("success", "skipped", "neutral") for c in done.values())
 
 
 def download(sha: str, dest: Path, get=_get):
-    """The commit's files from GitHub into dest (emptied first). Paths are checked so nothing lands outside dest."""
     data = get(f"https://codeload.github.com/{settings()['repo']}/zip/{sha}", timeout=300)
     if dest.exists():
         _remove(dest)
@@ -199,7 +171,7 @@ def download(sha: str, dest: Path, get=_get):
     root = dest.resolve()
     with zipfile.ZipFile(io.BytesIO(data)) as z:
         for info in z.infolist():
-            parts = Path(info.filename).parts[1:]                  # GitHub puts everything in "<repo>-<sha>/"
+            parts = Path(info.filename).parts[1:]
             if not parts or info.is_dir():
                 continue
             target = (dest / Path(*parts)).resolve()
@@ -211,9 +183,8 @@ def download(sha: str, dest: Path, get=_get):
     (dest / "VERSION").write_text(sha + "\n", encoding="utf-8")
 
 
-# ---------------------------------------------------------------- building a slot
 def _remove(p: Path):
-    """Delete a slot folder. Junctions to the shared data are unlinked first, so the data itself is never touched."""
+    # board #918 safety-junction-data-kept
     for name in SHARED:
         link = p / name
         if _is_link(link):
@@ -230,13 +201,12 @@ def _is_link(p: Path) -> bool:
 
 def _unlink(p: Path):
     if WIN and not p.is_symlink():
-        os.rmdir(p)                                    # a junction: removes the link, not what it points to
+        os.rmdir(p)
     else:
         p.unlink()
 
 
 def link_shared(slot: str):
-    """slots\\X\\data -> ROOT\\data (and secrets, vault). Whatever the download put there is replaced by the link."""
     d = slot_dir(slot)
     for name in SHARED:
         (ROOT / name).mkdir(exist_ok=True)
@@ -261,13 +231,12 @@ def install_libraries(slot: str):
 
 
 def build(slot: str, sha: str, get=_get):
-    """The commit in the given slot, linked to the shared data, with its own libraries. Raises on any failure."""
     tmp = SLOTS / f".{slot}-new"
     if tmp.exists():
         _remove(tmp)
     download(sha, tmp, get)
     old_venv = slot_dir(slot) / ".venv"
-    if old_venv.exists():                                  # keep the slot's Python: uv only adds what changed
+    if old_venv.exists():
         shutil.move(str(old_venv), str(tmp / ".venv"))
     if slot_dir(slot).exists():
         _remove(slot_dir(slot))
@@ -289,7 +258,6 @@ def healthz(port=PORT, timeout=3) -> dict | None:
 
 
 def free_port() -> int:
-    """A port nothing listens on right now. A fixed one clashed: on Windows Rosie's tool line for Agent Zero (a0_mcp) uses 8766."""
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
@@ -303,7 +271,6 @@ def _tail(path: str) -> str:
 
 
 def smoke(slot: str) -> dict:
-    """Start the candidate once on a spare port with a copy of the data (sandboxed: no jobs, no mail) and check the basics."""
     tmp = Path(tempfile.mkdtemp(prefix="rosie-check-"))
     out = {"ok": False, "checks": {}}
     proc = None
@@ -323,7 +290,7 @@ def smoke(slot: str) -> dict:
         (tmp / "secrets" / "access_code").write_text("CHEC-KING-UPDT\n")
         me = f"{slot}-check-{_secrets.token_hex(4)}"
         stage = free_port()
-        errlog = open(tmp.parent / (tmp.name + ".err"), "wb")                 # its error text, read back if it fails to start
+        errlog = open(tmp.parent / (tmp.name + ".err"), "wb")
         proc = subprocess.Popen(server_cmd(slot, stage, "127.0.0.1"), cwd=tmp / "app", env={**_env(), "ROSIE_SANDBOX": "1", "ROSIE_SLOT": me},
                                 stdout=subprocess.DEVNULL, stderr=errlog)
         up = None
@@ -346,7 +313,7 @@ def smoke(slot: str) -> dict:
         out["ok"] = all(out["checks"].values())
     except Exception as e:
         slow = isinstance(e, TimeoutError) or isinstance(getattr(e, "reason", None), TimeoutError)
-        out["error"] = SMOKE_TIMEOUT if slow else f"{type(e).__name__}: {e}"   # a slow first answer is a busy PC, not a broken version
+        out["error"] = SMOKE_TIMEOUT if slow else f"{type(e).__name__}: {e}"
     finally:
         if proc and proc.poll() is None:
             proc.terminate()
@@ -355,7 +322,7 @@ def smoke(slot: str) -> dict:
             except subprocess.TimeoutExpired:
                 proc.kill()
         shutil.rmtree(tmp, ignore_errors=True)
-        if errlog:                                            # None when the sandbox failed before the log was opened
+        if errlog:
             try:
                 errlog.close()
                 os.remove(errlog.name)
@@ -364,9 +331,7 @@ def smoke(slot: str) -> dict:
     return out
 
 
-# ---------------------------------------------------------------- the update steps
 def _match_helpers(listing: str, slot: str) -> list[int]:
-    """Process ids from "pid<TAB>exe<TAB>command line" lines whose program or command line is inside this slot's folder."""
     folder = str(slot_dir(slot)).replace("/", "\\").rstrip("\\").lower() + "\\"
     pids = []
     for line in listing.splitlines():
@@ -377,8 +342,6 @@ def _match_helpers(listing: str, slot: str) -> list[int]:
 
 
 def helpers_in(slot: str) -> list[int]:
-    """Programs still running from a slot's folder. On Windows they lock it (WinError 32), so it can't be rebuilt: Claude Code's
-    Rosie helpers (board, mind and notes servers) keep running from the slot that was live when the session started."""
     if not WIN:
         return []
     ps = '[Console]::OutputEncoding = [Text.Encoding]::UTF8; Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId)`t$($_.ExecutablePath)`t$($_.CommandLine)" }'
@@ -398,18 +361,17 @@ def _kill_tree(pid: int):
 
 
 def stop_helpers(slot: str) -> int:
-    """Stop what still runs from the idle slot before it is rebuilt (owner 2026-10-25). Only that exact folder: never the live slot."""
+    # board #918 owner-stop-idle-helpers
     pids = helpers_in(slot)
     for pid in pids:
         _kill_tree(pid)
     if pids:
         log(f"stopped {len(pids)} old helper program(s) still running from slot {slot}; Claude Code reconnects them in a new session")
-        time.sleep(2)                                            # Windows frees the files a moment after the processes end
+        time.sleep(2)
     return len(pids)
 
 
 def check(st: dict, get=_get) -> str:
-    """Look for a newer passing version and build it in the idle slot. Returns what happened, in plain words."""
     st["last_check"] = time.time()
     try:
         sha = newest(get)
@@ -429,24 +391,24 @@ def check(st: dict, get=_get) -> str:
     if not ok:
         return _result(st, f"The new version ({sha[:7]}) failed GitHub's tests; waiting for a fixed one.")
     idle = other(live)
-    st["staged"] = None                                      # the idle slot is about to be overwritten: nothing is staged until the build and check pass
+    st["staged"] = None
     save(st)
     log(f"building {sha[:7]} in slot {idle}")
     try:
         stop_helpers(idle)
         build(idle, sha, get)
-    except Exception as e:                                       # often the network (GitHub, the library server): try again next time
+    except Exception as e:
         st["heads"].pop(idle, None)
-        if not isinstance(e, OSError):                           # network, disk and file locks pass; a broken build doesn't
+        if not isinstance(e, OSError):
             n = st.setdefault("build_fails", {})
             n[sha] = n.get(sha, 0) + 1
-            if n[sha] >= 3:                                      # the same version failed to build three times: stop trying it
+            if n[sha] >= 3:
                 st["bad"].append(sha)
         return _result(st, f"Could not build the new version ({sha[:7]}): {type(e).__name__}: {e}"[:300])
     st["heads"][idle] = sha
     res = smoke(idle)
     if not res["ok"]:
-        if res.get("error") == SMOKE_TIMEOUT:                 # a slow PC can miss the 2 minutes once: only the 2nd time marks it bad
+        if res.get("error") == SMOKE_TIMEOUT:
             n = st.setdefault("smoke_timeouts", {})
             n[sha] = n.get(sha, 0) + 1
             if n[sha] >= 2:
@@ -471,7 +433,6 @@ def can_switch(st: dict) -> bool:
 
 
 def switch(st: dict) -> bool:
-    """Make the staged slot the live one. Refuses (False, nothing changed) unless the idle slot holds the staged build."""
     idle = other(st["active"])
     if not can_switch(st):
         log(f"not switching: slot {idle} does not hold the staged version ({(st.get('staged') or '')[:7]})")
@@ -492,13 +453,11 @@ def rollback(st: dict, why: str):
     log(f"went back to slot {st['active']}: {why}")
 
 
-# ---------------------------------------------------------------- first run and phone access
 VOICE_BASE = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/"
 VOICE_FILES = ("kokoro-v1.0.onnx", "voices-v1.0.bin")
 
 
 def first_run():
-    """What only this PC has: the access code and session key, and the voice files (about 340 MB, once). Only what is missing."""
     for d in SHARED:
         (ROOT / d).mkdir(exist_ok=True)
     sec = ROOT / "secrets"
@@ -515,7 +474,7 @@ def first_run():
         log(f"downloading the voice file {name} (one time)")
         try:
             tmp = dest.with_suffix(".part")
-            with urllib.request.urlopen(VOICE_BASE + name, timeout=60) as r, open(tmp, "wb") as f:    # 60 s with no data = give up
+            with urllib.request.urlopen(VOICE_BASE + name, timeout=60) as r, open(tmp, "wb") as f:
                 shutil.copyfileobj(r, f, 1 << 20)
             tmp.replace(dest)
         except (OSError, TimeoutError) as e:
@@ -523,7 +482,6 @@ def first_run():
 
 
 def sign_in_file():
-    """Rosie Google Sign-in.bat for installs that began before it existed: copied from the active slot when it isn't in the Rosie folder."""
     src = slot_dir(load()["active"]) / "tools" / "windows" / SIGN_IN_BAT
     try:
         if src.exists() and not (ROOT / SIGN_IN_BAT).exists():
@@ -533,13 +491,12 @@ def sign_in_file():
 
 
 def phone_address() -> str | None:
-    """Tailscale, when installed and signed in: serve Rosie over HTTPS on this PC's Tailscale name, for the phone."""
     ts = shutil.which("tailscale") or (r"C:\Program Files\Tailscale\tailscale.exe" if WIN else None)
     if not ts or not Path(ts).exists():
         return None
     try:
         subprocess.run([ts, "serve", "--bg", str(PORT)], capture_output=True, timeout=20)
-        proxy = PROXY_PORT                             # Agent Zero's page in Rosie's Chat (a0_proxy.py) needs its own HTTPS port
+        proxy = PROXY_PORT
         subprocess.run([ts, "serve", "--bg", f"--https={proxy}", f"http://127.0.0.1:{proxy}"], capture_output=True, timeout=20)
         name = json.loads(subprocess.run([ts, "status", "--json"], capture_output=True, text=True, timeout=20).stdout)["Self"]["DNSName"]
         return "https://" + name.rstrip(".")
@@ -547,8 +504,7 @@ def phone_address() -> str | None:
         return None
 
 
-# ---------------------------------------------------------------- the setup checker (owner 2026-10-23: "she already has ollama and the model
-# to have it run a checker first and she has agent zero")
+# board #918 owner-setup-checker-first
 DEFAULT_MODEL = "qwen3.5:9b"
 OLLAMA_API = "http://127.0.0.1:11434"
 
@@ -561,7 +517,6 @@ def _run(args, timeout=20) -> subprocess.CompletedProcess | None:
 
 
 def ollama_models() -> list[str] | None:
-    """The models Ollama has, or None when Ollama isn't answering."""
     try:
         with urllib.request.urlopen(OLLAMA_API + "/api/tags", timeout=5) as r:
             return [m["name"] for m in json.loads(r.read()).get("models", [])]
@@ -570,7 +525,6 @@ def ollama_models() -> list[str] | None:
 
 
 def find_agent_zero() -> dict:
-    """The Agent Zero container, the same way Rosie's a0_host finds it (this runs before Rosie is installed)."""
     r = _run(["docker", "ps", "-a", "--format", "{{.Names}}\t{{.Image}}\t{{.State}}"])
     if r is None:
         return {"found": False, "why": "Docker isn't installed."}
@@ -583,17 +537,13 @@ def find_agent_zero() -> dict:
     return {"found": True, "container": pick[0], "image": pick[1], "running": pick[2] == "running"}
 
 
-# ---------------------------------------------------------------- starting what Rosie needs (partner 2026-10-23: Rosie came up without
-# Ollama, Docker or Agent Zero when they were closed). Programs are only started here, never stopped; a program that can't start is
-# logged and Rosie starts anyway.
 DOCKER_WAIT_S = 180
 OLLAMA_WAIT_S = 45
-_wait = time.sleep                                   # replaced in tests
+_wait = time.sleep
 _clock = time.monotonic
 
 
 def _spawn(args: list[str]) -> bool:
-    """Start a program on its own (it keeps running when Rosie's window closes). False when it can't be started."""
     flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(subprocess, "CREATE_NO_WINDOW", 0)
     try:
         subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=flags)
@@ -613,7 +563,6 @@ def _until(ok, seconds: float, every: float = 3) -> bool:
 
 
 def ollama_program() -> list[str] | None:
-    """How to start Ollama: its tray app when installed (it also serves), else `ollama serve`."""
     base = Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Ollama"
     app = base / "ollama app.exe"
     if app.exists():
@@ -666,7 +615,6 @@ def start_docker() -> bool:
 
 
 def a0_container_name() -> str | None:
-    """The Agent Zero container Rosie saved (data/a0_host.json), else the one Docker lists."""
     try:
         name = json.loads((ROOT / "data" / "a0_host.json").read_text(encoding="utf-8")).get("container")
     except (OSError, ValueError, AttributeError):
@@ -693,12 +641,11 @@ def start_agent_zero() -> bool:
 
 
 def start_dependencies() -> dict:
-    """Ollama, Docker Desktop and the Agent Zero container, started when they are not running. Nothing here stops Rosie from starting."""
     out = {}
     for name, fn in (("ollama", start_ollama), ("docker", start_docker)):
         try:
             out[name] = fn()
-        except Exception as e:                       # never keep Rosie from starting
+        except Exception as e:
             log(f"{name}: {e}")
             out[name] = False
     try:
@@ -710,7 +657,6 @@ def start_dependencies() -> dict:
 
 
 def check_pc() -> dict:
-    """What this PC already has, before anything is installed or changed."""
     import platform
     out = {"system": platform.platform(), "disk_free_gb": round(shutil.disk_usage(ROOT if ROOT.exists() else Path.home()).free / 1024 ** 3)}
     if WIN:
@@ -745,7 +691,6 @@ def report(pc: dict) -> str:
 
 
 def _config_set(**kw):
-    """Settings Rosie reads at start (data/config.json), merged with what is there."""
     p = ROOT / "data" / "config.json"
     p.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -757,7 +702,6 @@ def _config_set(**kw):
 
 
 def pick_model(models: list[str], ask=input) -> str | None:
-    """Rosie's model: the usual one when Ollama has it; otherwise one this PC already has (asked), so nothing big downloads."""
     chat = [m for m in models if "embed" not in m]
     if any(m == DEFAULT_MODEL or m == DEFAULT_MODEL + ":latest" for m in chat):
         return DEFAULT_MODEL
@@ -776,7 +720,6 @@ def pick_model(models: list[str], ask=input) -> str | None:
 
 
 def setup():
-    """After the install: check the PC, choose the model, and make Agent Zero the brain when it is there. Safe to run again."""
     start_dependencies()
     pc = check_pc()
     print("\nThis PC:\n" + report(pc) + "\n", flush=True)
@@ -810,7 +753,6 @@ GOOGLE_STEPS = (("Google Calendar", "import gcal; gcal.login()"),
 
 
 def google_login(account: str = "main") -> int:
-    """Google sign-in for Calendar, then Gmail, with the active slot's Python (login.sh and login-gmail.sh are bash). A browser opens for each."""
     if not (ROOT / "secrets" / "google_client.json").exists():
         print("  Google sign-in needs your Google app file first: put google_client.json in " + str(ROOT / "secrets") + " (see the Rosie README), then run this again.")
         return 1
@@ -828,13 +770,12 @@ def google_login(account: str = "main") -> int:
     return 1 if failed else 0
 
 
-# ---------------------------------------------------------------- running Rosie
 class Runner:
     def __init__(self):
         self.proc = None
         self.crashes: list[float] = []
         self.fails = 0
-        self.started = time.time()                          # failed answers only count after she answered once or 5 minutes passed
+        self.started = time.time()
         self.seen_up = False
 
     def start(self, st: dict):
@@ -855,7 +796,6 @@ class Runner:
 
 
 def relaunch_if_launcher_changed(st: dict, runner: Runner):
-    """A new version can bring a new launcher: copy it next to the slots and restart this program with it."""
     new = slot_dir(st["active"]) / "tools" / "windows" / "launcher.py"
     me = Path(__file__).resolve()
     if new.exists() and new.read_bytes() != me.read_bytes():
@@ -863,19 +803,18 @@ def relaunch_if_launcher_changed(st: dict, runner: Runner):
         runner.stop()
         log("the launcher itself was updated; restarting it")
         if _LOCK:
-            _LOCK.close()                                        # the new launcher takes the lock next
-        subprocess.Popen([sys.executable, str(me), *sys.argv[1:]])   # execv does not quote paths on Windows
+            _LOCK.close()
+        subprocess.Popen([sys.executable, str(me), *sys.argv[1:]])
         sys.exit(0)
 
 
-_LOCK = None                                                 # the open lock file: closing it would free the lock
+_LOCK = None
 
 
 def single_instance() -> bool:
-    """Hold an exclusive lock on launcher.lock for as long as this program runs. False when another launcher already holds it."""
     global _LOCK
     f = open(ROOT / "launcher.lock", "a+")
-    for i in range(10):                                          # a relaunch overlaps its old launcher for a moment
+    for i in range(10):
         try:
             if WIN:
                 import msvcrt
@@ -912,13 +851,13 @@ def run():
     print(f"\n  Rosie: http://127.0.0.1:{PORT}    Access code: {code}" + (f"\n  Phone address (in the Rosie app): {phone}" if phone else "")
           + "\n  Keep this window open (you can minimize it). Close it to stop Rosie.\n", flush=True)
     runner = Runner()
-    if st.get("staged") and not (st.get("probation_until") or 0) > time.time():   # a restart is a good moment for a waiting update
+    if st.get("staged") and not (st.get("probation_until") or 0) > time.time():
         try:
             if switch(st):
                 relaunch_if_launcher_changed(st, runner)
-        except Exception as e:                                   # a failed switch or relaunch must not keep Rosie from starting
+        except Exception as e:
             log(f"the waiting update could not go in: {type(e).__name__}: {e}"[:300])
-    runner.start(load())                                         # from disk: a failed save leaves the old slot active
+    runner.start(load())
     opened = False
     while True:
         time.sleep(15)
@@ -931,7 +870,7 @@ def run():
                 if "--no-browser" not in sys.argv:
                     import webbrowser
                     webbrowser.open(f"http://127.0.0.1:{PORT}")
-            if runner.proc.poll() is not None:                       # she stopped
+            if runner.proc.poll() is not None:
                 runner.crashes = [t for t in runner.crashes if now - t < 600] + [now]
                 if probation and len(runner.crashes) >= 3:
                     rollback(st, "the new version kept stopping")
@@ -959,39 +898,38 @@ def run():
                 continue
             if st.get("staged") and quiet_now():
                 if not can_switch(st):
-                    st["staged"] = None                          # stale: its slot was overwritten
+                    st["staged"] = None
                     save(st)
                     continue
                 runner.stop()
                 try:
                     if switch(st):
-                        relaunch_if_launcher_changed(st, runner)   # a successful relaunch exits here (SystemExit passes)
+                        relaunch_if_launcher_changed(st, runner)
                 except Exception as e:
                     log(f"the update could not go in: {type(e).__name__}: {e}"[:300])
-                runner.start(load())                             # Rosie comes back whatever the switch did
+                runner.start(load())
                 continue
             if now - (st.get("last_check") or 0) >= CHECK_EVERY_S:
                 try:
                     check(st)
-                except Exception as e:                               # an update problem must never stop Rosie
+                except Exception as e:
                     log(f"the update check failed: {type(e).__name__}: {e}"[:300])
                     st = load()
-                    st["last_check"] = now                           # try again at the next check time, not every 15 s
+                    st["last_check"] = now
                     save(st)
-        except Exception as e:                                       # one bad pass must not end the launcher (and with it Rosie)
+        except Exception as e:
             log(f"launcher loop: {type(e).__name__}: {e}")
 
 
 def install():
-    """First install: the newest version whose checks passed, into slot A."""
     st = load()
-    if st["heads"].get(st["active"]) and venv_python(st["active"]).exists():   # finished before: only write the marker the installer looks for
+    if st["heads"].get(st["active"]) and venv_python(st["active"]).exists():
         (ROOT / INSTALLED).write_text("ok\n")
         log("already installed")
         return
-    (ROOT / INSTALLED).unlink(missing_ok=True)               # a marker with no venv behind it is stale: rebuild
+    (ROOT / INSTALLED).unlink(missing_ok=True)
     sha = newest()
-    if not checks_passed(sha):                               # the newest is still being tested or failed: take the newest passing one
+    if not checks_passed(sha):
         for c in gh(f"/commits?sha={settings()['branch']}&per_page=20"):
             if checks_passed(c["sha"]):
                 sha = c["sha"]
@@ -1006,7 +944,7 @@ def install():
     new = slot_dir("A") / "tools" / "windows" / "launcher.py"
     if new.exists() and new.resolve() != Path(__file__).resolve():
         shutil.copy2(new, ROOT / "launcher.py")
-    (ROOT / INSTALLED).write_text("ok\n")                   # last step: a finished install (install.ps1 reruns --install, which returns early)
+    (ROOT / INSTALLED).write_text("ok\n")
     log("installed")
 
 
@@ -1014,19 +952,15 @@ HOOK_EVENTS = ("SessionStart", "UserPromptSubmit", "PostToolUse", "Stop", "Sessi
 
 
 def board_run(script: str, args: list) -> int:
-    """Run one of the live slot's board programs (app/board_hook.py, app/board_mcp.py) with this program's stdin and stdout, so Claude
-    Code's settings name this launcher once and keep working after every update switches slots."""
     try:
         slot = load().get("active") or "A"
         return subprocess.call([str(venv_python(slot)), str(slot_dir(slot) / "app" / script), *args], cwd=str(slot_dir(slot) / "app"))
     except OSError:
-        return 0                                                 # a broken board never blocks a Claude session
+        return 0
 
 
 def link_claude() -> int:
-    """Connect Claude Code on this PC to Rosie's agent board (owner 2026-10-23: "i want a shared board between you two"): the board's
-    MCP server and its hooks, both through this launcher. Adds to Claude Code's settings and keeps everything already there (a backup
-    first)."""
+    # board #918 owner-shared-agent-board
     py, me = Path(sys.executable).as_posix(), Path(__file__).resolve().as_posix()
     cmd = f'"{py}" "{me}"'
     settings_file = Path.home() / ".claude" / "settings.json"
@@ -1055,15 +989,15 @@ def link_claude() -> int:
 
 
 def main():
-    if len(sys.argv) > 1 and sys.argv[1] in ("--board-hook", "--board-mcp"):    # for Claude Code: fast, quiet, no folders made
+    if len(sys.argv) > 1 and sys.argv[1] in ("--board-hook", "--board-mcp"):
         sys.exit(board_run("board_hook.py" if sys.argv[1] == "--board-hook" else "board_mcp.py", sys.argv[2:]))
-    if not ({"--check-pc", "--status"} & set(sys.argv)):          # the checker changes nothing, not even a folder
+    if not ({"--check-pc", "--status"} & set(sys.argv)):
         SLOTS.mkdir(parents=True, exist_ok=True)
     if "--install" in sys.argv:
         install()
     elif "--check" in sys.argv:
         st = load()
-        if (st.get("probation_until") or 0) > time.time():      # the idle slot is the way back until the new version proves itself
+        if (st.get("probation_until") or 0) > time.time():
             print("A new version is still being watched; check again in half an hour.")
             sys.exit(0)
         print(check(st))

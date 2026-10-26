@@ -1,12 +1,5 @@
 #!/usr/bin/env python3
-"""Two code slots, A and B, like a phone's A/B partitions. One is live; the other is where changes are built and tested.
-Everything else (data, notes, logins, Python environment, port, Tailscale address) is SHARED, so a switch never changes your connections.
-
-This file is installed OUTSIDE both slots (~/rosie-ops) and is not editable by the assistant. Commands (all print JSON):
-  status | prepare [topic] | commit "message" | diff | stage | switch | rollback [reason] | events | claim [why] | release
-The idle slot is claimed on the agent board (app/agentboard.py) by whoever prepares it; while another live agent holds it,
-prepare, commit, stage and switch refuse (prepare --force and switch --force override).
-"""
+# board #815 safety-slots-outside-assistant
 import json
 import os
 import secrets as _secrets
@@ -25,9 +18,8 @@ SLOT = {"A": Path(os.environ.get("ROSIE_SLOT_A") or HOME / "assistant"), "B": Pa
 PORT = int(os.environ.get("ROSIE_PORT") or 8765)
 STAGE_PORT = int(os.environ.get("ROSIE_STAGE_PORT") or 8780)
 PROBATION_MIN = 30
-# shared between the slots: they live in slot A's folder and slot B links to them
 SHARED = ["data", "secrets", "vault", ".venv", "vendor/gi", "android/app/build", "android/app/src/main/assets/model-en-us", "android/local.properties"]
-PROTECTED = ("ops", "start.sh", "sync-repo.sh", "backup-data.sh", "rotate-code.sh", "login.sh", "login-gmail.sh", ".git", ".github")       # never editable by the assistant
+PROTECTED = ("ops", "start.sh", "sync-repo.sh", "backup-data.sh", "rotate-code.sh", "login.sh", "login-gmail.sh", ".git", ".github")
 STATE = OPS / "state.json"
 
 
@@ -43,7 +35,6 @@ def git(slot, *args, **kw):
 
 
 def chat_model() -> str:
-    """The model Rosie chats with (Settings > AI model). The update check judges the new code on it, so it never loads another model."""
     try:
         return json.loads((SLOT["A"] / "data" / "config.json").read_text()).get("chat_model") or "qwen3.5:9b"
     except (OSError, ValueError):
@@ -63,7 +54,7 @@ def save_state(**kw):
     OPS.mkdir(parents=True, exist_ok=True)
     tmp = STATE.with_suffix(".tmp")
     tmp.write_text(json.dumps(s, indent=1))
-    tmp.replace(STATE)                                  # atomic: the launcher never sees half a file
+    tmp.replace(STATE)
     return s
 
 
@@ -115,9 +106,7 @@ def healthz(port=None, timeout=3):
         return None
 
 
-# ---------- setting up slot B ----------
 def ensure_b():
-    """Create slot B as a clone of slot A (same repo, same remotes), with the shared things linked in."""
     a, b = SLOT["A"], SLOT["B"]
     if not (b / ".git").exists():
         run(["git", "clone", "-q", str(a), str(b)], check=True)
@@ -138,9 +127,7 @@ def ensure_b():
     return {"slot": "B", "path": str(b), "head": head("B")}
 
 
-# ---------- the agent board (app/agentboard.py): the idle slot is claimed by whoever prepares it, so no other agent changes it meanwhile ----------
 def _board():
-    """The live slot's agent board module, or None (then the slots work exactly as before)."""
     try:
         app = str(SLOT[active()] / "app")
         if "agentboard" not in sys.modules and app not in sys.path:
@@ -160,12 +147,10 @@ def _board_call(fn, *a, **k):
 
 
 def claimed(slot: str) -> str:
-    """'' if the caller may change this slot, else who holds it."""
     return _board_call("blocked_by", f"slot-{slot}") or ""
 
 
 def claim(why="working on it", force=False):
-    """Claim the idle slot on the agent board for the caller (12 hours, or until released, switched, or the caller's session ends)."""
     idle = other(active())
     return _board_call("claim", f"slot-{idle}", why, 12, force=force) or {"error": "The agent board is not available."}
 
@@ -175,12 +160,11 @@ def release():
 
 
 def prepare(topic="update", force=False):
-    """Make the inactive slot an exact copy of the live code, on a fresh working branch."""
     live = active()
     idle = other(live)
-    if claimed(idle) and not force:                    # the plain reason first (the atomic claim below decides)
+    if claimed(idle) and not force:
         return {"error": claimed(idle), "claimed": True}
-    if (load_state().get("probation_until") or 0) > time.time() and not force:   # the idle slot is the way back until probation ends (audit 2026-10-20)
+    if (load_state().get("probation_until") or 0) > time.time() and not force:  # board #815 why-idle-slot-way-back
         return {"error": f"Slot {idle} is the way back while the new version is on probation (about {int((load_state()['probation_until'] - time.time()) // 60) + 1} more minutes). Wait, or prepare with force."}
     if idle == "B":
         ensure_b()
@@ -188,10 +172,10 @@ def prepare(topic="update", force=False):
         raise RuntimeError(f"slot {idle} does not exist")
     if dirty(idle) and not force:
         return {"error": f"Slot {idle} has uncommitted work ({len(dirty(idle))} files). Commit it, or prepare with force to throw it away.", "dirty": dirty(idle)[:10]}
-    got = _board_call("claim", f"slot-{idle}", topic, 12, force=force)   # claimed first (atomic), before anything changes (audit 2026-10-20)
+    got = _board_call("claim", f"slot-{idle}", topic, 12, force=force)  # board #815 fix-claim-before-change
     if isinstance(got, dict) and got.get("ok") is False:
         return {"error": claimed(idle) or f"slot {idle} is claimed by another agent", "claimed": True}
-    if dirty(live):                                    # the live slot is the source of truth: snapshot its current files so the copy is exact
+    if dirty(live):
         git(live, "add", "-A")
         git(live, "-c", "user.name=Rosie", "-c", "user.email=rosie@localhost", "commit", "-q", "-m", "Snapshot before self-update")
     base = head(live)
@@ -224,7 +208,6 @@ def diff():
     return {"slot": idle, "files": files, "summary": stat[-1].strip() if stat else "no changes", "dirty": len(dirty(idle))}
 
 
-# ---------- staging: try the candidate against a COPY of the data on a spare port ----------
 def _build_stage(idle: str) -> Path:
     src = SLOT[idle]
     live_data = SLOT["A"] / "data"
@@ -241,19 +224,18 @@ def _build_stage(idle: str) -> Path:
     if (SLOT["A"] / "vault").exists():
         shutil.copytree(SLOT["A"] / "vault", tmp / "vault")
     (tmp / "secrets").mkdir()
-    (tmp / "secrets" / "session_key").write_text(_secrets.token_hex(16))               # a throwaway key: the copy never uses your real logins
+    (tmp / "secrets" / "session_key").write_text(_secrets.token_hex(16))
     (tmp / "secrets" / "access_code").write_text("STAG-ETES-TONL\n")
     return tmp
 
 
 def smoke(idle: str) -> dict:
-    """Start the candidate on a spare port with copied data and check the basics."""
     import hashlib
     import hmac
-    if healthz(STAGE_PORT, 1):                                    # an old stage server still answers there: it would be checked instead
+    if healthz(STAGE_PORT, 1):  # board #815 why-own-stage-server-only
         return {"ok": False, "checks": {}, "error": f"port {STAGE_PORT} is already in use (an earlier check's server?)"}
     tmp = _build_stage(idle)
-    me = f"{idle}-stage-{_secrets.token_hex(4)}"                  # only this check's own server counts as up
+    me = f"{idle}-stage-{_secrets.token_hex(4)}"
     env = {**os.environ, "ROSIE_SANDBOX": "1", "ROSIE_SLOT": me}
     venv = SLOT["A"] / ".venv" / "bin" / "uvicorn"
     proc = subprocess.Popen([str(venv), "server:app", "--host", "127.0.0.1", "--port", str(STAGE_PORT)], cwd=tmp / "app", env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
@@ -295,12 +277,11 @@ def smoke(idle: str) -> dict:
 
 
 def stage(with_eval=True):
-    """Tests + a sandboxed start + (optionally) the model benchmark. The switch is only allowed after this passes for the exact commit."""
     idle = other(active())
     if claimed(idle):
         return {"ok": False, "error": claimed(idle), "claimed": True}
     commit("Self-update (staged)")
-    flag = OPS / "staging"                                   # her corner and memory pause their model use while this runs
+    flag = OPS / "staging"
     flag.parent.mkdir(parents=True, exist_ok=True)
     flag.write_text(str(time.time()))
     try:
@@ -321,7 +302,7 @@ def _stage(idle, with_eval):
         import re
         base = int(load_state().get("eval_baseline", 12))
         passed, total, runs = 0, 0, []
-        for _ in range(2):                                   # a small local model is a little random: a real break fails both runs, a one-off slip gets a second try
+        for _ in range(2):
             e = run([py, "tests/model_eval.py", chat_model()], cwd=SLOT[idle], timeout=1200)
             m = re.search(r"-> (\d+)/(\d+) correct", e.stdout)
             p1, t1 = (int(m.group(1)), int(m.group(2))) if m else (0, 0)
@@ -340,9 +321,7 @@ def _stage(idle, with_eval):
     return res
 
 
-# ---------- switching ----------
 def restart_service():
-    """The service restarts itself (systemd Restart=always): ask the running server to exit; the launcher then starts the active slot."""
     r = run(["bash", "-c", f"ss -ltnp 'sport = :{PORT}' 2>/dev/null | grep -oP 'pid=\\K[0-9]+' | head -1"])
     pid = r.stdout.strip()
     if pid:
@@ -370,7 +349,7 @@ def switch(force=False):
         return {"error": "Not allowed: the new version has not passed the full check for its exact current code. Run stage first.", "last_stage": ls.get("ok")}
     if claimed(idle) and not force:
         return {"error": claimed(idle), "claimed": True}
-    try:                                               # a verified, encrypted snapshot of your data before anything changes
+    try:
         run([str(SLOT[live] / ".venv" / "bin" / "python"), str(SLOT[live] / "app" / "backup.py"), "backup"], timeout=300)
     except Exception as e:
         log_event("backup-failed", error=str(e)[:200])
@@ -379,7 +358,7 @@ def switch(force=False):
     log_event("switch", frm=live, to=idle, head=head(idle))
     restart_service()
     if wait_healthy(idle):
-        _board_call("release", f"slot-{idle}", force=True)          # it is live now: nobody's work in progress any more
+        _board_call("release", f"slot-{idle}", force=True)
         _board_call("post", f"switched Rosie to slot {idle} ({head(idle)}); slot {live} is idle now", "done")
         return {"ok": True, "active": idle, "head": head(idle), "probation_minutes": PROBATION_MIN, "note": f"If anything goes wrong in the next {PROBATION_MIN} minutes I go back automatically."}
     rb = rollback("new version did not come up healthy")
@@ -390,7 +369,7 @@ def rollback(reason="requested"):
     st = load_state()
     prev = st.get("previous") or other(active())
     cur = active()
-    if st.get("previous_head") and (head(prev) != st["previous_head"] or len(dirty(prev)) != st.get("previous_dirty", 0)):   # it was prepared again since: not the old version
+    if st.get("previous_head") and (head(prev) != st["previous_head"] or len(dirty(prev)) != st.get("previous_dirty", 0)):
         log_event("rollback-refused", to=prev, reason=reason)
         return {"ok": False, "error": f"Slot {prev} no longer holds the previous version (it was prepared again), so going back to it is refused."}
     set_active(prev)

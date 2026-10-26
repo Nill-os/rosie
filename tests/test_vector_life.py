@@ -1,5 +1,3 @@
-"""Vector speaks up on his own (vector_life.py): mood, reactions to his body and faces, restraint, and the wiring into
-vector_pod and the Vector settings API. No robot, no network."""
 import threading
 import time
 import types
@@ -10,7 +8,7 @@ import vector_life
 import vector_pod
 from vector_life import Life, Mood
 
-NOON = time.mktime((2026, 10, 24, 12, 0, 0, 0, 0, -1))      # local time, outside quiet hours
+NOON = time.mktime((2026, 10, 24, 12, 0, 0, 0, 0, -1))
 NIGHT = time.mktime((2026, 10, 24, 23, 0, 0, 0, 0, -1))
 
 
@@ -87,7 +85,7 @@ def test_picked_up_edge_schedules_one_reaction_and_set_down_after_two_seconds():
     life = _life()
     calls = _record(life)
     life.handle(_state(vector_life.PICKED_UP), NOON)
-    life.handle(_state(vector_life.PICKED_UP), NOON + 1)                 # still held: no second one
+    life.handle(_state(vector_life.PICKED_UP), NOON + 1)
     assert [k for k, _ in calls] == ["picked_up"]
     life.handle(_state(0), NOON + 5)
     assert [k for k, _ in calls] == ["picked_up", "set_down"]
@@ -110,7 +108,7 @@ def test_petting_needs_pet_s_and_fires_once_per_touch():
     life.handle(_state(0, True), NOON + vector_life.PET_S)
     life.handle(_state(0, True), NOON + vector_life.PET_S + 3)
     assert [k for k, _ in calls] == ["petted"]
-    life.handle(_state(0, False), NOON + 10)                              # let go, then a new touch
+    life.handle(_state(0, False), NOON + 10)
     life.handle(_state(0, True), NOON + 11)
     life.handle(_state(0, True), NOON + 11 + vector_life.PET_S)
     assert [k for k, _ in calls] == ["petted", "petted"]
@@ -156,12 +154,12 @@ def test_level_off_and_cannot_talk_block():
 def test_global_gap_and_per_kind_cooldown_block():
     life = _life(level="some")
     life.spoken.append((NOON - 10, "earlier"))
-    assert life.allowed("petted", NOON) is False                          # inside the 120 s gap
+    assert life.allowed("petted", NOON) is False  # board #906 why-speech-gap-cooldown
     life.spoken[-1] = (NOON - 500, "earlier")
     assert life.allowed("petted", NOON) is True
     life.last_kind["petted"] = NOON - 60
-    assert life.allowed("petted", NOON) is False                          # inside its 180 s cooldown
-    assert life.allowed("greet", NOON) is True                            # other kinds are not held
+    assert life.allowed("petted", NOON) is False
+    assert life.allowed("greet", NOON) is True
 
 
 def test_per_day_budget_blocks():
@@ -169,7 +167,7 @@ def test_per_day_budget_blocks():
     per_day = vector_life.LEVELS["some"]["per_day"]
     life.spoken = [(NOON - 300 - i * 10, f"l{i}") for i in range(per_day)]
     assert life.allowed("greet", NOON) is False
-    life.spoken = [(NOON - 90000 - i, f"l{i}") for i in range(per_day)]  # all older than a day
+    life.spoken = [(NOON - 90000 - i, f"l{i}") for i in range(per_day)]
     assert life.allowed("greet", NOON) is True
 
 
@@ -183,7 +181,7 @@ def test_react_asks_for_a_line_with_recent_lines_then_says_and_records_it(monkey
 
     life = _life(line=line, said=said)
     life.say = lambda words: (said.append(words), done.set())
-    monkeypatch.setattr(vector_life, "QUIET_HOURS", (25, -1))             # never quiet: the real clock does not matter
+    monkeypatch.setattr(vector_life, "QUIET_HOURS", (25, -1))
     life.spoken = [(time.time() - 9000, "old one")]
     assert life.react("greet", time.time(), who="Ada", gap="2 hours", expression="happy") is True
     assert done.wait(2)
@@ -194,7 +192,7 @@ def test_react_asks_for_a_line_with_recent_lines_then_says_and_records_it(monkey
 
 def test_react_speaks_end_to_end_with_a_patched_clock(monkeypatch):
     monkeypatch.setattr(vector_life, "REACT_AFTER_S", 0)
-    monkeypatch.setattr(vector_life, "QUIET_HOURS", (25, -1))             # never quiet: the real clock does not matter
+    monkeypatch.setattr(vector_life, "QUIET_HOURS", (25, -1))
     said, done = [], threading.Event()
     life = _life(said=said)
     life.say = lambda words: (said.append(words), done.set())
@@ -248,10 +246,9 @@ def test_the_status_shows_his_mood_when_life_runs(monkeypatch):
     assert st["mood"] and " and " in st["mood"] and st["last"]["kind"] == "petted"
 
 
-# --- heads-ups, day-part greetings, bedtime ------------------------------------------------------------------------
 def _life_with(monkeypatch, events=(), to_bed=None):
     import vector_life as vl
-    monkeypatch.setattr(vl, "QUIET_HOURS", (24, 0))                                      # never quiet in these tests
+    monkeypatch.setattr(vl, "QUIET_HOURS", (24, 0))
     said, beds = [], []
     life = vl.Life(lambda: None, said.append, lambda what, mood, recent, info: what, lambda: True, lambda: "lots",
                    events=lambda: list(events), to_bed=to_bed or (lambda: beds.append(1)))
@@ -279,14 +276,14 @@ def _wait_for(lst, n=1):
 def test_a_known_face_soon_before_an_event_gets_one_heads_up(monkeypatch):
     now = time.time()
     life, said, _ = _life_with(monkeypatch, events=[("Dentist", now + 10 * 60)])
-    life.seen["Ada"] = now - 60                                                          # seen a minute ago: no greeting
+    life.seen["Ada"] = now - 60
     life.handle(_face("Ada"), now)
     _wait_for(said)
     assert said and "Dentist" in said[0] and "10 minutes" in said[0]
     life.spoken.clear()
     life.handle(_face("Ada"), now + 200)
     time.sleep(0.1)
-    assert len(said) == 1                                                                 # once per event
+    assert len(said) == 1
 
 
 def test_the_greeting_knows_the_time_of_day_and_the_next_thing(monkeypatch):
@@ -302,7 +299,7 @@ def test_bedtime_off_the_charger_says_goodnight_then_docks_once_a_night(monkeypa
     life, said, beds = _life_with(monkeypatch)
     night = time.mktime(time.strptime(time.strftime("%Y-%m-%d") + " 22:30", "%Y-%m-%d %H:%M"))
     life.last_interaction = night - 3600
-    life.handle(_state(0), night)                                                         # awake, off the charger
+    life.handle(_state(0), night)
     _wait_for(beds)
     assert said and "goodnight" in said[0].lower() and beds == [1]
     life.handle(_state(0), night + 120)
@@ -310,6 +307,6 @@ def test_bedtime_off_the_charger_says_goodnight_then_docks_once_a_night(monkeypa
     assert beds == [1]
     life2, said2, beds2 = _life_with(monkeypatch)
     life2.last_interaction = night - 3600
-    life2.handle(_state(vl.ON_CHARGER), night)                                            # already in bed: nothing
+    life2.handle(_state(vl.ON_CHARGER), night)
     time.sleep(0.1)
     assert beds2 == [] and said2 == []

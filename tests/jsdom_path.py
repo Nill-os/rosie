@@ -1,4 +1,3 @@
-"""Where the UI tests find jsdom: ROSIE_JSDOM, then a node_modules folder in the repo or a global one. None = those tests skip."""
 import os
 from pathlib import Path
 

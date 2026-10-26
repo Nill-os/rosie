@@ -1,4 +1,3 @@
-"""Project planning hub: goal, finish line, ONE next action, milestones, linked tasks, git status. Plain SQLite + a notes file per project."""
 import datetime as dt
 import re
 import sqlite3
@@ -142,7 +141,6 @@ def delete_milestone(mid):
 
 
 def git_info(folder):
-    """Branch, uncommitted changes, last commit. Read-only git commands with a short timeout."""
     if not folder or not (Path(folder) / ".git").exists():
         return None
     def g(*a):
@@ -176,7 +174,6 @@ def list_(status=None):
 
 
 def discover(base=None, max_depth=2):
-    """Find git repositories under the home folder (read-only), newest activity first."""
     base = Path(base or Path.home())
     have = {p["folder"] for p in list_()} if DB.exists() else set()
     out = []
@@ -211,7 +208,6 @@ def import_paths(paths):
 
 
 def apply_plan(plan: dict):
-    """Create the milestones and tasks of an APPROVED plan."""
     pid = plan["project_id"]
     p = get(pid)
     if not p:
@@ -236,7 +232,7 @@ PLAN_SCHEMA = {"type": "object", "required": ["milestones", "next_action", "risk
 
 
 def make_plan(ref, guidance=""):
-    """Ask the local model (no tools) for a plan, then park it as a PROPOSAL for the user to approve."""
+    # board #765 safety-plan-waits-approval
     import proposals
     p = get(ref)
     if not p:
@@ -246,7 +242,7 @@ def make_plan(ref, guidance=""):
     g = git_info(p["folder"])
     today = workflows.today()
     import claude_plan
-    r = claude_plan.llm_json(          # Claude when Settings > Planning allows, else her own model
+    r = claude_plan.llm_json(  # board #765 why-plan-model-choice
         "You plan a small project for a busy user: calm, concrete, honest. Make 3 to 5 milestones (each a visible result, not an activity), each with 1 to 4 small tasks that fit "
         "in under 90 minutes and start with a verb. 'next_action' = the single smallest first step to do next (under 12 words). risks = up to 3 honest risks or unknowns (including "
         "'this may be harder than it looks' if so). Use 'due' only as date words or YYYY-MM-DD, or leave it empty; never invent deadlines. Do not repeat existing tasks or milestones. Plain words.",

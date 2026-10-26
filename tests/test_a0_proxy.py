@@ -1,4 +1,4 @@
-"""Agent Zero's own page as Rosie's Chat (owner 2026-10-23): the proxy lets nothing through without Rosie's login."""
+# board #842 safety-proxy-needs-login
 import asyncio
 import socket
 import threading
@@ -20,7 +20,7 @@ GOOD = {"cookie": "assistant_session=good"}
 
 
 class Chunks(httpx.AsyncByteStream):
-    """A response body a mock transport hands over piece by piece, like Agent Zero's streams (httpx.Response(content=...) is read at once)."""
+    # board #842 quirk-httpx-read-at-once
     def __init__(self, *parts, pause=0.0):
         self.parts, self.pause = parts, pause
 
@@ -58,7 +58,7 @@ def test_the_real_check_is_rosies_own(monkeypatch):
     monkeypatch.setattr(server, "_session_value", lambda: "tok")
     assert a0_proxy._allowed("tok") and not a0_proxy._allowed("nope") and not a0_proxy._allowed("")
     monkeypatch.setattr(server, "_session_value", lambda: (_ for _ in ()).throw(OSError("no key")))
-    assert not a0_proxy._allowed("tok")                      # no key file: closed
+    assert not a0_proxy._allowed("tok")  # board #842 safety-no-key-closed
 
 
 def test_a_good_cookie_is_forwarded_without_rosies_cookie_and_hop_headers(proxy):
@@ -103,7 +103,7 @@ def test_a_streamed_answer_arrives_in_chunks(monkeypatch):
             if not asked:
                 asked.append(1)
                 return {"type": "http.request", "body": b"", "more_body": False}
-            await asyncio.Event().wait()                     # then the browser stays connected (Starlette listens for it leaving)
+            await asyncio.Event().wait()
 
         async def send(m):
             sent.append(m)
@@ -122,7 +122,6 @@ def test_agent_zero_down_is_a_502_not_a_crash(monkeypatch):
     assert TestClient(a0_proxy.make_app()).get("/").status_code == 502
 
 
-# ---------------------------------------------------------------- websockets, against a real fake Agent Zero
 def _free_port():
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
@@ -144,7 +143,7 @@ def fake_a0(monkeypatch):
                 return
             if m.get("bytes") is not None:
                 await ws.send_bytes(m["bytes"][::-1])
-            elif m["text"] == "bye":                         # Agent Zero ends it, so the proxy is done before the test client leaves
+            elif m["text"] == "bye":
                 await ws.close()
                 return
             else:
@@ -152,7 +151,7 @@ def fake_a0(monkeypatch):
     port = _free_port()
     srv = uvicorn.Server(uvicorn.Config(Starlette(routes=[WebSocketRoute("/ws", echo)]), host="127.0.0.1", port=port, log_level="error", loop="asyncio"))
     threading.Thread(target=srv.run, daemon=True).start()
-    for _ in range(400):                                         # up to 20 s: a stage check on a busy PC was slower than 5 s (2026-10-25)
+    for _ in range(400):  # board #842 why-twenty-second-wait
         if srv.started:
             break
         time.sleep(0.05)
@@ -171,7 +170,7 @@ def test_a_websocket_without_the_login_is_refused(fake_a0):
             with c.websocket_connect("/ws", headers=headers):
                 pass
         assert e.value.code == 4401
-    assert got == {}                                         # Agent Zero never saw a connection
+    assert got == {}
 
 
 def test_a_websocket_from_another_site_is_refused(fake_a0):
@@ -192,7 +191,7 @@ def test_a_websocket_is_relayed_both_ways_without_rosies_cookie(fake_a0):
         assert ws.receive_text() == "echo ping"
         ws.send_bytes(b"abc")
         assert ws.receive_bytes() == b"cba"
-        ws.send_text("bye")                                  # leaving with the relay still open races the client's cancel (flaky in CI)
+        ws.send_text("bye")  # board #842 why-close-before-leaving
         with pytest.raises(WebSocketDisconnect):
             ws.receive_text()
     assert got["cookie"] == "a0=1"
@@ -211,7 +210,7 @@ def test_the_phone_command_and_port(monkeypatch):
     monkeypatch.setattr(a0_proxy.plat, "IS_WIN", True)
     assert a0_proxy.phone_command() == "tailscale serve --bg --https=8771 http://127.0.0.1:8771"
     cfg = config.load()
-    cfg["a0_proxy_port"] = 80                                # a privileged or odd port falls back to the default
+    cfg["a0_proxy_port"] = 80
     config.save(cfg)
     assert a0_proxy.port() == 8771
 
@@ -221,7 +220,7 @@ def test_a_websocket_from_this_host_passes_even_through_tailscale_serve():
     assert ok({"origin": "http://127.0.0.1:8771", "host": "127.0.0.1:8771"})
     assert ok({"origin": "https://pc.tail1.ts.net:8771", "host": "pc.tail1.ts.net:8771"})
     assert ok({"origin": "https://pc.tail1.ts.net:8771", "host": "127.0.0.1:8771", "x-forwarded-host": "pc.tail1.ts.net:8771"})
-    assert ok({"origin": "https://pc.tail1.ts.net:8771", "host": "127.0.0.1:8771", "x-forwarded-for": "203.0.113.9"})   # forwarded by serve
+    assert ok({"origin": "https://pc.tail1.ts.net:8771", "host": "127.0.0.1:8771", "x-forwarded-for": "203.0.113.9"})
     assert not ok({"origin": "https://evil.example", "host": "127.0.0.1:8771"})
     assert not ok({"origin": "https://evil.example", "host": "pc.tail1.ts.net:8771"})
-    assert ok({"host": "127.0.0.1:8771"})                                   # not a browser: the cookie check already ran
+    assert ok({"host": "127.0.0.1:8771"})

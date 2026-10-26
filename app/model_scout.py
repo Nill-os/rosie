@@ -1,19 +1,4 @@
-"""Rosie's model scout (owner 2026-10-22: "i also want her to research every new abliterated ai and if she finds one that will work better
-than the one she's on then she will flag it").
-
-Research (every RESEARCH_EVERY_S, two small requests per new model to Hugging Face's public model API, no login): every new abliterated
-GGUF model, kept as a candidate only when it could replace her model on this PC: an instruct model (no LoRA, base, encoder or other part),
-6 to 12 billion parameters, with a Q4_K_M file small enough to stay on the 8 GB graphics card (models.GPU_FIT_BYTES), and not another copy
-of the model she is on or of one already found. Everything she looked at is kept in data/model_scout.json, so each model is judged once.
-
-Testing (at most one model a night, TEST_FROM-TEST_TO, after midnight and before the hair-clip batch at 2:00, only while the owner has
-been away AWAY_S and the disk has room): she downloads the best untested candidate with Ollama, checks it can use tools (Rosie needs
-them), then runs her own benchmark (tests/model_eval.py: her everyday tasks on throwaway data with a fake calendar and phone; nothing
-real is changed or sent) on it and on her current model. Only a model that does better (more tasks right, or as many right with fewer
-needless questions, or as many right and clearly faster) gets a second run, and only a model that wins both runs is flagged: an Inbox
-item says what it scored. It stays downloaded for the owner to try in Settings > AI model; every other model she downloaded is deleted
-again. Her corner and memory graph wait while the benchmark runs (corner.GPU_HOLD), and it is stopped the moment the owner comes back.
-Nothing here ever switches her model."""
+# board #748 owner-research-abliterated-models
 import datetime as dt
 import json
 import os
@@ -40,23 +25,22 @@ HF = "https://huggingface.co"
 SEARCH = (HF + "/api/models?search=abliterated&filter=gguf&sort=createdAt&direction=-1&limit=100"
           "&expand[]=gguf&expand[]=createdAt&expand[]=downloads&expand[]=likes&expand[]=cardData")
 RESEARCH_EVERY_S = 12 * 3600
-MIN_PARAMS, MAX_PARAMS = 6e9, 12e9         # smaller models do worse at her tool use; bigger ones don't fit the 8 GB card at Q4_K_M
+MIN_PARAMS, MAX_PARAMS = 6e9, 12e9  # board #748 why-model-size-band
 QUANT = "Q4_K_M"
 NOT_CHAT = re.compile(r"lora|control.?vector|encoder|upsampler|embed|reward|draft|tts|whisper|(?:^|[-_/])base(?:$|[-_])", re.I)
-MIN_AGE_H = 24                             # a day old before it is tested: broken uploads are usually fixed or gone by then
+MIN_AGE_H = 24  # board #748 why-wait-day-before-test
 TEST_FROM, TEST_TO = dt.time(0, 30), dt.time(1, 45)
 AWAY_S = 1800
-MIN_FREE_GB = 25                           # the download (~6 GB) plus room to spare
+MIN_FREE_GB = 25
 PULL_TIMEOUT_S = 3600
 EVAL_TIMEOUT_S = 1800
-FASTER = 0.75                              # "clearly faster": three quarters of the time per task or less
+FASTER = 0.75
 HOLD = "Paused while Rosie tests a new AI model (model scout)."
 SCORE = re.compile(r"-> (\d+)/(\d+) correct, (\d+)/\d+ without needless questions, (\d+)s total")
 _lock = threading.Lock()
 state = {"running": False, "doing": "", "last_error": ""}
 
 
-# ---------------------------------------------------------------- the saved record
 def load() -> dict:
     try:
         d = json.loads(STATE.read_text())
@@ -82,7 +66,6 @@ def _iso(t: dt.datetime | None = None) -> str:
     return (t or _now()).isoformat(timespec="seconds")
 
 
-# ---------------------------------------------------------------- research
 def _get_json(url: str):
     r = web.get_public(url, max_bytes=4_000_000, accept=("application/json",), timeout=30)
     if r.get("error") or r.get("status") != 200:
@@ -91,7 +74,6 @@ def _get_json(url: str):
 
 
 def _tokens(name: str) -> set[str]:
-    """Family and size words of a model name: "huihui_ai/qwen3.5-abliterated:9b" -> {"qwen3.5", "9b"}."""
     return set(re.findall(r"[a-z]+\d+(?:\.\d+)?|\d+(?:\.\d+)?b\b", name.lower().replace("_", "-").replace(":", "-")))
 
 
@@ -107,7 +89,6 @@ def _same_as_current(base: str, current: str) -> bool:
 
 
 def judge(m: dict, files: list[dict] | None, current: str, bases: set[str]) -> dict:
-    """One Hugging Face model: {"status": "candidate"|"skipped", "why", ...}. files = its file list (None: not fetched yet)."""
     rid, g = m["id"], m.get("gguf") or {}
     params, base = g.get("total"), _base(m)
     rec = {"found": _iso(), "created": m.get("createdAt", ""), "downloads": m.get("downloads", 0), "likes": m.get("likes", 0),
@@ -129,7 +110,6 @@ def judge(m: dict, files: list[dict] | None, current: str, bases: set[str]) -> d
 
 
 def research() -> int:
-    """Look for new models. Returns how many new candidates were found."""
     d = load()
     current = models.current()
     bases = {r["base"] for r in d["seen"].values() if r.get("status") in ("candidate", "tested", "flagged", "failed")}
@@ -160,9 +140,7 @@ def research_due(d: dict, now: dt.datetime) -> bool:
         return True
 
 
-# ---------------------------------------------------------------- testing
 def next_candidate(d: dict, now: dt.datetime) -> tuple[str, dict] | None:
-    """The best untested candidate at least MIN_AGE_H old (most downloads and likes first)."""
     ok = []
     for rid, r in d["seen"].items():
         if r.get("status") != "candidate":
@@ -177,7 +155,6 @@ def next_candidate(d: dict, now: dt.datetime) -> tuple[str, dict] | None:
 
 
 def test_due(d: dict, now: dt.datetime) -> str | None:
-    """None when tonight's test may start; otherwise why not."""
     if not TEST_FROM <= now.time() <= TEST_TO:
         return "outside the test window"
     if d.get("tested_on") == now.date().isoformat():
@@ -188,7 +165,7 @@ def test_due(d: dict, now: dt.datetime) -> str | None:
         return corner.GPU_HOLD
     if shutil.disk_usage(Path.home()).free < MIN_FREE_GB * 1e9:
         return "not enough free disk space"
-    return corner._load_probe(now, corner.settings())       # a stage check (its own benchmark), a busy PC or a scheduled job comes first
+    return corner._load_probe(now, corner.settings())
 
 
 def _staging() -> bool:
@@ -223,7 +200,7 @@ def _installed(name: str) -> bool:
     try:
         return any(m.get("name") == name for m in httpx.get(OLLAMA + "/api/tags", timeout=30).json().get("models") or [])
     except (httpx.HTTPError, ValueError):
-        return True                                                        # unsure: treat it as the owner's, so it is never deleted
+        return True  # board #748 safety-unsure-means-owners
 
 
 def _caps(name: str) -> list:
@@ -231,7 +208,6 @@ def _caps(name: str) -> list:
 
 
 def run_eval(current: str, cand: str) -> dict:
-    """Her benchmark on both models. Returns {model: {"right", "of", "clean", "secs"}}; raises Interrupted when the owner comes back."""
     p = subprocess.Popen([sys.executable, str(ROOT / "tests" / "model_eval.py"), current, cand], cwd=str(ROOT), stdout=subprocess.PIPE,
                          stderr=subprocess.DEVNULL, text=True, preexec_fn=(lambda: os.nice(10)) if os.name != "nt" else None)
     t0, out = time.time(), []
@@ -241,7 +217,7 @@ def run_eval(current: str, cand: str) -> dict:
         while p.poll() is None:
             if corner.owner_recent(60):
                 raise Interrupted("you came back")
-            if _staging():                                     # a new version's stage check runs its own benchmark: it gets the GPU
+            if _staging():
                 raise Interrupted("a new version of Rosie is being tested")
             if time.time() - t0 > EVAL_TIMEOUT_S:
                 raise RuntimeError("the benchmark took too long")
@@ -259,11 +235,10 @@ def run_eval(current: str, cand: str) -> dict:
 
 
 class Interrupted(Exception):
-    """The owner came back: the test is dropped and tried again another night."""
+    pass
 
 
 def better(a: dict, b: dict) -> bool:
-    """a does better than b on her benchmark."""
     if a["right"] != b["right"]:
         return a["right"] > b["right"]
     if a["clean"] != b["clean"]:
@@ -276,7 +251,6 @@ def _add(x: dict, y: dict) -> dict:
 
 
 def test(rid: str, rec: dict, now: dt.datetime | None = None):
-    """Download, check and benchmark one candidate; flag it when it wins twice. Runs in its own thread (automations)."""
     import corner_browse
     import inbox
     now = now or _now()
@@ -286,7 +260,7 @@ def test(rid: str, rec: dict, now: dt.datetime | None = None):
     name, current, keep = rec["pull"], models.current(), False
     result = {"tested": _iso()}
     try:
-        keep = _installed(name)                                            # the owner's own copy is never deleted afterwards
+        keep = _installed(name)
         state["doing"] = f"Downloading {rid}"
         _pull(name)
         caps = _caps(name)
@@ -298,7 +272,7 @@ def test(rid: str, rec: dict, now: dt.datetime | None = None):
         first = run_eval(current, name)
         runs = [first]
         if better(first[name], first[current]):
-            runs.append(run_eval(current, name))                           # a small model is a little random: it has to win twice
+            runs.append(run_eval(current, name))
         mine = [r[name] for r in runs]
         theirs = [r[current] for r in runs]
         won = len(runs) == 2 and all(better(a, b) for a, b in zip(mine, theirs))
@@ -316,7 +290,7 @@ def test(rid: str, rec: dict, now: dt.datetime | None = None):
     except Interrupted as e:
         result.update(status="candidate", why=f"test stopped: {e}; tried again another night")
         d = load()
-        d["tested_on"] = ""                                                # tonight's turn isn't used up by an interruption
+        d["tested_on"] = ""
         save(d)
     except Exception as e:
         result.update(status="failed", why=f"{type(e).__name__}: {str(e)[:160]}")
@@ -325,7 +299,7 @@ def test(rid: str, rec: dict, now: dt.datetime | None = None):
         if corner.GPU_HOLD == HOLD:
             corner.GPU_HOLD = ""
         if not keep:
-            _delete(name)                                                  # only ever a model the scout downloaded itself
+            _delete(name)
         corner_browse.warm_chat()
         d = load()
         d["seen"][rid] = {**d["seen"].get(rid, rec), **result}
@@ -333,10 +307,8 @@ def test(rid: str, rec: dict, now: dt.datetime | None = None):
         state.update(running=False, doing="")
 
 
-# ---------------------------------------------------------------- the job (automations.py) and the Settings line
 def job(now: dt.datetime, cfg: dict):
-    """Called every automations tick: starts research or tonight's test in a thread, never both, never twice."""
-    if not cfg.get("model_scout", True) or state["running"] or testguard.active():      # tests call research() and test() themselves
+    if not cfg.get("model_scout", True) or state["running"] or testguard.active():
         return
     d = load()
     if research_due(d, now):
@@ -350,7 +322,7 @@ def job(now: dt.datetime, cfg: dict):
         if state["running"]:
             return
         state["running"] = True
-    def guarded():                                 # whatever fails (a bad record file, a full disk), the scout is never left "running"
+    def guarded():
         try:
             target(*args)
         except Exception as e:
@@ -368,7 +340,7 @@ def _research_thread():
     except Exception as e:
         state["last_error"] = f"research: {type(e).__name__}: {str(e)[:160]}"
         d = load()
-        d["researched_at"] = _iso()                                        # tried again after RESEARCH_EVERY_S, not every tick
+        d["researched_at"] = _iso()
         save(d)
     finally:
         state.update(running=False, doing="")

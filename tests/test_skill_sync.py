@@ -1,4 +1,4 @@
-"""One set of skills for Claude Code, Rosie and Agent Zero (skill_sync.py; owner 2026-10-20: "i want them all to have the same skills")."""
+# board #894 owner-same-skills-everywhere
 import json
 import subprocess
 
@@ -20,7 +20,7 @@ def _skill(root, name, desc="Use when testing.", body="1. Do the thing.", extra=
 
 @pytest.fixture
 def world(monkeypatch):
-    """Agent Zero's container stands in as a plain folder: docker exec's tar lands in ss.A0_SKILLS."""
+    # board #894 quirk-agent-zero-plain-folder
     ss.CLAUDE_SKILLS.mkdir(parents=True)
     ss.A0_SKILLS.mkdir(parents=True)
     (ss.CLAUDE / "settings.json").write_text(json.dumps({"enabledPlugins": {"cad@x": True, "off@x": False}}))
@@ -47,11 +47,11 @@ def test_a_claude_skill_reaches_rosie_and_agent_zero(world):
     out = ss.sync()
     assert "rosie:prusa-xl" in out["added"] and "agent-zero:prusa-xl" in out["added"]
     pb = skills.use_skill("prusa-xl")["instructions"]
-    assert pb.startswith("Use for the owner's Prusa XL printer.") and "Mirrored-from: claude:" in pb and "Skill folder:" not in pb   # ~/.claude is blocked to her (skill audit pass 2)
+    assert pb.startswith("Use for the owner's Prusa XL printer.") and "Mirrored-from: claude:" in pb and "Skill folder:" not in pb  # board #894 safety-claude-dir-blocked
     assert "Slice with PrusaSlicer." in pb
     assert (ss.A0_SKILLS / "prusa-xl" / "scripts" / "slice.sh").read_text(encoding="utf-8") == "echo hi"
     assert (ss.A0_SKILLS / "prusa-xl" / ss.MARK).exists()
-    assert ss.sync()["added"] == [] and ss.sync()["updated"] == []                       # nothing changed: nothing rewritten
+    assert ss.sync()["added"] == [] and ss.sync()["updated"] == []
 
 
 def test_rosies_and_agent_zeros_own_skills_reach_the_others(world):
@@ -62,8 +62,8 @@ def test_rosies_and_agent_zeros_own_skills_reach_the_others(world):
     claude = (ss.CLAUDE_SKILLS / "garden-care" / "SKILL.md").read_text(encoding="utf-8")
     assert 'description: "Use for plants and the garden."' in claude and "Rosie's playbook" in claude
     assert (ss.A0_SKILLS / "garden-care" / "SKILL.md").exists()
-    assert not (ss.CLAUDE_SKILLS / "harness2").exists()                     # Agent Zero's own skill waits for the owner's OK
-    held = ss.approve("harness2")                                            # no version: refused, and told the current one
+    assert not (ss.CLAUDE_SKILLS / "harness2").exists()  # board #894 owner-a0-skill-needs-ok
+    held = ss.approve("harness2")
     assert "error" in held and ss.approve("harness2", held["version"])["approved"] == "harness2"
     ss.sync()
     assert (ss.CLAUDE_SKILLS / "harness2" / ss.MARK).read_text(encoding="utf-8").startswith("agent-zero:")
@@ -81,7 +81,7 @@ def test_enabled_plugin_skills_count_and_disabled_ones_do_not(world):
 
 def test_an_agents_own_skill_is_never_replaced_and_copies_never_loop(world):
     skills.init()
-    _skill(ss.CLAUDE_SKILLS, "meal-planning", "Claude's meal skill.")                        # Rosie has her own of that name
+    _skill(ss.CLAUDE_SKILLS, "meal-planning", "Claude's meal skill.")
     out = ss.sync()
     assert "rosie:meal-planning" not in out["added"] and "Mirrored-from" not in skills.use_skill("meal-planning")["instructions"]
     names = {p.name for p in ss.CLAUDE_SKILLS.iterdir()}
@@ -116,20 +116,18 @@ def test_rosies_prompt_lists_copied_skills_by_name_only(world):
 
 
 def test_a_bundled_skill_points_rosie_at_its_folder_and_follows_a_slot_switch(world, monkeypatch, tmp_path):
-    """Skills shipped with Rosie (ops/bundle_skills.py) reach all agents; the folder pointer follows the live slot."""
     for slot in ("A", "B"):
         _skill(tmp_path / slot / "skills", "gcode", "Use to slice models.", "Slice it.", {"references/x.md": "ref"})
     monkeypatch.setattr(ss, "BUNDLE", tmp_path / "A" / "skills")
     assert "rosie:gcode" in ss.sync()["added"]
     assert f"Skill folder: {tmp_path / 'A' / 'skills' / 'gcode'}" in skills.use_skill("gcode")["instructions"]
     assert (ss.A0_SKILLS / "gcode" / "references" / "x.md").read_text(encoding="utf-8") == "ref"
-    monkeypatch.setattr(ss, "BUNDLE", tmp_path / "B" / "skills")                         # an update switched slots
+    monkeypatch.setattr(ss, "BUNDLE", tmp_path / "B" / "skills")
     assert "rosie:gcode" in ss.sync()["updated"]
     assert f"Skill folder: {tmp_path / 'B' / 'skills' / 'gcode'}" in skills.use_skill("gcode")["instructions"]
 
 
 def test_agent_zero_place_comes_from_a0_host(monkeypatch, tmp_path):
-    """No stand-in folder or container: the folder and name are read from a0_host at call time (Settings or detection)."""
     import a0_host
     monkeypatch.setattr(ss, "A0_SKILLS", None)
     monkeypatch.setattr(ss, "CONTAINER", None)
@@ -168,7 +166,6 @@ def test_a_playbook_that_quotes_the_marker_in_its_body_stays_an_original(world):
 
 
 def test_a_symlink_loop_inside_a_skill_is_skipped_not_fatal(tmp_path):
-    """Audit 2026-10-25: Path.resolve() raises RuntimeError on a loop in Python 3.12, which stopped every skill's sync."""
     d = tmp_path / "sk"
     d.mkdir()
     (d / "SKILL.md").write_text("---\nname: sk\n---\nx\n")

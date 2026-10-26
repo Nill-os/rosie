@@ -1,4 +1,3 @@
-"""The context window per model (ctxsize.py): every caller sends the same values, and tune() finds the biggest that fits."""
 import hashlib
 import hmac
 import json
@@ -18,18 +17,17 @@ import ctxsize
 @pytest.fixture(autouse=True)
 def keep_corner_options(monkeypatch):
     import corner_browse
-    monkeypatch.setattr(corner_browse, "CTX_OPTIONS", dict(corner_browse.CTX_OPTIONS))     # tune() pushes new values: undo after each test
+    monkeypatch.setattr(corner_browse, "CTX_OPTIONS", dict(corner_browse.CTX_OPTIONS))
 
 
 @pytest.fixture
 def gpu(monkeypatch):
-    """A fake 8 GB GPU on which the model fits up to `limit` tokens. Returns the list of sizes tried."""
     tried, state = [], {"limit": 65536}
     monkeypatch.setattr(ctxsize, "gpu_total_mb", lambda: 8188)
     monkeypatch.setattr(ctxsize, "model_max_ctx", lambda m: 262144)
     monkeypatch.setattr(ctxsize, "unload_all", lambda: None)
     monkeypatch.setattr(ctxsize, "sync_agent_zero", lambda m=None: "Agent Zero: skipped")
-    monkeypatch.setattr(ctxsize.httpx, "post", lambda *a, **k: None)          # the final warm-up load
+    monkeypatch.setattr(ctxsize.httpx, "post", lambda *a, **k: None)
 
     def probe(model, num_ctx, num_gpu):
         tried.append(num_ctx)
@@ -49,7 +47,7 @@ def test_a_size_that_only_loads_after_an_out_of_memory_retry_does_not_count(monk
     def no_journal(*a, **k):
         raise FileNotFoundError("journalctl")
     monkeypatch.setattr(ctxsize.subprocess, "run", no_journal)
-    assert ctxsize.load_retried(0) is False                                          # other systems: can't tell, so it counts as clean
+    assert ctxsize.load_retried(0) is False  # board #858 why-unknown-load-counts-clean
 
 
 def test_probe_rejects_a_retried_load(monkeypatch):
@@ -73,7 +71,7 @@ def test_probe_rejects_a_retried_load(monkeypatch):
 
 
 def test_probe_rejects_a_model_bigger_than_the_card_even_when_windows_says_it_fits(monkeypatch):
-    """Windows spills into shared memory instead of failing: Ollama reports 14 GB "on the GPU" of an 8 GB card (2026-10-23)."""
+    # board #858 quirk-windows-shared-memory-spill
     class R:
         def __init__(self, d):
             self.d = d
@@ -101,7 +99,7 @@ def test_tuning_finds_the_biggest_window_that_stays_on_the_gpu_and_every_caller_
     r = ctxsize.tune("qwen3.5:9b", log=lambda *_: None)
     assert r["num_ctx"] == 65536 and r["num_gpu"] == 99 and r["fits"] is True
     assert tried[:7] == [8192, 16384, 24576, 32768, 49152, 65536, 98304] and all(t % ctxsize.STEP == 0 for t in tried)
-    assert 65536 < min(t for t in tried if t > 65536) and max(tried) == 98304                   # it narrowed the gap, never beyond the first miss
+    assert 65536 < min(t for t in tried if t > 65536) and max(tried) == 98304  # board #858 why-tune-narrows-gap
     assert ctxsize.options("qwen3.5:9b") == {"num_ctx": 65536, "num_gpu": 99}
     assert config.load()["ctx"]["qwen3.5:9b"]["tuned_at"]
 
@@ -134,7 +132,7 @@ def test_without_an_nvidia_gpu_ollama_decides(gpu, monkeypatch):
 
 def test_while_tuning_rosie_and_her_corner_leave_the_gpu_alone(monkeypatch):
     monkeypatch.setitem(ctxsize.status, "running", True)
-    monkeypatch.setattr(corner, "GPU_HOLD", "Paused while the context window is being tuned.")   # what ctxsize.start() sets
+    monkeypatch.setattr(corner, "GPU_HOLD", "Paused while the context window is being tuned.")
     cfg = config.load()
     cfg["corner_on"] = True
     config.save(cfg)
@@ -189,7 +187,6 @@ def test_settings_show_and_start_a_tune(tmp_path, monkeypatch):
 
 
 def test_agent_zero_follows_rosies_model_and_keeps_its_own_extras(tmp_path):
-    """The script that runs inside the Agent Zero container, run here against copies of its two files."""
     cfgf, presetf = tmp_path / "config.json", tmp_path / "presets.yaml"
     cfgf.write_text(json.dumps({"model_preset": "Local"}))
     import yaml

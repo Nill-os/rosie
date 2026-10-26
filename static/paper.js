@@ -1,15 +1,14 @@
 'use strict';
-// ----- Morning Paper ("The Rosie Times"): logic lives in app/paper.py. The paper itself is drawn by the server (app/paper_render.py) in a
-// frame with no scripts; this page is the controls around it: archive, look, print, email, make now, "Add to my paper" and the settings.
+// board #826 safety-paper-frame-no-scripts
 let ppTimer = null, ppFit = () => {};
 addEventListener('resize', () => ppFit());
-const PP_LOOKS = [['cyberdeck', 'Cyberdeck'], ['newsprint', 'Newsprint'], ['plain', 'Plain']];   // all black and white
+const PP_LOOKS = [['cyberdeck', 'Cyberdeck'], ['newsprint', 'Newsprint'], ['plain', 'Plain']];
 const ppNarrow = () => innerWidth < 700;
 
 function ppFrame(day, look) {
   const f = h('iframe', { class: 'pp-frame', title: 'The paper', src: '/api/paper/view?day=' + encodeURIComponent(day) + '&look=' + encodeURIComponent(look),
     sandbox: 'allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-top-navigation-by-user-activation', loading: 'lazy' });
-  const fit = () => { try { f.style.height = (f.contentDocument.documentElement.scrollHeight + 8) + 'px'; } catch (e) { /* not loaded yet */ } };
+  const fit = () => { try { f.style.height = (f.contentDocument.documentElement.scrollHeight + 8) + 'px'; } catch (e) { } };
   f.onload = () => { fit(); setTimeout(fit, 600); };
   ppFit = fit;
   return f;
@@ -18,7 +17,7 @@ function ppFrame(day, look) {
 function ppPoll(day) {
   clearTimeout(ppTimer);
   ppTimer = setTimeout(async () => {
-    if (!location.hash.startsWith('#/paper')) return;                   // you left the page: stop asking
+    if (!location.hash.startsWith('#/paper')) return;
     let st; try { st = await J('/api/paper/status'); } catch (e) { return; }
     if (st.running) { const s = document.getElementById('pp-step'); if (s) s.textContent = 'Making the paper: ' + (st.step || 'starting') + '…'; ppPoll(day); return; }
     if (st.error) toast('The paper failed: ' + st.error, 1); else toast('Your paper is ready');

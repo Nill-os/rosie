@@ -1,9 +1,4 @@
-"""TEST DATA — NOT REAL. Stand-ins for everything the Morning Paper reads: news feeds (RSS and Atom bodies), Reddit and Hacker News answers, the Gmail's
-shipping emails (tricky subjects included), the calendar, the weather and the local model. Used by
-tests/test_paper.py and by the sample-paper script; nothing here touches the network.
-
-Every value from here is marked: install() records each stand-in source in paper.FAKE_SOURCES (so the paper stamps those sections
-"TEST DATA — NOT REAL" and refuses to print, email or run for real), and the items themselves carry "_fake": True."""
+# board #836 safety-test-data-marked
 import datetime as dt
 import email.utils
 import json
@@ -17,7 +12,6 @@ def rfc(t: dt.datetime) -> str:
 
 
 def rss(items, title="Feed") -> bytes:
-    """items: [(title, link, description, time, image_url_or_None)]"""
     out = [f'<?xml version="1.0"?><rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/" xmlns:content="http://purl.org/rss/1.0/modules/content/"><channel><title>{title}</title>']
     for t, link, desc, when, img in items:
         out.append(f"<item><title><![CDATA[{t}]]></title><link>{link}</link><description><![CDATA[{desc}]]></description>"
@@ -36,7 +30,6 @@ def atom(items, title="Feed") -> bytes:
 
 
 def feeds(now: dt.datetime) -> dict:
-    """{feed url: body} for the default feeds: real-looking stories, a duplicate across two feeds, an old one, a Hackaday link on HN."""
     h = lambda n: now - dt.timedelta(hours=n)
     long = lambda s: s + " " + "Officials said more details would follow later in the week, and residents were asked to check the city website."
     return {
@@ -120,7 +113,6 @@ def hn(now):
 
 
 def mails(now: dt.datetime) -> dict:
-    """Shipping emails as Gmail metadata (subject, from, snippet, internal time), including tricky ones."""
     ts = lambda days, hours=0: int((now - dt.timedelta(days=days, hours=hours)).timestamp())
     m = lambda i, frm, subj, snip, t: {"id": f"m{i}", "thread_id": f"t{i}", "from": frm, "subject": subj, "snippet": snip, "ts": t, "date": ""}
     rows = [
@@ -158,8 +150,6 @@ def weather(place, days=4):
 
 
 class FakeModel:
-    """Answers like the local model would. Picking sentences: the first sentence of each of the first five paragraphs. `bad` makes it
-    also write its own text (a rephrased sentence, an invented one, a made-up number) next to the numbers; all of that must be ignored."""
 
     def __init__(self, bad=False):
         self.calls, self.bad, self.used, self.down, self.model = [], bad, 0, False, "fake"
@@ -184,7 +174,6 @@ WORDS = ("council harbor budget transit school park bridge housing climate garde
 
 
 def article_html(title: str, n_paras=9, seed=0, ld=False) -> str:
-    """A news page: navigation, the story's paragraphs in one block, a newsletter box and a footer (the extractor must keep only the story)."""
     paras = []
     for i in range(n_paras):
         w = [WORDS[(seed + i * 3 + k) % len(WORDS)] for k in range(6)]
@@ -200,7 +189,6 @@ def article_html(title: str, n_paras=9, seed=0, ld=False) -> str:
 
 
 class FakePages:
-    """paper_articles.Fetcher stand-in: every story page answers with a long article; `blocked` hosts give nothing."""
 
     def __init__(self, n_paras=9, blocked=()):
         self.n, self.blocked, self.got = n_paras, set(blocked), []
@@ -213,7 +201,6 @@ class FakePages:
 
 
 def png(w=640, h=300) -> bytes:
-    """A real PNG (stripes) for the cartoon stand-in."""
     import struct
     import zlib
     rows = b"".join(b"\x00" + bytes(((x // 20 + y // 20) % 2) * 200 + 30 for x in range(w)) for y in range(h))
@@ -227,8 +214,6 @@ def png_size(b: bytes) -> tuple[int, int]:
 
 
 def cartoon_pick(day, recent, client=None, sizes=((390, 423), (402, 393), (614, 208))):
-    """Stand-in strips (not real xkcd) shaped like real ones (two single panels, one wide strip), newest first, skipping `recent`,
-    kept to the ones the readable plan uses (like the real pick_row)."""
     import paper_cartoon
     out, n = [], 3310
     while len(out) < 3:
@@ -244,7 +229,6 @@ def cartoon_pick(day, recent, client=None, sizes=((390, 423), (402, 393), (614, 
 
 
 def town_events(day: dt.date):
-    """A week of stand-in events (not real ones): something every day except day +3, two sources on some days."""
     ev = []
     plan = {0: [("Brass Night at the Old Mill", "", "", "Riverton Events", "A brass band plays."),
                 ("Science Saturday: Paper Rockets", "4 PM", "North Branch, Riverton Library", "Riverton Library", "Build and launch a paper rocket.")],
@@ -287,7 +271,6 @@ def fake(items):
 
 
 def install(setattr_, now):
-    """Fake every source (each one marked as test data); returns the build() keyword arguments."""
     import gcal
     import paper
     mark(setattr_)
@@ -306,7 +289,6 @@ def as_json(x) -> str:
 
 
 def busy_items(f: dict, now: dt.datetime, per_feed=12) -> list[dict]:
-    """A very busy news day: per_feed more fresh stories with long text for feed f (the print copy must trim, then fill)."""
     words = "harbor council budget transit school park bridge housing climate garden port library market vote court water".split()
     base = f["url"].split("/feed")[0].rstrip("/")
     return [{"title": f"{f['name']} story {i}: {words[i % len(words)]} plan for the {words[(i * 7) % len(words)]}", "link": f"{base}/busy-{i}",
@@ -323,7 +305,6 @@ def install_busy(setattr_, now, per_feed=12):
 
 
 def install_quiet(setattr_, now):
-    """A quiet news day: 8 fresh stories in all (a busy day has ~60), but long articles; the paper must still fill every column."""
     kw = install(setattr_, now)
     import paper
     fd = feeds(now)

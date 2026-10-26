@@ -1,6 +1,3 @@
-"""Background automations: the assistant reaches out to you. Every job is switchable in config (Settings page).
-Jobs only ever read data, write to the Inbox, or (when YOU set the mode to 'auto') run the same sync / wrap-up routines you can run by hand.
-Each notification is de-duplicated by a key, so a restart or a repeat tick never spams you."""
 import datetime as dt
 import os
 import re
@@ -43,7 +40,6 @@ def _events_today(now):
     return _ev["events"]
 
 
-# ---------------- jobs ----------------
 def job_brief(now, cfg):
     day = now.date().isoformat()
     if not cfg["brief_on"] or now.time() < _hhmm(cfg["brief_time"]) or briefs.for_day(day) or _attempts.get("brief:" + day, 0) >= 3:
@@ -70,7 +66,7 @@ def job_events(now, cfg):
     for e in _events_today(now):
         start = dt.datetime.fromisoformat(e["start"])
         mins = (start - now).total_seconds() / 60
-        if -5 < mins <= cfg["remind_lead_min"]:      # a tick that ran late still reminds, up to 5 minutes after the start
+        if -5 < mins <= cfg["remind_lead_min"]:
             inbox.add("event", f"{start:%H:%M} {e['title']}", f"Starts in {int(round(mins))} minutes." if mins >= 1 else "Starting now.",
                       "#/calendar", key=f"evt:{e['id']}:{e['start']}", now=now)
 
@@ -84,8 +80,8 @@ def job_overdue(now, cfg):
                   "#/tasks", key=f"overdue:{now.date().isoformat()}", now=now)
 
 
-_scratch_tried: dict = {}                       # the scratch pad version (mtime, size) auto-sorted last, and when
-SCRATCH_RETRY_S = 3600                          # a version whose sort failed is tried again after this long
+_scratch_tried: dict = {}
+SCRATCH_RETRY_S = 3600
 
 
 def job_scratch(now, cfg):
@@ -103,10 +99,10 @@ def job_scratch(now, cfg):
         st = workflows.SCRATCH.stat()
         sig = (st.st_mtime, st.st_size)
         if _scratch_tried.get("sig") == sig and time.time() - _scratch_tried.get("t", 0) < SCRATCH_RETRY_S:
-            return                                     # this version was tried within the hour: a failed sort leaves the pad as it was,
-        _scratch_tried.update(sig=sig, t=time.time())  # and was asked again (and announced) every tick (audit 2026-10-23)
+            return
+        _scratch_tried.update(sig=sig, t=time.time())
         out = workflows.sync()
-        failed = "sync_scratch FAILED" in out          # only the pad's own step (a meeting step can fail on its own)
+        failed = "sync_scratch FAILED" in out
         inbox.add("sync", "Couldn't sort your scratch pad" if failed else "Scratch pad sorted for you", out[:500], "#/tasks",
                   key=f"autosync:{now:%Y-%m-%d-%H%M}", now=now)
 
@@ -133,7 +129,6 @@ _agents: dict = {}
 
 
 def job_agents(now, cfg):
-    """Tell the user when an agent session finishes or stops to ask them something."""
     if not cfg["agents_notify"] or not terminals.available():
         return
     live = set()
@@ -176,8 +171,8 @@ def job_mail(now, cfg):
         return
     _mail.update(t=time.time(), running=True)
 
-    def run():                                     # in its own thread: triage makes up to 15 model calls of up to 300 s, and the tick
-        try:                                       # it ran in held up event reminders past their window (audit 2026-10-23)
+    def run():  # board #711 why-triage-own-thread
+        try:
             mailwatch.check(now)
         except gmail.MailLoginExpired as e:
             inbox.add("system", "Gmail login expired", str(e), "#/mail", key=f"gmaillogin:{now.date().isoformat()}", now=now)
@@ -193,7 +188,6 @@ _canvas = {"running": False}
 
 
 def job_canvas(now, cfg):
-    """Once a day after canvas_time: Canvas due dates into the calendar (canvas.py). In its own thread: Google and Canvas can be slow."""
     import canvas
     if _canvas["running"] or not canvas.due_today_run(now, cfg.get("canvas_time") or "07:00"):
         return
@@ -214,27 +208,24 @@ def job_meeting(now, cfg):
 
 
 def job_health(now, cfg):
-    """Every 30 minutes: look at everything Rosie depends on and tell the user (once a day per problem) if something is wrong or about to expire."""
     last = state.get("health_at")
     if last and (now - last).total_seconds() < 1800:
         return
     state["health_at"] = now
     import health
     rows = health.run_all()
-    health._cache["rows"], health._cache["at"] = rows, time.time()           # the pages show this result
+    health._cache["rows"], health._cache["at"] = rows, time.time()
     health.alert(rows, now, inbox.add)
 
 
-# ---------------- Rosie's corner: idle-time browsing (corner.py, corner_browse.py). Off until the owner turns it on.
 TIMER_UNITS = ("rosie-paper-print.service", "rosie-backup.service", "rosie-sync.service", "rosie-midnight.service")
 _timers = {"t": 0.0, "busy": None}
 
 
 def _timer_busy():
-    """A scheduled Rosie job outside this process (the morning paper, backup, repo sync, midnight autopilot) is running right now."""
     if time.time() - _timers["t"] < 60:
         return _timers["busy"]
-    if os.name == "nt":                                    # Windows: no systemd timers; these jobs run inside Rosie
+    if os.name == "nt":
         return None
     import subprocess
     busy = None
@@ -252,12 +243,10 @@ def _timer_busy():
 
 
 def corner_busy(now):
-    """What comes before Rosie's browsing: a long tick job (mail check, brief), the daily brief
-    when it is due, and the scheduled jobs outside this process. The owner's own use is checked in corner.busy_reason."""
     started = state.get("tick_started")
     if started and time.time() - started > 2:
         return "A scheduled job is running."
-    if _mail.get("running"):                       # the mail check runs in its own thread now (audit pass 2): it still comes first
+    if _mail.get("running"):
         return "Checking mail."
     cfg = config.load()
     day = now.date().isoformat()
@@ -270,12 +259,12 @@ corner.set_busy_probe(corner_busy)
 
 
 def job_corner(now, cfg):
-    nonstop = bool(cfg.get("corner_on") and cfg.get("corner_nonstop"))   # the owner pressed Start: kept in config, so it survives a restart
+    nonstop = bool(cfg.get("corner_on") and cfg.get("corner_nonstop"))
     if corner.state["running"]:
         if corner.state.get("nonstop"):
             if not nonstop:
                 corner.stop("Nonstop browsing was turned off.")
-            return                                            # nonstop mode pauses by itself (corner.pause_reason); it isn't stopped here
+            return
         why = corner.busy_reason(now)
         if why:
             corner.stop(why)
@@ -287,20 +276,17 @@ def job_corner(now, cfg):
 
 
 def job_paper(now, cfg):
-    """The morning paper, once a day at its own time (Settings > Newspaper): built in a thread (feeds and the local model take
-    minutes), then the Inbox note, the print and the email, each at most once a day. A second try 20 minutes after a failed one."""
     import paper
     if paper.fake_loaded() or paper.state["running"] or not paper.morning_due(now) or not paper.claim_run(now.date().isoformat(), now):
-        return                                                    # (never a real run while test data is loaded)
+        return
     threading.Thread(target=paper._quiet, args=(paper.morning,), kwargs={"now": now}, daemon=True, name="paper-morning").start()
 
 
-JOBS = [job_health, job_meeting, job_brief, job_reminders, job_events, job_agents, job_overdue, job_weekly_review, job_scratch, job_wrapup, job_paper, job_canvas, job_mail]   # mail last: it can take a while
+JOBS = [job_health, job_meeting, job_brief, job_reminders, job_events, job_agents, job_overdue, job_weekly_review, job_scratch, job_wrapup, job_paper, job_canvas, job_mail]
 
 
 def job_model(now, cfg):
-    """Ollama wasn't up when Rosie started, so she stayed on the default model while her helpers asked for the owner's pick: two models
-    swapping on the GPU until a restart (audit pass 2). Try the saved pick again, once a minute, until it loads."""
+    # board #711 fix-model-retry-minute
     import models
     if models.last_problem.startswith("Couldn't reach Ollama") and time.time() - _model_retry["t"] >= 60:
         _model_retry["t"] = time.time()
@@ -311,16 +297,14 @@ _model_retry = {"t": 0.0}
 
 
 def job_model_scout(now, cfg):
-    """New abliterated models: research twice a day, test the best one at night, flag a better one in the Inbox (model_scout.py)."""
     import model_scout
     model_scout.job(now, cfg)
 
 
-JOBS.insert(JOBS.index(job_mail), job_model_scout)   # mail stays last: it can take a while
+JOBS.insert(JOBS.index(job_mail), job_model_scout)
 
 
 def job_security_watch(now, cfg):
-    """A nightly check for known and exploited security holes; safe fixes installed, the rest flagged (security_watch.py)."""
     import security_watch
     security_watch.job(now, cfg)
 
@@ -329,14 +313,13 @@ JOBS.insert(JOBS.index(job_mail), job_security_watch)
 
 
 def job_tokens(now, cfg):
-    """Hourly: refresh the Claude token report (capped, in its own thread) and, once a day while a flag is active, tell the Inbox (tokens.py).
-    Owner 2026-10-25: "build a token report into rosie and have you look at it every so often to make sure we are doing good on tokens"."""
+    # board #711 owner-token-report
     import tokens
     tokens.job(now, cfg, add=inbox.add)
 
 
 JOBS.insert(JOBS.index(job_mail), job_tokens)
-JOBS.insert(0, job_model)                      # first: every other job's model calls want the owner's pick
+JOBS.insert(0, job_model)
 
 
 def tick(now=None):
@@ -355,7 +338,7 @@ def tick(now=None):
     finally:
         state["tick_started"] = None
     try:
-        job_corner(now, cfg)                          # after the other jobs: they come first
+        job_corner(now, cfg)
     except Exception as e:
         state["last_error"] = f"job_corner: {type(e).__name__}: {e}"
         briefs.log(f"automation {state['last_error']}")
@@ -383,4 +366,4 @@ def start():
     import corner_graph
     corner_graph.start()
     import mind
-    mind.start()                                             # her mind: reads chats into facts and beliefs when the GPU is free                                     # her corner memory graph: adds episodes in the background when the GPU is free
+    mind.start()

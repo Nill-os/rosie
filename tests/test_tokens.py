@@ -1,5 +1,4 @@
-"""The Claude token report (app/tokens.py): fake logs in a fake home, never the real ones.
-Owner 2026-10-25: "build a token report into rosie and have you look at it every so often to make sure we are doing good on tokens"."""
+# board #904 owner-token-report
 import datetime as dt
 import hashlib
 import hmac
@@ -51,8 +50,8 @@ def test_a_response_on_several_lines_counts_once(home):
     write(home / "projects/-proj-a/s1.jsonl", line("r1"), line("r1"), line("r1"), line("r2", out=40))
     st = tokens.refresh()
     cell = st["days"][today()]["opus"]["main"]
-    assert cell[0] == 140 and cell[4] == 2                       # output 100 + 40, two responses
-    assert "SECRET WORDS" not in tokens.STATE.read_text()           # numbers and ids only
+    assert cell[0] == 140 and cell[4] == 2
+    assert "SECRET WORDS" not in tokens.STATE.read_text()  # board #904 safety-numbers-ids-only
 
 
 def test_the_message_id_is_used_when_there_is_no_request_id(home):
@@ -74,10 +73,10 @@ def test_a_refresh_reads_only_new_bytes(home):
     f = write(home / "projects/-proj-a/s1.jsonl", line("r1", out=100))
     tokens.refresh()
     assert tokens._load()["files"][str(f)]["off"] == f.stat().st_size
-    write(f, line("r1", out=100), line("r2", out=50))              # a repeated id at the join is not counted again
+    write(f, line("r1", out=100), line("r2", out=50))
     st = tokens.refresh()
     assert st["days"][today()]["opus"]["main"][0] == 150 and st["days"][today()]["opus"]["main"][4] == 2
-    assert tokens.refresh()["days"][today()]["opus"]["main"][4] == 2   # nothing new: nothing changes
+    assert tokens.refresh()["days"][today()]["opus"]["main"][4] == 2
 
 
 def test_a_half_written_line_waits_for_the_next_refresh(home):
@@ -99,7 +98,7 @@ def test_the_byte_cap_continues_next_time(home):
 
 @pytest.mark.skipif(not hasattr(time, "tzset"), reason="time.tzset is Unix-only")
 def test_days_are_local_days(home, monkeypatch):
-    monkeypatch.setenv("TZ", "Pacific/Kiritimati")                 # UTC+14: 12:00 UTC is already the next day there
+    monkeypatch.setenv("TZ", "Pacific/Kiritimati")  # board #904 quirk-utc-plus-fourteen
     time.tzset()
     try:
         write(home / "projects/-proj-a/s1.jsonl", line("r1", ts="2026-03-10T12:00:00Z"), line("r2", ts="2026-03-10T09:00:00Z"))
@@ -111,7 +110,7 @@ def test_days_are_local_days(home, monkeypatch):
 
 
 def test_the_ledger_is_counted_per_day_and_optional(home):
-    assert tokens.refresh()["ledger"]["days"] == {}                 # no ledger: fine
+    assert tokens.refresh()["ledger"]["days"] == {}
     led = home / "skills/token-saver/ledger.jsonl"
     write(led, json.dumps({"ts": today() + "T09:00:00", "cmd": "sum", "tokens_offloaded": 1000, "tokens_returned": 100}) + "\n", "not json\n")
     st = tokens.refresh()
@@ -124,16 +123,16 @@ def test_flags_follow_the_goals():
     g = dict(tokens.GOALS)
     base = {"out": 0, "in": 0, "cache_read": 0, "cache_write": 0, "main_share": 0, "cache_ratio": 99}
     day = lambda out: {"out": out}
-    assert tokens.flags(dict(base, out=1000), dict(base, out=1_000_000, main_share=50), [day(1000)] * 7, g) == []     # at the goal: fine
+    assert tokens.flags(dict(base, out=1000), dict(base, out=1_000_000, main_share=50), [day(1000)] * 7, g) == []
     f = tokens.flags(dict(base), dict(base, out=1_000_000, main_share=72), [], g)
     assert [x["id"] for x in f] == ["main_share"] and "72%" in f[0]["text"] and "Sonnet" in f[0]["text"]
-    assert tokens.flags(dict(base), dict(base, out=1000, main_share=99), [], g) == []                               # too little data to judge
+    assert tokens.flags(dict(base), dict(base, out=1000, main_share=99), [], g) == []
     f = tokens.flags(dict(base, out=300_000), dict(base, out=1_000_000, main_share=10), [day(100_000)] * 7, g)
     assert [x["id"] for x in f] == ["spike"]
     assert tokens.flags(dict(base, out=190_000), dict(base, out=1_000_000, main_share=10), [day(100_000)] * 7, g) == []
     f = tokens.flags(dict(base), dict(base, out=1000, **{"in": 900_000, "cache_read": 500_000, "cache_ratio": 35}), [], g)
     assert [x["id"] for x in f] == ["cache"]
-    g["token_goal_main_share"] = 80                                  # the goal is a setting
+    g["token_goal_main_share"] = 80
     assert tokens.flags(dict(base), dict(base, out=1_000_000, main_share=72), [], g) == []
 
 
@@ -145,7 +144,7 @@ def test_the_goals_come_from_the_config(home, monkeypatch):
 
 
 def test_hook_line_format_and_speed(home):
-    assert tokens.hook_line() is None                                # no cache yet: nothing, and no scan
+    assert tokens.hook_line() is None
     write(home / "projects/-proj-a/s1.jsonl", line("r1", out=120_000), line("r2", "claude-sonnet-5-5", out=80_000, side=True))
     tokens.refresh()
     t0 = time.time()
@@ -178,9 +177,9 @@ def test_the_job_refreshes_hourly_and_puts_one_inbox_item_a_day(home):
     now = dt.datetime.now().replace(microsecond=0)
     tokens.job(now, {}, add=add, background=False)
     assert len(got) == 1 and got[0][1]["key"] == f"tokens:{now:%Y-%m-%d}" and got[0][0][3] == "#/tokens" and got[0][1]["desktop"] is False
-    tokens.job(now + dt.timedelta(minutes=30), {}, add=add, background=False)       # too soon
+    tokens.job(now + dt.timedelta(minutes=30), {}, add=add, background=False)
     assert len(got) == 1
-    tokens.job(now + dt.timedelta(minutes=61), {}, add=add, background=False)       # same day: add() is called, the Inbox's key dedupes it
+    tokens.job(now + dt.timedelta(minutes=61), {}, add=add, background=False)  # board #904 why-inbox-dedupes-key
     assert all(g[1]["key"] == got[0][1]["key"] for g in got)
     tokens._JOB.clear()
     before = len(got)

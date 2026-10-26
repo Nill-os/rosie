@@ -1,11 +1,4 @@
-"""The Morning Paper's cartoon row (owner 2026-10-13 ~23:30, 2026-10-14: "replace the crossword with a cartoon"; "fill the page from
-left to right"): REAL published strips, xkcd by Randall Munroe, through its official JSON API (https://xkcd.com/info.0.json and
-/<n>/info.0.json). xkcd is licensed CC BY-NC 2.5: personal, non-commercial printing with credit is allowed.
-
-Rows across the full text width, legibility first (plan_rows): a wide strip alone, or two single-panel strips side by side at one
-height; never 3 in a row; lettering at least 2 mm tall. The newest strips first, never one printed in the last 60 days (so never the
-same strip two days running). The 2x (high-resolution) image when xkcd has one. Each keeps its own title, alt text and credit;
-printed in grayscale with a little more contrast."""
+# board #754 owner-cartoon-replaces-crossword
 import random
 import struct
 
@@ -14,13 +7,12 @@ import httpx
 LATEST = "https://xkcd.com/info.0.json"
 ONE = "https://xkcd.com/{n}/info.0.json"
 UA = "Mozilla/5.0 (X11; Linux x86_64) personal-assistant (Rosie morning paper)"
-SKIP = {404, 1037, 1190, 1335, 1350, 1416, 1525, 1608, 1663, 2198, 2288, 2445, 2601}   # missing, animated or interactive strips
+SKIP = {404, 1037, 1190, 1335, 1350, 1416, 1525, 1608, 1663, 2198, 2288, 2445, 2601}  # board #754 quirk-skip-animated-strips
 IMG_BYTES = 1_500_000
 CREDIT = "xkcd by Randall Munroe (xkcd.com), CC BY-NC 2.5"
 
 
 def image_size(b: bytes) -> tuple[int, int] | None:
-    """(width, height) of a PNG / GIF / JPEG from its own header, or None."""
     if b[:8] == b"\x89PNG\r\n\x1a\n" and len(b) >= 24:
         return struct.unpack(">II", b[16:24])
     if b[:6] in (b"GIF87a", b"GIF89a"):
@@ -40,33 +32,28 @@ def image_size(b: bytes) -> tuple[int, int] | None:
 
 
 def readable(size) -> bool:
-    """Prints legibly across the page: not a huge poster, not a thin sliver."""
     if not size:
         return False
     w, h = size
     return 300 <= w <= 1100 and 120 <= h <= 1000 and h / w <= 1.4
 
 
-TEXT_W, GAP = 7.2, 0.12      # inches: the print text width (8.5 in minus the margins), the gap between two strips side by side
-MAX_TOTAL = 4.6              # inches of strips at most on A4 (about half its text height; the news below makes room)
-SHORT = 2.0                  # a cartoon area shorter than this gets a second row when one fits
-LETTER_PX = 13               # xkcd's hand lettering is about 12-14 px tall in its normal (1x) image
-MIN_LETTER_MM = 2.0          # printed lettering at least 2 mm tall (about 8-9 pt type): readable
-MAX_PPI = LETTER_PX / (MIN_LETTER_MM / 25.4)   # so at most ~165 of the 1x image's pixels per printed inch
-NARROW = 1.35                # width / height at or under this: a single panel, which may pair with one more; never 3 in a row
+TEXT_W, GAP = 7.2, 0.12
+MAX_TOTAL = 4.6
+SHORT = 2.0
+LETTER_PX = 13  # board #754 why-lettering-legible-size
+MIN_LETTER_MM = 2.0
+MAX_PPI = LETTER_PX / (MIN_LETTER_MM / 25.4)
+NARROW = 1.35
 MAX_STRIPS = 4
 
 
 def letter_mm(size, width_in: float) -> float:
-    """How tall xkcd's lettering prints (mm) when a strip whose 1x image is `size` is printed `width_in` wide."""
     return LETTER_PX * width_in / size[0] * 25.4
 
 
 def plan_rows(sizes, width=TEXT_W, gap=GAP, budget=MAX_TOTAL) -> dict:
-    """The cartoon area (owner 2026-10-14: "also the cartoons are hard to read"): rows across the full text width, legibility first.
-    A wide strip runs alone at the full width; two narrow (single-panel) strips may share a row at one height; never 3 in a row. A row is
-    used only when every strip in it prints its lettering at least MIN_LETTER_MM tall and the strips stay within `budget` inches; a
-    second row only when the first is short. {rows: [{idx, height, widths}], height (inches of strips), order (strip indexes used)}."""
+    # board #754 owner-legibility-first
     sizes = [tuple(x) if x and x[0] > 0 and x[1] > 0 else None for x in sizes]
     rows, used, total = [], set(), 0.0
 
@@ -98,18 +85,15 @@ def plan_rows(sizes, width=TEXT_W, gap=GAP, budget=MAX_TOTAL) -> dict:
 
 
 def complete(plan: dict) -> bool:
-    """Enough strips: a full-width row, and either tall enough or two rows."""
     return bool(plan["rows"]) and (plan["height"] >= SHORT or len(plan["rows"]) >= 2)
 
 
 def hires(url: str) -> str:
-    """xkcd's high-resolution copy of a strip image: the same name with _2x (e.g. juice_2x.png), when it has one."""
     import re
     return re.sub(r"(\.\w+)$", r"_2x\1", url)
 
 
 def usable(size) -> bool:
-    """A strip that can share a row: not a sliver, not a poster."""
     if not size:
         return False
     w, h = size
@@ -117,8 +101,6 @@ def usable(size) -> bool:
 
 
 def pick_row(day: str, recent: set, client=None, tries=10) -> list[dict]:
-    """The day's strips for the cartoon row (newest first, never one in `recent`), as many as plan_rows needs (readable rows, full width).
-    [] when xkcd can't be read (no cartoon today; never a made-up one)."""
     http = client or httpx
     get = lambda u: http.get(u, headers={"User-Agent": UA}, timeout=20, follow_redirects=True)
     try:
@@ -137,14 +119,14 @@ def pick_row(day: str, recent: set, client=None, tries=10) -> list[dict]:
             j = latest if n == top else get(ONE.format(n=n)).json()
             if not j.get("img") or not str(j["img"]).startswith("https://imgs.xkcd.com/") or j.get("link"):
                 continue
-            r = get(hires(j["img"]))                        # the 2x image (print resolution), else the normal one
+            r = get(hires(j["img"]))
             scale = 2
             if r.status_code != 200 or not image_size(r.content):
                 r, scale = get(j["img"]), 1
             size = image_size(r.content) if r.status_code == 200 else None
             if r.status_code != 200 or len(r.content) > IMG_BYTES * scale * scale or not size:
                 continue
-            size = (size[0] // scale, size[1] // scale)     # planned by its normal (1x) size: xkcd's lettering is ~13 px there
+            size = (size[0] // scale, size[1] // scale)
             if not usable(size):
                 continue
         except Exception:
@@ -153,11 +135,10 @@ def pick_row(day: str, recent: set, client=None, tries=10) -> list[dict]:
         out.append({"num": n, "title": str(j.get("safe_title") or j.get("title") or "")[:120], "alt": str(j.get("alt") or "")[:400],
                     "link": f"https://xkcd.com/{n}/", "image": r.content, "ext": ext, "size": list(size), "scale": scale, "credit": CREDIT})
     plan = plan_rows([s["size"] for s in out])
-    return [out[i] for i in plan["order"]]              # only the strips that print readably, in their rows' order
+    return [out[i] for i in plan["order"]]
 
 
 def pick(day: str, recent: set, client=None, tries=6) -> dict | None:
-    """{num, title, alt, link, image (bytes), ext, credit} or None (no cartoon today; never a made-up one)."""
     http = client or httpx
     get = lambda u: http.get(u, headers={"User-Agent": UA}, timeout=20, follow_redirects=True)
     try:

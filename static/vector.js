@@ -1,9 +1,7 @@
 'use strict';
-/* The Vector page (owner 2026-10-21: "make my own local AI on it without using the clunky program, i want it to be rosie"): Rosie's own
-   Vector server (vector_pod.py) on or off, pointing the robot at her, his personality, his voice commands, what his face shows while he
-   sits, and what he heard last. Everything from the server is put on the page as text (h() children), never as HTML. */
+// board #828 owner-own-local-ai-vector
 let vecTimer = null;
-const vecDraft = { personality: null, say: '', ip: '' };          // half-typed text survives the redraw every few seconds
+const vecDraft = { personality: null, say: '', ip: '' };  // board #828 why-keep-half-typed-text
 const VEC_PANELS = [['clock', 'Clock'], ['system', 'PC load (CPU, RAM, GPU)'], ['next_event', 'Next calendar event'], ['battery', "Vector's battery"]];
 
 VIEWS.vector = async () => {
@@ -18,7 +16,7 @@ VIEWS.vector = async () => {
   const typing = () => { const el = document.activeElement; return !!(el && el.closest && el.closest('.vec-keep')); };
   const draw = async () => {
     if (!here()) { clearInterval(vecTimer); return; }
-    if (typing()) return;                                           // never redraw under a half-written box
+    if (typing()) return;  // board #828 why-skip-redraw-while-typing
     let d;
     try { d = await J('/api/vector'); } catch (e) { show(h('div', { class: 'err' }, e.message)); return; }
     const bot = d.robots[0];

@@ -1,13 +1,3 @@
-"""The Morning Paper's look ("The Rosie Times"; owner's reference video 2026-10-13, revised ~23:30). One set of blocks, three outputs:
-- print: 4 (or 2) Letter pages with a staple gutter on the left, a flag with ears on A1, section fronts inside, 3 columns per page.
-  A small layout engine (LAYOUT_JS, run by headless Chrome before printing) pours each page's blocks into its columns, splits stories
-  at the line, carries the rest to the next page with jump lines ("Continued on A2" / "Continued from A1"), fills what is left with
-  "More news" briefs (on a quiet day: more of the articles' own text) and measures every column's fill. The PDF is printed from the
-  laid-out page with no script left in it (paper.make_print_pdf).
-- web: the #/paper frame, the same blocks in CSS columns (responsive, newsprint / dark / plain), no script at all.
-- email: one plain column.
-Every piece of text from a feed, an article, an email or the calendar is escaped here. Nothing is written by this file except
-labels (kickers, "Continued on A3", credits)."""
 import contextvars
 import datetime as dt
 import html
@@ -23,9 +13,6 @@ SECTION_TITLES = {"week": "The Week Ahead", "national": "The Briefing", "local":
                   "recommends": "Rosie's Picks"}
 SECTION_KICKERS = {"week": "Around you, the next 7 days", "national": "National & world", "local": "Local news", "radio": "RF, SDR, mesh and making",
                    "hacking": "Security, Hacker News, new tech", "recommends": "Stories that match your interests"}
-# ---------------------------------------------------------------- test data can never pass as real
-# data["fake"] lists the stand-in sources a test or sample installed (paper.FAKE_SOURCES). Every section built from one of them gets
-# a "TEST DATA — NOT REAL" stamp in its head, the page gets a band under the flag and a diagonal outlined watermark.
 NEWS_SRC = {"feeds", "articles", "reddit", "hn", "model"}
 SOURCES = {"banner": {"calendar", "tasks", "gmail"}, "Today": {"calendar", "tasks", "gmail"}, "This week": {"calendar"},
            "Arriving": {"gmail"}, "Due": {"tasks"}, "Needs a look": {"gmail", "proposals"}, "Weather": {"weather"},
@@ -45,9 +32,8 @@ def stamp(key) -> str:
 
 
 SHORT = {"national": "Nation & world", "local": "Local", "radio": "Radio & maker", "hacking": "Tech"}
-# print geometry (inches): the staple gutter on the left; the rest inside a typical inkjet's printable area (its PPD: 0.25 in at the sides,
-# 0.2 in top; HWMargins 0.5 in bottom), so nothing is clipped and print-scaling stays "none"
-MARGIN = {"left": 0.95, "right": 0.35, "top": 0.35, "bottom": 0.62}   # bottom: a typical 0.5 in hardware margin + a safety margin
+# board #759 quirk-printer-margins
+MARGIN = {"left": 0.95, "right": 0.35, "top": 0.35, "bottom": 0.62}
 
 
 def esc(x) -> str:
@@ -82,7 +68,6 @@ def _host(link) -> str:
 
 
 def _a(href, text, mode) -> str:
-    """Outside links open in a new tab; links into Rosie only work on the #/paper page (plain text on paper and in email)."""
     if not href:
         return text
     if href.startswith("#/"):
@@ -115,7 +100,6 @@ def _meta(it) -> str:
     return " · ".join(bits)
 
 
-# ---------------------------------------------------------------- blocks (story / list / atom); units are what a column can split
 def sec_unit(sec) -> str:
     keys = {"recommends": "Rosie's picks", "week": "Things happening around you"}
     key = keys.get(sec, "news")
@@ -123,9 +107,6 @@ def sec_unit(sec) -> str:
 
 
 def story(it, data, mode, photo_dir, lead=False, sec_head="") -> str:
-    """A full story: kicker + headline + deck + credit line, photo, the article's own sentences, and the source line (credit only).
-    In print each sentence carries its rank (data-r: 0 = most important), so the page can make a shorter, complete version when space
-    is short (dropping the least important sentences, never the lead), instead of cutting off the ending."""
     picked = it.get("writeup_by") == "selected"
     host = _host(it["link"])
     deck = paper.fallback_summary(it.get("text") or "", 200) if it.get("text") else ""
@@ -145,7 +126,7 @@ def story(it, data, mode, photo_dir, lead=False, sec_head="") -> str:
     else:
         body = "".join(f'<p class="u u-p">{esc(t)}</p>' for t in paras)
     more = ""
-    if mode == "print" and it.get("more"):                       # used only on a quiet day: the article goes on, word for word
+    if mode == "print" and it.get("more"):
         more = ('<p class="u u-more lbl">The article goes on:</p>' if picked else "") + "".join(
             '<p class="u u-p u-more">' + " ".join(f'<span class="s" data-r="{1000 + 50 * n + j}">{esc(x)}</span>' for j, x in enumerate(_sents(t))) + "</p>"
             for n, t in enumerate(it["more"]))
@@ -177,7 +158,6 @@ def atom(inner, cls="") -> str:
     return f'<div class="b atom {cls}">{inner}</div>'
 
 
-# ---------------------------------------------------------------- the front page
 def flag(data, mode) -> str:
     fr = data.get("front") or {}
     w = fr.get("weather") or {}
@@ -187,7 +167,7 @@ def flag(data, mode) -> str:
         ear_l = f'<b>{round(d0["high_f"])}° / {round(d0["low_f"])}°</b><br>{esc(d0["summary"].capitalize())}<br><i>Weather, this page</i>{stamp("Weather")}'
     pg = "A2" if data.get("pages") == 2 else "A4"
     ear_r = f'<b>Inside</b><br>Cartoon, cipher, Sudoku,<br>Words to learn, {pg}'
-    mono = data.get("masthead", "mono") != "blackletter"              # "> THE ROSIE TIMES" in mono, or the blackletter
+    mono = data.get("masthead", "mono") != "blackletter"
     where = (data.get("place") or "").strip().upper()
     return (f'<header class="flag"><div class="ear">{ear_l}</div><h1 class="title{" mono" if mono else ""}">{esc(_title(data))}</h1><div class="ear r">{ear_r}</div></header>'
             f'<div class="dateline"><span>No. {int(data.get("edition") or 1)}</span><span>{esc(long_date(data))}</span>'
@@ -211,7 +191,7 @@ def banner(data) -> str:
         return ""
     wx = weather_atom(fr)
     q = fr.get("quote")
-    if q:                                      # owner 2026-10-14: a quote from a scientist or mathematician instead of the big headline
+    if q:  # board #759 owner-lead-quote
         size = "q-l" if len(q["quote"]) <= 90 else ("q-m" if len(q["quote"]) <= 140 else "q-s")
         top = (f'<blockquote class="quote {size}"><p class="qt">“{esc(q["quote"])}”</p><p class="qby">— {esc(q["person"])}, {esc(q["role"])}</p>'
                f'<p class="qsrc">{esc(q["citation"])} · via Wikiquote (CC BY-SA)</p></blockquote>')
@@ -222,7 +202,6 @@ def banner(data) -> str:
 
 
 def dayblock(data, mode) -> str:
-    """YOUR DAY, the biggest block above the fold: today's agenda, arriving, due, needs a look and this week, balanced in 3 columns."""
     fr = data.get("front") or {}
     if not fr:
         return f'<div class="dayblock">{arriving_list(data)}</div>' if arriving_list(data) else ""
@@ -232,22 +211,19 @@ def dayblock(data, mode) -> str:
 
 
 def events_band(data, mode) -> str:
-    """THINGS HAPPENING AROUND YOU on page one, right after your day: boxed, today and tomorrow, and where the whole week is."""
     ev = (data.get("events") or {}).get("items") or []
     if not ev:
-        return ""                                                 # nothing real: no section (never a made-up event)
+        return ""
     today = _day(data)
     soon = [e for e in ev if e["day"] in (today.isoformat(), (today + dt.timedelta(days=1)).isoformat())][:9]
     rows = _event_rows(data, mode, soon) or ['<p class="u u-li ev">Nothing listed yet for today or tomorrow.</p>']
-    more = ("" if mode == "print" and data.get("pages") == 2 else      # (2 pages: no room for the week; today and tomorrow only)
-            f'<span class="evmore">The full week: {"A2" if mode == "print" else "below, under The week ahead"}</span>')   # in the head: no extra line
+    more = ("" if mode == "print" and data.get("pages") == 2 else
+            f'<span class="evmore">The full week: {"A2" if mode == "print" else "below, under The week ahead"}</span>')
     return (f'<section class="evband"><h4 class="boxhead">{more}Things happening around you{stamp("Things happening around you")}</h4>'
             f'<div class="evcols">{"".join(rows)}</div></section>')
 
 
 def week_ahead(data, mode) -> str:
-    """THE WEEK AHEAD AROUND YOU: all 7 days (today, tomorrow, then the weekday and date), each event with its time, place, one line
-    and source. A day with nothing real says so."""
     evs = data.get("events") or {}
     items = evs.get("items") or []
     if not items and not evs.get("days"):
@@ -321,7 +297,7 @@ def weather_atom(fr) -> str:
         return f'{d["rain_chance_pct"]}%' if d.get("rain_chance_pct") is not None else "–"
     rows = "".join(f'<tr><td>{"Today" if i == 0 else f"{dt.date.fromisoformat(d['date']):%a}"}</td><td>{esc(d["summary"])}</td>'
                    f'<td class="r">{round(d["high_f"])}/{round(d["low_f"])}</td><td class="r">{rain(d)}</td></tr>'
-                   for i, d in enumerate(w["days"][:7]))           # the whole week, as many days as the forecast gives (never made up)
+                   for i, d in enumerate(w["days"][:7]))
     return atom(f'<h4 class="boxhead">Weather{stamp("Weather")}</h4><div class="big">{round(d0["high_f"])}° / {round(d0["low_f"])}°<span>HIGH / LOW</span></div>'
                 f'<p class="wl">{esc(line)}</p><table class="wt"><tr class="wh"><th></th><th></th><th class="r">Hi/Lo</th><th class="r">Rain</th></tr>{rows}</table>'
                 f'<div class="src">open-meteo.com · {len(w["days"][:7])}-day forecast</div>', "wx box")
@@ -330,7 +306,7 @@ def weather_atom(fr) -> str:
 def events_list(data, mode) -> str:
     ev = (data.get("events") or {}).get("items") or []
     if not ev:
-        return ""                                                 # nothing real: no section (never a made-up event)
+        return ""
     return lst("Things happening around you", _event_rows(data, mode, ev), "events box")
 
 
@@ -358,7 +334,6 @@ def inside_atom(data) -> str:
     return atom('<h4 class="boxhead">Inside</h4>' + "".join(f'<div class="ix"><span>{esc(a)}</span><b>{b}</b></div>' for a, b in rows), "inside box")
 
 
-# ---------------------------------------------------------------- the inside pages
 def section_blocks(data, sec, mode, photo_dir, skip=()) -> list[str]:
     b = (data.get("news") or {}).get(sec)
     if not b:
@@ -378,7 +353,6 @@ def section_blocks(data, sec, mode, photo_dir, skip=()) -> list[str]:
 
 
 def recommends_list(data, mode, photo_dir=None) -> str:
-    """ROSIE'S PICKS: the articles worth reading that aren't printed in full, and the "You could also follow" ideas (on the page)."""
     r = data.get("recommends")
     if not r:
         return ""
@@ -401,17 +375,15 @@ def words_list(data) -> str:
 
 
 def yesterday_list(data) -> str:
-    """Yesterday's words, a recap. It follows the cipher on the back page, so it can fill the rest of that column."""
     y = (data.get("fun") or {}).get("yesterday") or []
     return lst("Yesterday's words", [f'<p class="u u-li wd"><b>{esc(w["answer"].lower())}</b>' + (f' ({esc(w["say"])})' if w.get("say") else "")
                                      + f': {esc(w["clue"])}</p>' for w in y], "words") if y else ""
 
 
-CIPHER_W = 29          # how many mono characters fit across a back-page column (the cipher's lines are broken here, by code)
+CIPHER_W = 29
 
 
 def _cipher_cells(c: dict) -> list[tuple[str, float]]:
-    """Each word of the message as (html, width in characters): a symbol over a blank to write in, per letter."""
     import paper_cipher
     kind, filled = c["kind"], {int(k): {int(i): v for i, v in d.items()} for k, d in (c.get("filled") or {}).items()}
     words = c["words"] if kind != "rail" else [list(w) for w in c["pattern"].split(" ")]
@@ -432,7 +404,7 @@ def _cipher_cells(c: dict) -> list[tuple[str, float]]:
             cells.append(f'<span class="cc{"" if letter else " pn"}"><b>{top or "&nbsp;"}</b><i>{low or "&nbsp;"}</i></span>')
             widths.append((2.0 if kind == "pigpen" else 1.05 * len(sym) + 0.8 if kind == "morse" else max(1, len(sym) + (kind == "a1z26"))) + 0.7)
         sep = '<span class="cc pn ws"><b>/</b><i>&nbsp;</i></span>' if kind in ("morse", "a1z26") and wi < len(words) - 1 else ""
-        pieces, cur, cw = [], [], 0.0                  # a word too long for one line goes on over two (Morse "GOVERNMENT")
+        pieces, cur, cw = [], [], 0.0
         for cell, wd in zip(cells, widths):
             if cur and sum(widths) > CIPHER_W and cw + wd > CIPHER_W - 3:
                 pieces.append((cur, cw))
@@ -445,8 +417,6 @@ def _cipher_cells(c: dict) -> list[tuple[str, float]]:
 
 
 def cipher_block(data) -> str:
-    """The cipher of the day (paper_cipher): a real A1 headline, hidden a different way each weekday; its answer is upside down at the
-    foot of the page with the story it came from. One block, like the Sudoku: placed whole in one column or moved whole."""
     c = (data.get("fun") or {}).get("cipher")
     if not c:
         return ""
@@ -473,7 +443,7 @@ def cipher_block(data) -> str:
         lines.append(line)
     rows += [f'<div class="u-li cl k-{c["kind"]}">{"".join(x)}</div>' for x in lines]
     head = f'Cipher · {esc(c["name"])}'
-    return atom(f'<h4 class="boxhead">{head}{stamp("Cipher")}</h4>{"".join(rows)}', "cipher puz")   # one piece, never split
+    return atom(f'<h4 class="boxhead">{head}{stamp("Cipher")}</h4>{"".join(rows)}', "cipher puz")
 
 
 def sudoku_atom(data) -> str:
@@ -487,8 +457,6 @@ def sudoku_atom(data) -> str:
 
 
 def cartoon_html(data, mode, photo_dir, in_flow=False) -> str:
-    """The cartoons across the full text width, readable (paper_cartoon.plan_rows): a wide strip alone, or two single-panel strips at one
-    height; a second row only when the first is short. Each strip with its own title, alt text and credit beneath it."""
     import paper_cartoon
     c = data.get("cartoon")
     if not c:
@@ -520,14 +488,14 @@ def cartoon_html(data, mode, photo_dir, in_flow=False) -> str:
     return atom(inner, "toon") if in_flow else f'<div class="span toonspan">{inner}</div>'
 
 
-ANS_CHARS = 100          # characters per answer line: 100 mono characters at 7.2 pt are 6 in, well inside the 7.2 in text width
+ANS_CHARS = 100
 ANS_LINES = 4
 
 
 def _wrap(text: str, n: int) -> list[str]:
     out, cur = [], ""
     for w in text.split(" "):
-        while len(w) > n:                                  # one very long "word": split it
+        while len(w) > n:
             if cur:
                 out.append(cur)
                 cur = ""
@@ -544,8 +512,6 @@ def _wrap(text: str, n: int) -> list[str]:
 
 
 def answer_lines(data) -> list[tuple[str, str]]:
-    """The answer block's lines as (part, text): the cipher's answer and source, then the Sudoku's rows. When it would take more than
-    ANS_LINES lines, the Sudoku's rows are written closer together first (rows split by "/" with no spaces)."""
     k = (data.get("fun") or {}).get("key") or {}
     sdk = k.get("sudoku") or ""
     for compact in (False, True):
@@ -560,26 +526,21 @@ def answer_lines(data) -> list[tuple[str, str]]:
 
 
 def answers_html(data) -> str:
-    """Upside down at the foot of the back page, under the footer rule, inside the printable area: one line per element, never wider
-    than ANS_CHARS characters, so the printer can't cut it off (the cipher's lines go if the cipher itself had no room)."""
     lines = answer_lines(data)
     if not lines:
         return ""
     return '<div class="answers"><div class="ansin">' + "".join(f'<div class="al ans-{x}">{esc(t)}</div>' for x, t in lines) + "</div></div>"
 
 
-# ---------------------------------------------------------------- page plan
 def plan(data, mode, photo_dir=None) -> list[dict]:
-    """[{name, top: html above the columns, flows: {flow: [block html]}, cols: [flow per column], jumpflow, section}]"""
     fr = data.get("front") or {}
     news = data.get("news") or {}
-    lead, second, third = paper.front_three(news)          # the cipher's line comes from these headlines (paper.cipher)
+    lead, second, third = paper.front_three(news)
     skip = {(i.get("section"), i.get("pos")) for i in (lead, second, third) if i}
     rail_briefs = sorted((i for sec in ("national", "local") for i in (news.get(sec) or {}).get("items", []) if not i.get("main")), key=paper.rank)[:4]
     for i in rail_briefs:
         i["rail"] = True
-    # A1 (owner 2026-10-14): YOUR DAY first (headline + weather beside it, then the agenda, arriving, due, needs a look), then THINGS
-    # HAPPENING AROUND YOU, then the news (the lead story, the next stories, the Inside index and the briefs)
+    # board #759 owner-front-page-order
     a1 = {"name": "A1", "top": flag(data, mode) + banner(data) + dayblock(data, mode) + events_band(data, mode), "cols": ["lead", "day", "rail"],
           "jumpflow": None, "section": "",
           "flows": {"lead": ([story(lead, data, mode, photo_dir, lead=True)] if lead else []),
@@ -598,13 +559,13 @@ def plan(data, mode, photo_dir=None) -> list[dict]:
         for i in saved:
             i.pop("rail", None)
         return out
-    briefing = [week_ahead(data, mode)] + sb("national") + sb("local")         # the week ahead first, then the news
+    briefing = [week_ahead(data, mode)] + sb("national") + sb("local")
     tech = sb("radio") + sb("hacking")
     a3 = ("Tech", "Radio & maker · Hacking & new tech")
-    back = [recommends_list(data, mode, photo_dir), words_list(data), cipher_block(data), yesterday_list(data), sudoku_atom(data)]     # the Sudoku last (the engine pins it to the foot of the page)
-    if data.get("pages") == 2:                     # one packed page: the news, then the back page (a cipher that won't fit whole is left out)
+    back = [recommends_list(data, mode, photo_dir), words_list(data), cipher_block(data), yesterday_list(data), sudoku_atom(data)]
+    if data.get("pages") == 2:
         return [a1, {"name": "A2", "top": cartoon_html(data, mode, photo_dir), "cols": ["main"] * 3, "jumpflow": "main",
-                     "section": "The Briefing · Tech · Back page", "flows": {"main": briefing[1:] + tech + back}}]   # no room for the week here
+                     "section": "The Briefing · Tech · Back page", "flows": {"main": briefing[1:] + tech + back}}]
     return [a1,
             {"name": "A2", "top": secflag("The Briefing", ("The week ahead around you · " if (data.get("events") or {}).get("items") else "")
                                           + "National & world · The Town"), "cols": ["main"] * 3,
@@ -615,7 +576,6 @@ def plan(data, mode, photo_dir=None) -> list[dict]:
              "flows": {"main": back}}]
 
 
-# ---------------------------------------------------------------- the layout engine (print only; run by headless Chrome)
 LAYOUT_JS = r"""<script>(function(){
 'use strict';
 var MIN_WORDS=5, FEATHER=0.10;
@@ -972,12 +932,7 @@ if(document.readyState==='complete')go();else window.addEventListener('load',go)
 })();</script>"""
 
 
-# ---------------------------------------------------------------- CSS
-# The owner's app theme ("Cyberdeck hub", ~/assistant/static/app.css), in BLACK AND WHITE ONLY (owner 2026-10-14 ~01:05: "dont add
-# color"): it shows through type and structure: the monospace stack for heads, labels and kickers, uppercase letter-spaced section
-# heads, the "> " prompt, hairline and heavy rules, boxes. Body text stays the readable serif at the same sizes (the layout and the
-# no-empty-space fill are unchanged). Light = white page, black ink (print default); dark = black page, light-gray ink (the web
-# default, and the "Print in full dark theme" option). Small text is never lighter than #444 on white or #bdbdbd on black (>= 7:1).
+# board #759 owner-black-and-white
 MONO = 'ui-monospace,"JetBrains Mono","DejaVu Sans Mono",Menlo,Consolas,monospace'
 LIGHT = "--paper:#fff;--ink:#111;--mute:#444;--soft:#bbb;--rule:#111;--wm:rgba(0,0,0,.33)"
 DARK = "--paper:#000;--ink:#ececec;--mute:#bdbdbd;--soft:#555;--rule:#d9d9d9;--wm:rgba(255,255,255,.3)"
@@ -1080,9 +1035,7 @@ body{font-size:16px;padding:10px}
     return base + "body{font-size:15px;max-width:680px;margin:0 auto;padding:12px}.title{font-size:40px}.title.mono{font-size:28px}.flag{grid-template-columns:1fr}.bgrid{display:block}.ear{display:none}.pg{margin-bottom:22px}.cols{display:block}.dayblock,.evband .evcols{column-count:1}"
 
 
-# ---------------------------------------------------------------- whole documents
 def render(data: dict, mode="web", photo_dir=None, look="cyberdeck") -> str:
-    """The whole paper as one HTML document. mode: print (Letter pages + the layout engine) | web (the #/paper frame) | email."""
     token = _fake.set(frozenset("unknown" if f == "unknown test data" else f for f in (data.get("fake") or [])))
     try:
         return _render(data, mode, photo_dir, look)
@@ -1126,7 +1079,6 @@ def _render(data: dict, mode, photo_dir, look) -> str:
 
 
 def laid_out(dom: str) -> tuple[str, dict]:
-    """The page as Chrome left it after the layout engine ran: (static HTML with the engine removed, its fill measurements)."""
     import re
     m = re.search(r'data-fill="([^"]*)"', dom)
     fill = json.loads(html.unescape(m.group(1))) if m else {}
@@ -1135,7 +1087,6 @@ def laid_out(dom: str) -> tuple[str, dict]:
 
 
 def render_text(data: dict) -> str:
-    """The plain-text copy (the email's text part)."""
     L = [f"{_title(data)} — {long_date(data)}", ""]
     if data.get("fake"):
         L += [f"*** {FAKE_TEXT}: made from stand-in data for testing ({', '.join(data['fake'])}). None of it is about you. ***", ""]

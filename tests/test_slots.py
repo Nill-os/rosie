@@ -46,15 +46,15 @@ def edit_b(w, text):
 def test_slot_b_is_a_clone_that_shares_the_state_not_a_copy_of_it(world):
     r = slots.ensure_b()
     assert (world["b"] / "app" / "server.py").exists()
-    assert (world["b"] / "data").is_symlink() and (world["b"] / "data" / "tasks.db").read_text(encoding="utf-8") == "precious"      # same data, not a copy
+    assert (world["b"] / "data").is_symlink() and (world["b"] / "data" / "tasks.db").read_text(encoding="utf-8") == "precious"
     assert (world["b"] / ".venv").is_symlink()
     sh("git", "add", "-A", cwd=world["b"])
     tracked = subprocess.run(["git", "ls-files"], cwd=world["b"], capture_output=True, text=True).stdout.split()
-    assert not any(t.startswith(("data", "secrets", "vault", ".venv")) for t in tracked)                       # the links are never committed
+    assert not any(t.startswith(("data", "secrets", "vault", ".venv")) for t in tracked)  # board #896 safety-links-never-committed
 
 
 def test_prepare_makes_b_an_exact_copy_and_snapshots_unsaved_live_changes(world):
-    (world["a"] / "app" / "server.py").write_text("print('live edit not committed')\n")                        # the live slot has unsaved changes
+    (world["a"] / "app" / "server.py").write_text("print('live edit not committed')\n")
     r = slots.prepare("add feature")
     assert r["slot"] == "B" and (world["b"] / "app" / "server.py").read_text(encoding="utf-8") == "print('live edit not committed')\n"
     assert r["branch"].startswith("rosie/add-feature") and slots.head("B") == slots.head("A")
@@ -81,7 +81,7 @@ def test_switch_is_refused_until_the_exact_code_passed_the_full_check(world):
     edit_b(world, "print('v2')\n")
     assert "not passed" in slots.switch()["error"] and slots.active() == "A"
     slots.commit("v2")
-    slots.save_state(last_stage={"ok": True, "head": "someoldcommit"})                                         # a pass for different code does not count
+    slots.save_state(last_stage={"ok": True, "head": "someoldcommit"})  # board #896 why-pass-needs-same-code
     assert "error" in slots.switch() and slots.active() == "A"
     slots.save_state(last_stage={"ok": True, "head": slots.head("B")})
     r = slots.switch()
@@ -93,7 +93,7 @@ def test_a_dirty_candidate_cannot_slip_through_after_its_check(world):
     edit_b(world, "print('v2')\n")
     slots.commit("v2")
     slots.save_state(last_stage={"ok": True, "head": slots.head("B")})
-    edit_b(world, "print('changed after the check')\n")                                                       # edited after passing: must be re-checked
+    edit_b(world, "print('changed after the check')\n")  # board #896 why-recheck-after-edit
     assert "error" in slots.switch() and slots.active() == "A"
 
 
@@ -102,7 +102,7 @@ def test_if_the_new_version_never_comes_up_it_rolls_back_by_itself(world, monkey
     edit_b(world, "print('broken')\n")
     slots.commit("broken")
     slots.save_state(last_stage={"ok": True, "head": slots.head("B")})
-    monkeypatch.setattr(slots, "healthz", lambda port=None, timeout=3: {"ok": True, "slot": "A"} if slots.active() == "A" else None)       # B never answers
+    monkeypatch.setattr(slots, "healthz", lambda port=None, timeout=3: {"ok": True, "slot": "A"} if slots.active() == "A" else None)
     monkeypatch.setattr(slots, "wait_healthy", lambda slot, seconds=90: slot == "A")
     r = slots.switch()
     assert r["ok"] is False and r["rolled_back"] and slots.active() == "A"
@@ -134,7 +134,7 @@ def test_watchdog_rolls_back_only_after_repeated_failures_inside_the_probation(w
     monkeypatch.setattr(watchdog.subprocess, "run", lambda *a, **k: None)
     for _ in range(2):
         watchdog.main()
-    assert not rolled                                                                                          # two bad minutes are tolerated
+    assert not rolled  # board #896 why-two-bad-minutes-tolerated
     watchdog.main()
     assert len(rolled) == 1 and "stopped answering" in rolled[0]
 
@@ -171,6 +171,6 @@ def test_launcher_falls_back_when_the_active_slot_is_unusable(tmp_path):
 
 
 def test_the_update_check_uses_the_model_rosie_chats_with(world):
-    assert slots.chat_model() == "qwen3.5:9b"                                # no settings yet: the default model
+    assert slots.chat_model() == "qwen3.5:9b"
     (world["a"] / "data" / "config.json").write_text(json.dumps({"chat_model": "huihui_ai/qwen3.5-abliterated:9b"}))
-    assert slots.chat_model() == "huihui_ai/qwen3.5-abliterated:9b"           # Settings > AI model, so no second model is loaded
+    assert slots.chat_model() == "huihui_ai/qwen3.5-abliterated:9b"  # board #896 why-chat-uses-settings-model

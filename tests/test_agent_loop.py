@@ -12,8 +12,8 @@ class FakeResp:
 
 def script(monkeypatch, messages):
     it = iter(messages)
-    monkeypatch.setattr(agent, "pick_skill", lambda *a, **k: "")                              # the skill router also calls the model: keep it out of the script
-    monkeypatch.setattr(agent.httpx, "post", lambda *a, **k: FakeResp(next(it)))          # a second model call would raise StopIteration
+    monkeypatch.setattr(agent, "pick_skill", lambda *a, **k: "")
+    monkeypatch.setattr(agent.httpx, "post", lambda *a, **k: FakeResp(next(it)))  # board #843 why-second-model-call
 
 
 def call(name, **args):
@@ -35,12 +35,12 @@ def test_the_model_cannot_loop_on_a_failing_send(fake_phone, monkeypatch):
 def test_a_held_action_is_described_in_plain_words_and_the_reply_cannot_claim_it_is_done(fake_phone, monkeypatch):
     script(monkeypatch, [call("phone_keep_note", title="Thin-Crust Pizza Dough", text="long recipe text " * 50),
                          {"role": "assistant", "content": "I've created a Keep note with the recipe! Would you like me to add tips?"}])
-    hist = [{"role": "tool", "tool_name": "web_search", "content": "outside content"}]               # untrusted content was read earlier in the chat
+    hist = [{"role": "tool", "tool_name": "web_search", "content": "outside content"}]  # board #843 safety-untrusted-earlier-chat
     reply, pending, _ = agent.chat(hist, "make a keep note with the best pizza recipe", "auto", False)
     assert pending and pending[0]["summary"].startswith("Save a Keep note called 'Thin-Crust Pizza Dough'")
     assert "phone_keep_note(" not in pending[0]["summary"] and "long recipe text" not in pending[0]["summary"]
     assert reply.startswith("Ready: Save a Keep note") and "created" not in reply and "tips" not in reply
-    assert not fake_phone.did("keep_note")                                                          # nothing happened yet
+    assert not fake_phone.did("keep_note")
 
 
 def test_a_cut_off_list_is_never_presented_as_complete(fake_phone, monkeypatch):
@@ -151,7 +151,7 @@ def test_a_wrong_day_is_corrected_to_the_day_the_user_named():
     assert a["start"] == "2026-10-05T10:00:00" and a["end"] == "2026-10-05T11:00:00"
     assert agent.fix_dates("add_task", {"title": "x", "due": "2026-10-09"}, "task for tuesday", sun)["due"] == "2026-10-06"
     same = {"title": "x", "start": "2026-10-06T10:00:00"}
-    assert agent.fix_dates("add_event", same, "tuesday and wednesday", sun) == same         # two days named: do not guess
+    assert agent.fix_dates("add_event", same, "tuesday and wednesday", sun) == same  # board #843 why-two-days-no-guess
 
 
 def test_a_question_never_sends_or_calls():
@@ -181,8 +181,8 @@ def test_audit_batch_two_guards():
     assert not agent.call_problem("add_task", {"title": "put things back"}, "add a task to put everything back in the garage", "", sun)
     assert not agent.call_problem("phone_call", {"to": "Sam"}, "Find Sam's number and call him", "", sun)
     assert not agent.call_problem("add_event", {"title": "Gym", "start": "2026-10-09T17:00:00"}, "How about a gym session Friday at 5?", "gym friday", sun)
-    assert agent.named_days("next Sunday", sun) == set()                                          # "next ...": never guessed (audit 2026-10-20)
-    assert agent.named_days("Sunday", sun) == {sun, sun + dt.timedelta(days=7)}                   # same weekday as today: never guessed
+    assert agent.named_days("next Sunday", sun) == set()  # board #843 fix-next-weekday-never-guessed
+    assert agent.named_days("Sunday", sun) == {sun, sun + dt.timedelta(days=7)}
 
 
 def test_the_history_keeps_the_corrected_reply_and_ollama_errors_are_survivable(fake_phone, monkeypatch):
@@ -212,13 +212,13 @@ def test_reminders_are_due_by_real_time_across_a_clock_change():
     pdt, pst = dt.timezone(dt.timedelta(hours=-7)), dt.timezone(dt.timedelta(hours=-8))
     with inbox._db() as c:
         c.execute("INSERT INTO reminders(due,text,created) VALUES(?,?,?)", ("2026-11-01T01:30-07:00", "late one", "x"))
-    assert not inbox.due_reminders(dt.datetime(2026, 11, 1, 0, 59, tzinfo=pdt))            # before it
-    assert inbox.due_reminders(dt.datetime(2026, 11, 1, 1, 10, tzinfo=pst))                 # 01:10 PST is AFTER 01:30 PDT: string order says otherwise
+    assert not inbox.due_reminders(dt.datetime(2026, 11, 1, 0, 59, tzinfo=pdt))
+    assert inbox.due_reminders(dt.datetime(2026, 11, 1, 1, 10, tzinfo=pst))  # board #843 quirk-dst-time-order
 
 
 def test_describing_herself_does_not_trigger_the_weather_guard(fake_phone, monkeypatch):
     import web
-    fake = lambda place="": {"place": place or "Riverton", "now": "58°F, clear", "days": []}          # never the real weather service
+    fake = lambda place="": {"place": place or "Riverton", "now": "58°F, clear", "days": []}
     monkeypatch.setattr(web, "weather", fake)
     monkeypatch.setitem(agent.TOOLS, "get_weather", (fake, *agent.TOOLS["get_weather"][1:]))
     script(monkeypatch, [{"role": "assistant", "content": "I'm Rosie. I can check your calendar, tasks, reminders and the weather."}])
@@ -226,13 +226,13 @@ def test_describing_herself_does_not_trigger_the_weather_guard(fake_phone, monke
     assert reply.startswith("I'm Rosie") and not any(m.get("role") == "tool" for m in new)
     script(monkeypatch, [{"role": "assistant", "content": "It is 58°F and clear."}, call("get_weather", place="Riverton"), {"role": "assistant", "content": "58°F and clear."}])
     reply, _, new = agent.chat([], "what's it like outside", "auto", False)
-    assert any(m.get("tool_name") == "get_weather" for m in new)                              # a stated temperature still has to be looked up
+    assert any(m.get("tool_name") == "get_weather" for m in new)
 
 
 def test_nudge_echoes_are_never_shown_and_outside_world_requests_are_not_pushed(fake_phone, monkeypatch):
     assert agent.STUB.search("I understand. You want me to act decisively without asking questions or announcing steps.")
     assert agent.OUTSIDE_WORLD.search("Can you book me a flight to Paris?") and not agent.OUTSIDE_WORLD.search("book an hour for the gym")
-    script(monkeypatch, [{"role": "assistant", "content": "I can't book flights: I have no travel booking tools."}])        # one model call only: no "do it anyway" nudge
+    script(monkeypatch, [{"role": "assistant", "content": "I can't book flights: I have no travel booking tools."}])
     reply, _, _ = agent.chat([], "Can you book me a flight to Paris?", "auto", False)
     assert "can't book flights" in reply
 
@@ -241,7 +241,7 @@ def test_the_booked_length_matches_the_length_the_user_said():
     a = {"title": "Insulation", "start": "2026-10-06T13:00:00", "end": "2026-10-06T21:00:00"}
     assert agent.fix_duration("add_event", a, "block four hours for insulation on Tuesday")["end"] == "2026-10-06T17:00:00"
     assert agent.fix_duration("add_event", a, "a 90 minute call on Tuesday")["end"] == "2026-10-06T14:30:00"
-    assert agent.fix_duration("add_event", a, "remind me in 2 hours") == a                    # not a length
+    assert agent.fix_duration("add_event", a, "remind me in 2 hours") == a
     assert agent.fix_duration("add_event", a, "lunch and a 30 minute walk at 2") == a or True
     ok = {"title": "x", "start": "2026-10-06T13:00:00", "end": "2026-10-06T17:00:00"}
     assert agent.fix_duration("add_event", ok, "four hours") == ok

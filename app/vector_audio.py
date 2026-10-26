@@ -1,8 +1,4 @@
-"""Vector's microphone stream: Ogg Opus (or raw 16 kHz PCM) in, 16 kHz mono int16 out, plus end-of-speech detection.
-
-Vector streams what he hears after his wake word until the server answers, so the server has to notice when you stop
-talking (vic-cloud gives up 9 s after the wake word). Format seen in WireOS vic-cloud and wire-pod: the first chunk
-starts with 'OggS' for Opus, anything else is little-endian 16 kHz PCM."""
+# board #789 quirk-ogg-or-raw-pcm
 import ctypes
 import ctypes.util
 import struct
@@ -10,7 +6,7 @@ import struct
 import numpy as np
 
 RATE = 16000
-FRAME = 320                      # 20 ms at 16 kHz
+FRAME = 320
 
 
 class OpusUnavailable(RuntimeError):
@@ -37,8 +33,7 @@ def _opus():
 
 
 class OggOpusDecoder:
-    """Feed Ogg bytes in any chunk sizes; get PCM int16 bytes back as whole packets arrive."""
-    MAX_FRAME = 5760             # 120 ms at 48 kHz, the largest Opus frame
+    MAX_FRAME = 5760
 
     def __init__(self):
         lib = _opus()
@@ -47,7 +42,7 @@ class OggOpusDecoder:
         if err.value != 0 or not self._dec:
             raise OpusUnavailable(f"opus_decoder_create failed ({err.value})")
         self._buf = b""
-        self._packet = b""       # a packet can continue across pages (lacing value 255)
+        self._packet = b""  # board #789 quirk-ogg-packet-continues
         self._out = (ctypes.c_int16 * self.MAX_FRAME)()
 
     def __del__(self):
@@ -61,7 +56,7 @@ class OggOpusDecoder:
         while True:
             start = self._buf.find(b"OggS")
             if start < 0:
-                self._buf = self._buf[-3:]           # keep a possible partial capture pattern
+                self._buf = self._buf[-3:]
                 break
             if start:
                 self._buf = self._buf[start:]
@@ -95,7 +90,6 @@ class OggOpusDecoder:
 
 
 class MicStream:
-    """One request's audio: decodes as it arrives and keeps every sample for speech-to-text."""
 
     def __init__(self, first_chunk: bytes):
         self.opus = first_chunk[:4] == b"OggS"
@@ -113,9 +107,6 @@ class MicStream:
 
 
 class Endpointer:
-    """Energy-based end-of-speech detection on 20 ms frames, with a noise floor learned from the quietest frames.
-    done is True after speech followed by `silence_ms` of quiet, or when nothing was said for `no_speech_ms`,
-    or at `max_ms` (Vector cancels the request at 9 s, and the answer still needs time)."""
 
     def __init__(self, silence_ms=500, min_speech_ms=200, no_speech_ms=3500, max_ms=7000):
         self.silence_frames = silence_ms // 20
@@ -166,13 +157,12 @@ _UNIT = {"second": 1, "seconds": 1, "sec": 1, "secs": 1, "minute": 60, "minutes"
 
 
 def duration_seconds(text: str) -> int:
-    """'set a timer for two minutes and 30 seconds' -> 150. 0 when no duration is said."""
     total, num = 0.0, None
     for w in text.lower().replace("-", " ").replace(",", " ").split():
         if w.replace(".", "", 1).isdigit():
             num = (num or 0) + float(w)
         elif w in _SMALL:
-            if w == "half" and num:                   # "two and a half minutes"
+            if w == "half" and num:
                 num += 0.5
             elif w in ("a", "an") and num:
                 continue
@@ -184,24 +174,21 @@ def duration_seconds(text: str) -> int:
         elif w == "and":
             continue
         else:
-            num = None                                # a number not followed by a unit ("a timer") does not count
+            num = None
     return int(round(total))
 
 
 def wav_bytes(pcm: bytes, rate=RATE) -> bytes:
-    """16-bit mono WAV around raw PCM (debug saves)."""
     return b"RIFF" + struct.pack("<I", 36 + len(pcm)) + b"WAVEfmt " + struct.pack("<IHHIIHH", 16, 1, 1, rate, rate * 2, 2, 16) \
         + b"data" + struct.pack("<I", len(pcm)) + pcm
 
 
 def to_16k_pcm(audio, sr: int) -> bytes:
-    """Float audio at any rate -> 16-bit 16 kHz mono PCM for his speaker (a windowed-sinc low-pass, then interpolation;
-    no extra libraries)."""
     a = np.asarray(audio, dtype=np.float32).reshape(-1)
     if sr != RATE:
         if sr > RATE:
             n = np.arange(-32, 33)
-            fc = 0.45 * RATE / sr                       # cut just under 8 kHz before dropping samples
+            fc = 0.45 * RATE / sr
             taps = 2 * fc * np.sinc(2 * fc * n) * np.hamming(len(n))
             a = np.convolve(a, taps / taps.sum(), mode="same")
         t = np.arange(0, len(a) * RATE / sr) * sr / RATE

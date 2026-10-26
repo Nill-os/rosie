@@ -1,34 +1,20 @@
-"""Vector comes alive on his own (owner 2026-10-24: "do deep research on how people are making ai companions and
-implement what you learn to the vector").
-
-What the research found works best per unit of effort, and what this does:
-- Reactions anchored to his body (Anki's own emotion engine, aibo, Loona): picked up, set down, petted -> one short line
-  in Rosie's voice, no wake word, after his own reaction has had a moment.
-- Greeting people he recognizes after a while away (aibo, Vector's own "sees the owner"), with one thing Rosie remembers.
-- A mood that lasts (Cozmo's emotion events with decay; valence and energy here), nudged by petting, praise, scolding,
-  talk and being ignored, decaying toward his baseline, and put into Rosie's prompts so his tone holds for hours.
-- A heads-up when someone is near him and a calendar event starts soon (Jibo-style reminders), the first greeting of
-  the day with the day's next thing, and bedtime (Moxie "got tired"): late, off the charger and left alone, he says
-  goodnight and drives onto his charger.
-- Restraint (ProAct; Reicherts et al.): a few lines a day at most, cooldowns per kind and overall, quiet hours, nothing
-  while he talks, listens, drives, sits in his menu or sleeps, and his recent lines are never repeated.
-His own built-in animations are left alone (their sound beside Rosie's voice stream crashed vic-anim before)."""
+# board #794 owner-companion-research
 import json
 import threading
 import time
 from pathlib import Path
 
 LEVELS = {"off": None, "some": {"gap_s": 120, "per_day": 30}, "lots": {"gap_s": 45, "per_day": 80}}
-QUIET_HOURS = (22, 8)                                # 22:00 to 08:00: he keeps to himself
+QUIET_HOURS = (22, 8)  # board #794 why-quiet-hours
 COOLDOWN_S = {"picked_up": 180, "set_down": 300, "petted": 180, "greet": 0, "check_in": 3 * 3600, "heads_up": 0, "bedtime": 0}
-HEADS_UP_MIN = (4, 20)                               # an event starting this many minutes from now, with someone near him: say so once
-BEDTIME_HOURS = (22, 23)                             # off the charger and left alone then: goodnight, and he drives to bed
-GREET_GAP_S = 3 * 3600                               # someone he has not seen for this long gets a greeting
-CHECK_IN_AFTER_S = 45 * 60                           # someone near him this long without a word: a tiny check-in
-REACT_AFTER_S = 1.2                                  # his own reaction first, then Rosie's line
-PET_S = 1.5                                          # a touch this long is petting
+HEADS_UP_MIN = (4, 20)
+BEDTIME_HOURS = (22, 23)
+GREET_GAP_S = 3 * 3600
+CHECK_IN_AFTER_S = 45 * 60
+REACT_AFTER_S = 1.2
+PET_S = 1.5
 EVENTS = ["robot_state", "robot_observed_face", "stimulation_info"]
-PICKED_UP, CALM_POWER, ON_CHARGER = 0x8, 0x400, 0x1000   # RobotState.status bits
+PICKED_UP, CALM_POWER, ON_CHARGER = 0x8, 0x400, 0x1000
 
 WHAT = {"picked_up": "The owner just picked you up off the desk.",
         "set_down": "You were just put back down after being carried around.",
@@ -40,7 +26,6 @@ WHAT = {"picked_up": "The owner just picked you up off the desk.",
 
 
 class Mood:
-    """Valence (-1 grumpy .. 1 delighted) and energy (0 sleepy .. 1 hyper), decaying toward his baseline."""
     BASE = {"valence": 0.3, "energy": 0.55}
     HALF_LIFE_S = 1200.0
     NUDGE = {"petted": (0.15, 0.05), "picked_up": (0.0, 0.1), "set_down": (0.02, -0.03), "praise": (0.2, 0.05),
@@ -79,7 +64,6 @@ class Mood:
                 pass
 
     def describe(self, now: float | None = None) -> str:
-        """'cheerful and a bit sleepy', for Rosie's prompts. Late at night he is sleepier whatever the numbers say."""
         now = now or time.time()
         with self.lock:
             self._decay(now)
@@ -93,20 +77,19 @@ class Mood:
 
 
 class Life:
-    """Watches his event stream while Rosie's Vector server runs and decides when he speaks up on his own."""
 
     def __init__(self, robot, say, line, can_talk, level, state_path: Path | None = None, mood: Mood | None = None,
                  events=lambda: [], to_bed=lambda: None):
         self.robot, self.say, self.line, self.can_talk, self.level = robot, say, line, can_talk, level
-        self.events, self.to_bed = events, to_bed     # events(): [(title, start epoch)] coming up; to_bed(): drive onto his charger
-        self.announced: set = set()                  # (title, start) heads-ups already given
-        self.bedtime_on = ""                         # the date he last went to bed by himself
+        self.events, self.to_bed = events, to_bed
+        self.announced: set = set()
+        self.bedtime_on = ""
         self.on_charger = True
         self.mood = mood or Mood()
         self.state_path = state_path
-        self.seen: dict[str, float] = {}             # who -> when he last saw them
+        self.seen: dict[str, float] = {}
         self.last_kind: dict[str, float] = {}
-        self.spoken: list[tuple[float, str]] = []    # (when, line) today: the budget and "don't repeat these"
+        self.spoken: list[tuple[float, str]] = []
         self.last_interaction = time.time()
         self.present_at = 0.0
         self.picked_at = 0.0
@@ -114,12 +97,11 @@ class Life:
         self.petted_this_touch = False
         self.ignored_at = 0.0
         self._level, self._level_at = "off", 0.0
-        self.last = None                             # the latest reaction, for the Vector page
+        self.last = None
         self._stop = threading.Event()
         self._call = None
         self._load()
 
-    # state -----------------------------------------------------------------------------------------------------------
     def _load(self):
         try:
             d = json.loads(self.state_path.read_text()) if self.state_path else {}
@@ -137,17 +119,15 @@ class Life:
                 pass
 
     def current_level(self) -> str:
-        """The setting, read at most every 2 s (events come many times a second)."""
+        # board #794 why-setting-read-throttled
         if time.time() - self._level_at > 2.0:
             self._level, self._level_at = self.level(), time.time()
         return self._level
 
     def note_interaction(self, event: str = "talk"):
-        """A voice request, a button, the controller: he is being paid attention to."""
         self.last_interaction = time.time()
         self.mood.nudge(event)
 
-    # the loop --------------------------------------------------------------------------------------------------------
     def start(self):
         threading.Thread(target=self._run, daemon=True, name="vector-life").start()
         return self
@@ -163,7 +143,7 @@ class Life:
             try:
                 bot = self.robot() if LEVELS.get(self.current_level()) else None
             except Exception:
-                bot = None                               # settings or his connection not readable this moment
+                bot = None
             if bot is None:
                 self._stop.wait(5.0)
                 continue
@@ -175,7 +155,7 @@ class Life:
                     self.handle(ev.event)
                 self._call.cancel()
             except Exception:
-                pass                                     # his services restarting, or the stream was cancelled
+                pass
             self._stop.wait(3.0)
 
     def handle(self, event, now: float | None = None):
@@ -184,7 +164,7 @@ class Life:
         if kind == "robot_state":
             s = event.robot_state
             if s.status & CALM_POWER:
-                return                                   # asleep
+                return
             picked = bool(s.status & PICKED_UP)
             self.on_charger = bool(s.status & ON_CHARGER)
             hour = time.localtime(now).tm_hour
@@ -212,11 +192,11 @@ class Life:
             f = event.robot_observed_face
             who = f.name or ("someone he knows" if f.face_id > 0 else "")
             if not who:
-                return                                   # a face he can't tell apart: no greetings for strangers
+                return
             last = self.seen.get(who)
             self.seen[who] = now
             if not self.present_at or now - self.present_at > 600:
-                self.present_at = now                    # someone arrived (not just a face seen again a moment later)
+                self.present_at = now
             if last is None or now - last > GREET_GAP_S:
                 gap = "a long time" if last is None else f"{int((now - last) // 3600)} hours"
                 nxt = self._next_event(now, 12 * 60)
@@ -227,13 +207,12 @@ class Life:
             elif now - self.last_interaction > CHECK_IN_AFTER_S and now - self.present_at > CHECK_IN_AFTER_S:
                 self.react("check_in", now, who=f.name or "The owner")
             if now - self.last_interaction > CHECK_IN_AFTER_S and now - self.ignored_at > 1800:
-                self.ignored_at = now                    # near him but not talking to him: a little less sunny
+                self.ignored_at = now
                 self.mood.nudge("ignored", now)
         elif kind == "stimulation_info":
-            pass                                         # his own stimulation level: kept for later tuning
+            pass
 
     def _next_event(self, now: float, within_min: int):
-        """(title, minutes away) of the next calendar event within `within_min`, or None."""
         try:
             soon = sorted((start, title) for title, start in self.events() if 0 <= start - now <= within_min * 60)
         except Exception:
@@ -241,7 +220,6 @@ class Life:
         return (soon[0][1], int((soon[0][0] - now) // 60)) if soon else None
 
     def _heads_up(self, now: float, who: str) -> bool:
-        """Someone is near him and an event starts in a few minutes: tell them once."""
         try:
             items = list(self.events())
         except Exception:
@@ -255,14 +233,13 @@ class Life:
                     return True
         return False
 
-    # restraint -------------------------------------------------------------------------------------------------------
     def allowed(self, kind: str, now: float) -> bool:
         rule = LEVELS.get(self.current_level())
         if not rule:
             return False
         start, end = QUIET_HOURS
         hour = time.localtime(now).tm_hour
-        if (hour >= start or hour < end) and kind != "bedtime":     # bedtime is the one thing he says at night
+        if (hour >= start or hour < end) and kind != "bedtime":  # board #794 why-bedtime-only-night
             return False
         if not self.can_talk():
             return False
@@ -304,7 +281,7 @@ class Life:
 
 
 class _Blank(dict):
-    def __missing__(self, key):                          # a detail not given (no next event): left out, never a crash
+    def __missing__(self, key):
         return ""
 
 

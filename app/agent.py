@@ -1,4 +1,3 @@
-"""Chat brain: local Ollama model + tools. Writes are guarded in actions.py."""
 import datetime as dt
 import json
 import re
@@ -42,8 +41,7 @@ import workflows
 
 OLLAMA = "http://127.0.0.1:11434/api/chat"
 MODEL = "qwen3.5:9b"
-# The context window (num_ctx, num_gpu) is per model and tuned in Settings: see ctxsize.py. Every Ollama call for the chat model
-# sends ctxsize.options(model), so the model never reloads between callers.
+# board #701 why-ctx-options-shared
 
 
 def now():
@@ -59,7 +57,6 @@ def _add_task(title, due=None):
 
 
 def _pick_task(task):
-    """Task by id, or by words from its title (must match exactly one open task)."""
     t = str(task).strip()
     if t.isdigit():
         return tasks.get(int(t)), None
@@ -116,7 +113,7 @@ def _terminal_start(command="", folder="~", name=""):
 
 
 def _terminal_send(name, text, enter=True, _confirmed=False):
-    """Typing into an AGENT's session always needs the user's OK: otherwise I could answer the agent's own permission prompts for the user."""
+    # board #701 safety-agent-typing-confirm
     s = terminals.get(name)
     if s and s["kind"] == "agent" and not _confirmed:
         return actions.queue_tool("terminal_send", {"name": name, "text": text, "enter": enter, "_confirmed": True},
@@ -134,7 +131,6 @@ def _proj(fn):
 
 
 def _lifequest_log(note="", stat="", xp=20):
-    """Log a win the user said they did. No note, no XP. An unclear stat is asked about, never guessed."""
     note = str(note or "").strip()
     if len(note) < 3:
         return {"error": "No XP without a note: use the user's own words for what they did."}
@@ -182,7 +178,6 @@ def _add_project_task(project, title, due=""):
 
 
 def what_now():
-    """Deterministic: current event, next event, open tasks. No model guessing."""
     n = now()
     evs = [e for e in gcal.events_on(n.date()) if not e["all_day"]]
     cur = [e for e in evs if dt.datetime.fromisoformat(e["start"]) <= n < dt.datetime.fromisoformat(e["end"])]
@@ -204,7 +199,7 @@ def _find_free(day, minutes, days, earliest, latest):
 
 
 import plat  # noqa: E402
-SHELL = "Windows PowerShell 5.1" if plat.IS_WIN else "bash"                      # the Windows copy runs PowerShell (plat.shell_argv)
+SHELL = "Windows PowerShell 5.1" if plat.IS_WIN else "bash"
 LAUNCH = "Start-Process app" if plat.IS_WIN else "app >/dev/null 2>&1 &"
 
 TOOLS = {
@@ -392,7 +387,6 @@ TOOLS = {
 }
 
 
-# Only the tools that fit the conversation are sent to the model (its context window is small).
 GROUPS = {n: "core" for n in ("what_now", "add_task", "list_tasks", "overdue_tasks", "find_task", "complete_task", "move_task", "capture", "remember", "recall", "forget", "lessons",
                                "set_reminder", "list_reminders", "cancel_reminder", "start_my_day", "wrap_up_day", "run_sync", "search_chats", "propose_task", "get_schedule")}
 GROUPS.update({n: "calendar" for n in ("find_free_time", "search_events", "add_event", "move_event", "delete_event", "shift_day", "propose_event")})
@@ -401,14 +395,14 @@ GROUPS.update({n: "web" for n in ("web_search", "fetch_url", "get_weather", "fin
 GROUPS.update({"search_notes": "notes"})
 GROUPS["corner_memory"] = "corner"
 GROUPS["plan_with_claude"] = "plan"
-GROUPS["verify_with_claude"] = GROUPS["ask_claude_to_solve"] = GROUPS["ask_other_ais"] = "plan"                       # its own group: core is at Agent Zero's prompt budget
+GROUPS["verify_with_claude"] = GROUPS["ask_claude_to_solve"] = GROUPS["ask_other_ais"] = "plan"
 GROUPS.update({"memory_search": "core", "more_result": "core", "memory_reflect": "memory", "memory_forget": "memory"})
 HEADER_RE = re.compile(re.escape(agentboard.HEADER))
 GROUPS.update({n: "board" for n in ("board_read", "board_post", "board_claim", "board_release", "board_history")})
 GROUPS.update({n: "skills" for n in ("find_skills", "install_skill")})
 GROUPS.update({n: "mail" for n in ("search_email", "summarize_email", "draft_email_reply", "check_email", "mail_cleanup_preview", "mail_cleanup", "mail_undo")})
 GROUPS.update({n: "phone" for n in ("phone_status", "phone_keep_note", "phone_lookup_contact", "phone_send_sms", "phone_call", "phone_read_messages", "phone_set_alarm", "phone_set_timer", "phone_open_app", "phone_music", "phone_torch", "phone_volume", "phone_navigate", "phone_search", "phone_notifications", "phone_reply_notification", "phone_screen_do")})
-GROUPS["phone_screen_tap"] = "internal"                      # only runs after the user confirms a risky tap; never offered to the model
+GROUPS["phone_screen_tap"] = "internal"
 GROUPS.update({n: "selfdev" for n in ("selfdev_plan", "selfdev_review", "selfdev_status", "selfdev_prepare", "selfdev_read", "selfdev_search", "selfdev_edit", "selfdev_write", "selfdev_agent", "selfdev_commit", "selfdev_diff", "selfdev_stage", "selfdev_switch", "selfdev_rollback")})
 GROUPS.update({n: "build" for n in ("build_tool", "run_user_tool", "list_user_tools")})
 GROUPS.update({n: "projects" for n in ("list_projects", "project_status", "create_project", "update_project", "add_project_task", "plan_project")})
@@ -444,13 +438,13 @@ def select_groups(user_text, history, skill="", space=None):
     for g, rx in GROUP_RE.items():
         if re.search(rx, t):
             on.add(g)
-    for m in history[-6:]:          # keep groups that were just in use, so follow-ups keep working
+    for m in history[-6:]:
         if m.get("role") == "tool" and GROUPS.get(m.get("tool_name", "")):
             on.add(GROUPS[m["tool_name"]])
     on |= SKILL_GROUPS.get(skill or "", set()) | SPACE_GROUPS.get(space or "", set())
     if skill == "meal-planning" and RECIPE_NOTE.search(t):
-        on.add("phone")                                          # a recipe saved to a Keep note: phone_keep_note
-    if len(on) == 1:                # nothing specific detected: offer the everyday ones
+        on.add("phone")
+    if len(on) == 1:
         on |= {"calendar", "web"}
     return on
 
@@ -458,7 +452,7 @@ def select_groups(user_text, history, skill="", space=None):
 def _schema(groups=None):
     out = []
     for name, (_, desc, params) in TOOLS.items():
-        if name == "list_skills":                  # skills are routed by code; use_skill stays: the prompt lists shared skills by name
+        if name == "list_skills":
             continue
         if groups is not None and GROUPS.get(name, "core") not in groups:
             continue
@@ -470,13 +464,11 @@ def _schema(groups=None):
 
 
 def owner_notes() -> str:
-    """The owner's own notes on how they like help (Settings > About you), as one prompt line; empty when unset."""
     n = " ".join(str(config.load().get("owner_notes") or "").split())[:600]
     return f"ABOUT THE USER (their own words): {n}\n" if n else ""
 
 
 def system_prompt(mode="auto", voice=False):
-    """Fixed rules first, then the parts that change (clock, memory) LAST, so the model can reuse its work on the unchanged start instead of re-reading everything each minute."""
     n = now()
     style = ("You are TALKING OUT LOUD: speak like a calm, warm friend in 1 to 3 short sentences, plain words, no markdown, lists or emojis; say times the way people talk ('two thirty')."
              if voice else
@@ -523,7 +515,6 @@ OFFER = re.compile(r"^(would you like|do you want|want me to|should i|shall i|ca
 
 
 def deoffer(text: str) -> str:
-    """Drop trailing 'Would you like me to...?' offers and check-ins: the user wants things done, not offered. Keeps real content and genuine one-line questions that are the whole reply."""
     parts = re.split(r"(?<=[.!?])\s+|\n+", text.strip())
     kept = list(parts)
     while len(kept) > 1 and OFFER.match(kept[-1].strip(" *_-•")):
@@ -538,7 +529,6 @@ CLAIM = re.compile(r"(marked (it |that )?(as )?(done|complete)|task (added|saved
 
 
 def _cap(result, limit=3500):
-    """Keep tool output small enough for the model's window; say so when cut."""
     if isinstance(result, list) and len(json.dumps(result, default=str)) > limit:
         keep = []
         for item in result:
@@ -547,7 +537,7 @@ def _cap(result, limit=3500):
             keep.append(item)
         return {"results_shown": len(keep), "total_results": len(result), "results": keep,
                 "note": "Too many results. Tell the user how many there were and ask them to narrow it down."}
-    return squeeze.squeeze(result, limit * 2)                 # errors and both ends kept; the rest stays retrievable (more_result)
+    return squeeze.squeeze(result, limit * 2)
 
 
 SKILL_HINTS = {
@@ -562,25 +552,23 @@ SKILL_HINTS = {
 }
 
 SPECIFIC = {"reply-to-text": {"life-support", "build-something", "meal-planning", "plan-my-day"}, "job-fit-tailor": {"build-something"}}
-RECIPE_NOTE = re.compile(r"\b(?:save|keep|notes?)\b.{0,60}\brecipe|\brecipe\b.{0,60}\b(?:save|keep|notes?)\b")   # saving a recipe: meal-planning's
-                                                                                                    # (save-recipe merged into it, 2026-10-23)
+RECIPE_NOTE = re.compile(r"\b(?:save|keep|notes?)\b.{0,60}\brecipe|\brecipe\b.{0,60}\b(?:save|keep|notes?)\b")
 
 
 def pick_skill(user_text: str, history: list[dict]) -> str:
-    """Which playbook (if any) fits? Plain keyword matching decides; the model is only asked when several skills could fit (saves a model call on almost every message)."""
     names = [n for n, _ in skills.listing()]
     if not names:
         return ""
     t = user_text.lower()
     hits = [n for n in names if SKILL_HINTS.get(n) and re.search(SKILL_HINTS[n], t)]
-    for specific, covered in SPECIFIC.items():                      # the narrower playbook wins: no need to ask the model which one
+    for specific, covered in SPECIFIC.items():
         if specific in hits:
             hits = [h for h in hits if h not in covered]
     if "meal-planning" in hits and RECIPE_NOTE.search(t):
-        hits = [h for h in hits if h != "build-something"]           # saving a recipe to a note (other mixes: the model picks)
+        hits = [h for h in hits if h != "build-something"]
     if (re.search(r"\b(?:reply|respond|answer|write back)\b", t) and re.search(r"\be-?mails?\b|\bgmail\b", t)
             and not re.search(r"\b(?:text|texts|sms|notification)\b|(?<!mail )\bmessage\b", t)):
-        return ""                                                     # an email reply is a draft (mail tools), not a text or a meal
+        return ""
     if not hits:
         return ""
     if len(hits) == 1:
@@ -594,16 +582,14 @@ def pick_skill(user_text: str, history: list[dict]) -> str:
         return ""
 
 
-# --- untrusted-content guard -------------------------------------------------
-# Anything from the web, email, files outside the vault or other agents' output can contain hidden instructions.
-# After the assistant has read such content, risky tools no longer run silently: the user must confirm each one.
+# board #701 safety-untrusted-content-confirm
 UNTRUSTED = {"corner_memory", "find_skills", "selfdev_read", "selfdev_search", "find_recipe", "phone_notifications", "phone_screen_do", "phone_read_messages", "search_notes", "web_search", "fetch_url", "search_email", "summarize_email", "draft_email_reply", "list_emails", "terminal_read"}
-UNTRUSTED |= {"board_read", "board_history", "plan_with_claude", "verify_with_claude", "ask_claude_to_solve", "ask_other_ais", "mail_cleanup_preview"}   # sender names are mail text too   # other agents' words: data, and they may carry outside text
+UNTRUSTED |= {"board_read", "board_history", "plan_with_claude", "verify_with_claude", "ask_claude_to_solve", "ask_other_ais", "mail_cleanup_preview"}
 GUARDED = {"lessons", "remember", "forget", "memory_forget", "install_skill", "cancel_reminder", "selfdev_edit", "selfdev_write", "selfdev_agent", "selfdev_switch", "selfdev_rollback", "phone_screen_do", "phone_reply_notification", "phone_send_sms", "phone_call", "phone_keep_note", "build_tool", "run_user_tool", "run_command", "write_file", "open_on_desktop", "launch_agent", "terminal_start", "terminal_send", "terminal_stop"}
 
 
 def is_untrusted(name, args):
-    if name == "use_skill":                                   # a playbook copied from Agent Zero or taken from the internet is outside text
+    if name == "use_skill":
         try:
             text = (skills.DIR / f"{Path(str(args.get('name', ''))).stem}.md").read_text(errors="replace")
         except OSError:
@@ -619,7 +605,6 @@ def is_untrusted(name, args):
 
 
 def describe_call(name, a):
-    """A short, human sentence for a held action (this is what gets read aloud or shown on the card), never the raw tool call."""
     g = lambda k, n=60: str(a.get(k, ""))[:n]
     if name == "phone_keep_note":
         return f"Save a Keep note called '{g('title') or g('text', 40)}'"
@@ -642,14 +627,13 @@ def describe_call(name, a):
     return name.replace("_", " ").capitalize() + (": " + ", ".join(f"{k} {str(v)[:30]}" for k, v in list(a.items())[:3]) if a else "")
 
 
-OWN_CARD = {"phone_send_sms", "phone_call", "phone_reply_notification"}       # these build their own, fuller card (who exactly, what exactly) and check the number: the generic card would skip that
+OWN_CARD = {"phone_send_sms", "phone_call", "phone_reply_notification"}
 
 
-HOLD_WHEN_TAINTED = {"read_file", "list_dir"}   # after outside content, reading the owner's files waits for a Yes (no read-then-send-out chain)
+HOLD_WHEN_TAINTED = {"read_file", "list_dir"}
 
 
 def guard(name, args, tainted):
-    """If this call must wait for the user, return the needs_confirmation result; otherwise None."""
     if tainted and (name in GUARDED or name in HOLD_WHEN_TAINTED) and name not in OWN_CARD and config.load().get("taint_guard", True):
         extra = " Agents ask for their own permissions; I won't answer those for you." if name == "terminal_send" else ""
         return actions.queue_tool(name, args, f"{describe_call(name, args)}. Checking with you because I just read outside content.{extra}")
@@ -657,7 +641,6 @@ def guard(name, args, tainted):
 
 
 def _run_confirmed(name, args):
-    """Runs a tool the USER has just confirmed. Tools that have their own extra hold (like typing into an agent session) are told it is confirmed."""
     import inspect
     try:
         fn = TOOLS[name][0]
@@ -676,7 +659,7 @@ SPACE_SKILL = {"Food": "meal-planning", "Build": "build-something", "Ideas": "te
 CLAIM_VERB = r"(moved|rescheduled|shifted|pushed|booked|scheduled|added|created|made|deleted|removed|cancel+ed|set|saved|sent|texted|replied|called|marked|completed|updated|changed|renamed)"
 CLAIM_SENTENCE = re.compile(r"\bI(?:'ve| have)?\s+(?:just\s+|also\s+|now\s+)?" + CLAIM_VERB + r"\b|\b(?:has|have|was|were|is|are)\s+(?:now\s+|been\s+|also\s+)?" + CLAIM_VERB + r"\b|^\W*" + CLAIM_VERB + r"\b|\b\w+\s+" + CLAIM_VERB + r"\s+(?:to|for|on|at|as|from)\b", re.I)
 DELETING = re.compile(r"\b(deleted|removed|cancel+ed)\b", re.I)
-DOMAINS = {   # words that say WHAT was claimed -> the tools that could really have done it
+DOMAINS = {
     "calendar": (r"\b(events?|meetings?|appointments?|calendar|schedule|blocks?|sessions?|slots?|yard work|lunch|gym|call with)\b|\b(mon|tues|wednes|thurs|fri|satur|sun)day\b|\b\d{1,2}(:\d{2})?\s?(am|pm)\b|\b\d{1,2}/\d{1,2}\b", {"add_event", "move_event", "shift_day", "delete_event", "propose_event"}),
     "task": (r"\b(tasks?|to-?do)\b", {"add_task", "complete_task", "move_task", "propose_task"}),
     "reminder": (r"\b(reminders?)\b", {"set_reminder", "cancel_reminder"}),
@@ -690,7 +673,6 @@ DELETE_TOOLS = {"calendar": {"delete_event", "shift_day"}, "task": {"complete_ta
 
 
 def unbacked_claims(text: str, ok_tools: set) -> list:
-    """Sentences that say something was DONE (moved, added, deleted, sent...) when no tool that works for that kind of thing really succeeded this turn."""
     bad = []
     for sent in re.split(r"(?<=[.!?])\s+|\n+", text):
         if not CLAIM_SENTENCE.search(sent) or (ok_tools & READ_TOOLS and not re.search(r"\bI(?:'ve| have)?\s+(?:just\s+|also\s+|now\s+)?" + CLAIM_VERB, sent, re.I)) or re.search(r"\b(not|n't|cannot|can't|unable|could not|failed|did not)\b", sent, re.I):
@@ -724,17 +706,16 @@ EXPLICIT_DAY = re.compile(r"\d{4}-\d{2}-\d{2}|\b\d{1,2}/\d{1,2}\b|\bthe \d{1,2}(
 
 
 def named_days(text: str, today=None) -> set:
-    """The calendar dates the user's own words point at: weekday names, today, tomorrow. A month and day ("Friday October 30") is that
-    date; "next Friday", "the 30th" or "11/6" are left to the model (audit 2026-10-20: the bare weekday used to win and book this week)."""
+    # board #701 fix-bare-weekday-booked-week
     today = today or dt.datetime.now(gcal.TZ).date()
     out = set()
     low = text.lower()
     if workflows.parse_month_day(text, today, past_keeps_year=True) or EXPLICIT_DAY.search(low):
-        return set()                                          # any explicit date ("Oct 30", "11/6", "the 30th", "next Friday"): never second-guessed
+        return set()
     for i, d in enumerate(DAYS):
         if re.search(rf"\b{d}\b", low):
             if i == today.weekday():
-                out |= {today, today + dt.timedelta(days=7)}              # "Sunday" on a Sunday could mean either: do not guess
+                out |= {today, today + dt.timedelta(days=7)}
             else:
                 out.add(today + dt.timedelta(days=(i - today.weekday()) % 7))
     if re.search(r"\btomorrow\b", low):
@@ -750,7 +731,6 @@ def arg_date(v):
 
 
 def fix_dates(name, args, user_text, today=None):
-    """If the user named exactly one day and the model used another, move the date to the day the user said (keeping the clock time). Returns the corrected args."""
     want = named_days(user_text, today)
     if len(want) != 1:
         return args
@@ -774,7 +754,6 @@ NUMBER_WORDS = {"a": 1, "an": 1, "one": 1, "two": 2, "three": 3, "four": 4, "fiv
 
 
 def fix_duration(name, args, user_text):
-    """If the user said how long ("a four hour block", "for 90 minutes") and the model booked a different length, set the end to match their words."""
     if name != "add_event":
         return args
     found = re.findall(r"(?<!\bin )(?<!\bat )\b(\d+(?:\.\d+)?|a|an|one|two|three|four|five|six|seven|eight|half)[ -]?(?:an? )?(hours?|hrs?|minutes?|mins?)\b", user_text.lower())
@@ -799,9 +778,7 @@ OTHER_DAY = re.compile(r"\b(?:to|until|till|into)\s+(?:the\s+)?(?:next|following
 
 
 def call_problem(name, args, user_text, recent_user, today=None):
-    """Plain-code sanity checks on what the model is about to do. Returns the reason to refuse (told to the model), or ''."""
-    if name in CHANGE_TOOLS and CASCADE.search(user_text) and (name != "shift_day" or OTHER_DAY.search(user_text)):   # shift_day IS the
-                                                                                                                  # "push my day back" tool
+    if name in CHANGE_TOOLS and CASCADE.search(user_text) and (name != "shift_day" or OTHER_DAY.search(user_text)):
         return "There is no tool that moves a whole day or week to another day, and moving items one by one on a guess is not safe. Do NOT add or move anything. Tell the user plainly, and offer to move specific items they name."
     if name in SEND_TOOLS and QUESTION_START.search(user_text) and not re.search(r"\b(can|could|will|would|please) you\b|\b(and|then)\s+(call|text|reply|send|message|tell|ring)\b", user_text, re.I):
         return "The user asked a question. Do not send, reply or call anyone. Read what they asked about and answer."
@@ -841,38 +818,37 @@ def call_problem(name, args, user_text, recent_user, today=None):
 
 
 WEATHER_TALK = re.compile(r"\b(weather|forecast|rain(?:ing|y)?|temperatures?|\d+\s?°\s?[FC])", re.I)
-WEATHER_READING = re.compile(r"\d+\s?°\s?[FC]")             # the reply itself states a temperature: that must have come from get_weather
+WEATHER_READING = re.compile(r"\d+\s?°\s?[FC]")
 READ_TOOLS = {"get_schedule", "search_events", "find_free_time", "list_tasks", "what_now", "overdue_tasks", "find_task", "start_my_day"}
 
 
-TURN_OUTSIDE: dict = {}       # chat_id -> did the last turn read outside text (mind.queue_turn keeps only the owner's words then)
+TURN_OUTSIDE: dict = {}
 
 
 def chat(history: list[dict], user_text: str, mode: str = "auto", voice: bool = False, max_steps=10, space: str | None = None, untrusted: bool = False, chat_id=None, _local=False,
          _reading=None):
-    """Returns (reply_text, pending_confirmations, new_history)."""
     phone.user_text = user_text
-    fp = fastpath.try_fast(user_text)                      # simple, frequent commands are done by exact code, not left to the small model
+    fp = fastpath.try_fast(user_text)
     if fp:
         return fp["reply"], fp["pending"], history + [{"role": "user", "content": user_text}, {"role": "assistant", "content": fp["reply"]}]
-    if ctxsize.running():                                  # Settings > Context window is measuring the model alone on the GPU
+    if ctxsize.running():
         reply = "I'm tuning my context window right now (2 to 5 minutes). Ask me again in a moment."
         return reply, [], history + [{"role": "user", "content": user_text}, {"role": "assistant", "content": reply}]
     reading = _reading if _reading is not None else ("" if CHITCHAT.match(user_text.strip()) else corner_graph.recall(user_text))
-    untrusted = untrusted or bool(reading)                 # what she read in her corner comes along; its page text is outside text
-    remembered = "" if CHITCHAT.match(user_text.strip()) else mind.auto_context(user_text)   # her own memory of earlier chats (not outside text)
-    if chat_id is not None and str(chat_id) in a0._outside():   # Agent Zero read outside text in this chat earlier; its replies may carry it
+    untrusted = untrusted or bool(reading)
+    remembered = "" if CHITCHAT.match(user_text.strip()) else mind.auto_context(user_text)
+    if chat_id is not None and str(chat_id) in a0._outside():
         untrusted = True
-    board = "" if _reading is not None else agentboard.for_turn(user_text, "rosie" if _local or not a0.enabled() else "agent-zero")   # notes from other agents (data)
+    board = "" if _reading is not None else agentboard.for_turn(user_text, "rosie" if _local or not a0.enabled() else "agent-zero")
     if board:
         reading, untrusted = (reading + "\n\n" + board).strip(), True
-    if _reading is None and not voice and claude_plan.wants(user_text):   # Settings > Planning: Claude plans, she carries it out (claude_plan.py)
+    if _reading is None and not voice and claude_plan.wants(user_text):
         plan = claude_plan.plan(user_text, history)
         if plan:
             reading, untrusted = (reading + "\n\n" + plan).strip(), True
     if chat_id is not None:
         TURN_OUTSIDE[chat_id] = untrusted
-    if not _local and a0.enabled():                        # Settings > Brain: Agent Zero thinks, with Rosie's tools (a0.py, a0_mcp.py)
+    if not _local and a0.enabled():
         try:
             return a0.chat(history, user_text, voice, chat_id=chat_id, space=space, untrusted=untrusted, reading=remembered + reading)
         except a0.Unavailable as e:
@@ -887,7 +863,7 @@ def chat(history: list[dict], user_text: str, mode: str = "auto", voice: bool = 
         sp += (f"\nACTIVE SKILL for this message: '{skill}'. Follow these steps (adapted to a "
                f"{'spoken' if voice else 'text'} reply):\n{skills.use_skill(skill)['instructions']}")
     msgs = [{"role": "system", "content": sp + ("\n\n" + remembered if remembered else "") + ("\n\n" + reading if reading else "")}] + history + [{"role": "user", "content": user_text}]
-    active = select_groups(user_text, history, skill, space) | ({"corner"} if reading else set()) | ({"board"} if HEADER_RE.search(reading) else set())   # she can look further
+    active = select_groups(user_text, history, skill, space) | ({"corner"} if reading else set()) | ({"board"} if HEADER_RE.search(reading) else set())
     pending, used, retried, refused = [], set(), False, False
     tried, failed, err_nudged, stalled = set(), {}, False, 0
     forced_question = ""
@@ -896,9 +872,8 @@ def chat(history: list[dict], user_text: str, mode: str = "auto", voice: bool = 
     cut = None
 
     def nudge(text):
-        """Steer the model WITHOUT it ever becoming part of the saved conversation: these are my instructions, not the user's words."""
         if msgs and msgs[-1].get("role") == "assistant":
-            msgs[-1]["_internal"] = True                                   # the answer being corrected is dropped too
+            msgs[-1]["_internal"] = True
         msgs.append({"role": "user", "content": text, "_internal": True})
 
     def clean(ms):
@@ -907,13 +882,13 @@ def chat(history: list[dict], user_text: str, mode: str = "auto", voice: bool = 
     def saved():
         return [x for x in msgs[1:] if not x.get("_internal")]
     tainted = untrusted or any(m.get("role") == "tool" and (m.get("tool_name") in UNTRUSTED or (m.get("tool_name") == "read_file" and "[untrusted]" in str(m.get("content", ""))))
-                  for m in history)                   # all of it: the model still reads outside text 13-30 messages back (audit 2026-10-20)
+                  for m in history)
     for _ in range(max_steps):
         try:
             r = httpx.post(OLLAMA, timeout=300, json={
                 "model": MODEL, "messages": clean(msgs), "tools": _schema(active), "stream": False, "think": False,
                 "keep_alive": "30m", "options": {**ctxsize.options(MODEL), "temperature": 0.2, "num_predict": 350 if voice else 2000}}).json()
-        except httpx.HTTPError as e:                                # the model server is down or restarting (it was killed for memory once): say so instead of crashing
+        except httpx.HTTPError as e:
             return f"My language model is not answering right now ({type(e).__name__}). It usually comes back within a minute: please try again.", pending, saved()
         m = r.get("message")
         if not m:
@@ -925,24 +900,24 @@ def chat(history: list[dict], user_text: str, mode: str = "auto", voice: bool = 
                 msgs.append({"role": "assistant", "content": forced_question})
                 return forced_question, pending, saved()
             if not first_text and not tried and text and not STUB.search(text):
-                first_text = text                                          # the model's own first answer: the fallback if a retry only produces filler
+                first_text = text
             last = re.split(r"(?<=[.!?])\s+|\n+", text.strip())[-1] if text.strip() else ""
             announces = re.match(r"(i['’]ll|i will|let me|first,? i|i need to know|before i|now i['’]ll|next,? i)", last.strip(), re.I) or last.rstrip().endswith(":") or re.match(r"(i['’]ll|i will|let me)\b", text.strip(), re.I)
             small_talk = bool(CHITCHAT.match(user_text.strip()))
             if not pending and not small_talk and stalled < 2 and (not text.strip() or last.rstrip(" *_").endswith("?") or announces):
-                stalled += 1                                               # it asked or announced instead of doing: send it back to work
+                stalled += 1
                 nudge("Do not ask and do not announce. I want this DONE now. Decide any missing details yourself (times, titles, which free slot, which project), "
                       "call the right tools, and then give a one-sentence result. Never move, shorten or delete an existing event or task that I did not ask you to change: if there is a clash, "
                       "choose the nearest free slot ON THE SAME DAY and say so. Only if something required truly cannot be guessed, ask ONE short question.")
                 continue
-            if REFUSAL.search(text) and not tried and not refused and not small_talk and not OUTSIDE_WORLD.search(user_text):     # it gave up without trying: open every tool group and make it do the job
+            if REFUSAL.search(text) and not tried and not refused and not small_talk and not OUTSIDE_WORLD.search(user_text):
                 refused = True
                 active = set(GROUP_RE) | {"build"}
                 nudge("Do not say you cannot or tell me to do it myself. You have run_command (shell on this PC: nvidia-smi, sensors, df, any program), "
                              "get_weather, web_search, search_email, mail tools and build_tool (write your own small program). Pick the right one now, use it, and give me the real answer. "
                              "Only if a real attempt fails, say what you tried.")
                 continue
-            if failed and not pending:                               # a change failed or was refused: the user must never be told it happened
+            if failed and not pending:
                 names = ", ".join(failed)
                 if not err_nudged:
                     err_nudged = True
@@ -951,11 +926,11 @@ def chat(history: list[dict], user_text: str, mode: str = "auto", voice: bool = 
                 if not re.search(r"(not |n't |couldn't|could not|failed|didn't|unable|overlap|conflict|error|no change)", text, re.I):
                     text += f"\n\n⚠️ That did NOT happen: {names} failed ({'; '.join(failed.values())}). Nothing was changed."
             if not pending and not read_nudged and READ_QUESTION.search(user_text) and READ_SUBJECT.search(user_text) and not (tried & READ_TOOLS):
-                read_nudged = True                                         # a calendar or task question must be answered from the real data, never from memory
+                read_nudged = True
                 nudge("Look it up with the right tool (get_schedule, find_free_time, list_tasks...) before you answer. Never answer calendar or task questions from memory or from earlier messages.")
                 continue
             if not pending and not weather_nudged and (WEATHER_TALK.search(user_text) or WEATHER_READING.search(text)) and "get_weather" not in tried:
-                weather_nudged = True                                      # weather facts (temperatures, rain) must come from the real forecast, never from memory
+                weather_nudged = True
                 nudge("Call get_weather first (place from the user's words) and answer only from its result. Never state weather you did not look up.")
                 continue
             bad = unbacked_claims(text, used) if not pending else []
@@ -966,23 +941,23 @@ def chat(history: list[dict], user_text: str, mode: str = "auto", voice: bool = 
                     continue
                 done = ", ".join(sorted(t for t in used if t in WRITE_TOOLS)) or "nothing"
                 text = f"I told you I did something I did not actually do, so it did NOT happen. What I really did this time: {done}. Tell me again and I will do it properly."
-            if stalled >= 2 and not pending and (not text.strip() or announces):        # it kept announcing instead of acting: say so honestly
+            if stalled >= 2 and not pending and (not text.strip() or announces):
                 text = (text.strip() + "\n\n" if text.strip() else "") + "I did not get that done, so nothing was changed. Say it again, shorter, and I will do it."
             if STUB.search(text) and first_text and not pending:
                 text = first_text
-            if pending:                                                    # never let the words claim it is done while it is still waiting for the user's OK
+            if pending:
                 text = "Ready: " + "; ".join(p["summary"].rstrip(".") for p in pending) + "."
             if cut and not re.search(r"\b%d\b" % cut["total_results"], text):
                 text += "\n\n(Only %d of %d items fit, so this list is incomplete. Ask me to narrow it down.)" % (cut["results_shown"], cut["total_results"])
             final = text if pending else deoffer(text)
             if msgs[-1].get("role") == "assistant":
-                msgs[-1]["content"] = final                                # history must hold what the user was told, not a claim that was corrected
+                msgs[-1]["content"] = final
             return final, pending, saved()
         for call in m["tool_calls"]:
             name, args = call["function"]["name"], call["function"]["arguments"]
-            args = {k: v for k, v in (args or {}).items() if not str(k).startswith("_")}   # private args (like _confirmed) can only come from the user's Confirm
+            args = {k: v for k, v in (args or {}).items() if not str(k).startswith("_")}
             held = guard(name, args, tainted)
-            phone.force_ask = tainted                                     # outside content was read: texts and calls always wait for the user
+            phone.force_ask = tainted
             blocked = ""
             if name in CHANGE_TOOLS and not CHANGE_INTENT.search(user_text):
                 blocked = "The user did not ask you to move, change or delete existing items. Do not touch them. Find a free slot with find_free_time, or tell the user about the clash."
@@ -1003,30 +978,30 @@ def chat(history: list[dict], user_text: str, mode: str = "auto", voice: bool = 
                 result = result if name not in TOOLS else (held if held else fn(**args))
             except gcal.LoginExpired as e:
                 result = {"error": str(e)}
-            except Exception as e:  # report plainly to the model, never hide
+            except Exception as e:
                 result = {"error": f"{type(e).__name__}: {e}"}
             if isinstance(result, dict) and result.get("status") == "needs_confirmation":
                 pending.append({"token": result["token"], "summary": result["summary"], **({"auto": True} if result.get("auto") else {})})
             tried.add(name)
             if isinstance(result, dict) and result.get("ask_user"):
-                forced_question = result.get("question", "Which one?")           # a real question for the user (like which of two contacts): never guess for them
+                forced_question = result.get("question", "Which one?")
             good = not (isinstance(result, dict) and (result.get("error") or result.get("status") in ("error", "conflict", "nothing", "nothing_to_move", "refused")))
             if good:
-                used.add(name)                                  # only a tool that really worked counts as 'did something'
+                used.add(name)
                 failed.pop(name, None)
             elif name in WRITE_TOOLS and not forced_question:
                 failed[name] = str(result.get("error") or result.get("message"))[:200]
             if not held and is_untrusted(name, args):
                 tainted = True
                 if chat_id is not None:
-                    TURN_OUTSIDE[chat_id] = True                  # the saved memory of this turn keeps only the owner's words
+                    TURN_OUTSIDE[chat_id] = True
                 if name == "read_file" and isinstance(result, dict) and "content" in result:
-                    result = {**result, "content": "[untrusted] " + str(result["content"])}   # marks it for the next turns' guard
+                    result = {**result, "content": "[untrusted] " + str(result["content"])}
             c = _cap(result)
             if isinstance(c, dict) and "total_results" in c:
                 cut = c
             msgs.append({"role": "tool", "tool_name": name, "content": c if isinstance(c, str) else json.dumps(c, default=str)})
-        if forced_question and not pending:                           # a real question for the user ends the turn now: no more guessing or retrying by the model
+        if forced_question and not pending:
             msgs.append({"role": "assistant", "content": forced_question})
             return forced_question, pending, saved()
     return "I got stuck. Please rephrase.", pending, saved()

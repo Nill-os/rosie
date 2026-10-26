@@ -1,5 +1,4 @@
-"""GitHub's Windows check: with every library from requirements.txt installed, Rosie starts from a copy of this checkout (sandboxed, empty
-data) and answers her health check, her home page and the page itself. The same check the launcher runs before it switches."""
+# board #917 safety-sandboxed-empty-data
 import importlib.util
 import shutil
 import sys
@@ -19,7 +18,7 @@ def main():
     slot.mkdir(parents=True)
     for d in ("app", "static"):
         shutil.copytree(HERE.parent.parent / d, slot / d)
-    launcher.venv_python = lambda s: Path(sys.executable)          # this job's own Python already has the libraries
+    launcher.venv_python = lambda s: Path(sys.executable)  # board #917 quirk-job-python-no-venv
     launcher.link_shared("A")
     res = launcher.smoke("A")
     print(res)

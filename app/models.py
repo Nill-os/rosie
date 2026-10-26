@@ -1,7 +1,4 @@
-"""Which local Ollama model Rosie thinks with. The owner picks it in Settings; it applies at once (no restart) and is kept in config.
-
-One model serves chat, workflows, her corner and the corner memory graph, so Ollama keeps a single copy loaded on the GPU.
-A model is only switched to after a test answer with a tool call, so a pick that can't run never leaves Rosie unable to answer."""
+# board #749 why-test-before-switch
 import threading
 import time
 
@@ -16,10 +13,10 @@ import workflows
 
 DEFAULT = "qwen3.5:9b"
 OLLAMA = "http://127.0.0.1:11434"
-GPU_FIT_BYTES = 7_000_000_000      # qwen3.5:9b (6.6 GB on disk) fits an 8 GB GPU at num_ctx 65536 with num_gpu 99 (7.7 GB peak); bigger files spill to the CPU and get slow
+GPU_FIT_BYTES = 7_000_000_000  # board #749 why-gpu-fit-size
 _lock = threading.Lock()
-_caps: dict[str, list] = {}         # model name -> Ollama capabilities (they don't change for a given name + digest)
-last_problem = ""                   # why the saved pick wasn't used at start, shown in Settings
+_caps: dict[str, list] = {}
+last_problem = ""
 
 
 def current() -> str:
@@ -27,8 +24,7 @@ def current() -> str:
 
 
 def _publish():
-    """Write the model this server really uses where helper processes read it (ctxsize.live_model): when the saved pick couldn't be
-    used, the server stays on the default and the helpers must too (audit pass 3)."""
+    # board #749 fix-helpers-follow-live-model
     import json
     import atomic
     try:
@@ -38,10 +34,10 @@ def _publish():
 
 
 def _apply(name: str):
-    agent.MODEL = workflows.MODEL = corner_browse.MODEL = name     # corner_graph reads corner_browse.MODEL at call time
+    agent.MODEL = workflows.MODEL = corner_browse.MODEL = name  # board #749 quirk-corner-graph-reads-model
     corner_browse.LIVE["set"] = True
     _publish()
-    ctxsize.push(name)                                            # and the corner gets that model's context window
+    ctxsize.push(name)
 
 
 def _capabilities(c: httpx.Client, name: str, digest: str) -> list:
@@ -52,7 +48,6 @@ def _capabilities(c: httpx.Client, name: str, digest: str) -> list:
 
 
 def installed() -> list[dict]:
-    """Every installed model, with whether Rosie can use it and why not."""
     out = []
     with httpx.Client(timeout=10) as c:
         for m in c.get(OLLAMA + "/api/tags").json().get("models", []):
@@ -68,7 +63,6 @@ def installed() -> list[dict]:
 
 
 def _probe(name: str) -> float:
-    """A real tool-call answer from the model, the same request shape as agent.chat. Returns seconds taken; raises with a plain reason."""
     tool = {"type": "function", "function": {"name": "get_time", "description": "Get the current time.",
                                              "parameters": {"type": "object", "properties": {}, "required": []}}}
     body = {"model": name, "stream": False, "think": False, "keep_alive": corner_browse.KEEP_ALIVE, "tools": [tool],
@@ -86,7 +80,6 @@ def _probe(name: str) -> float:
 
 
 def switch(name: str) -> dict:
-    """Test the model, then use it everywhere and save it. Returns {"model", "seconds", "fits_gpu"} or raises ValueError."""
     name = str(name or "").strip()
     with _lock:
         pick = next((m for m in installed() if m["name"] == name), None)
@@ -105,7 +98,7 @@ def switch(name: str) -> dict:
         global last_problem
         last_problem = ""
         tuning = False
-        if not testguard.active():                     # a model never tuned gets its context window measured now; Agent Zero follows either way
+        if not testguard.active():
             if name in (cfg.get("ctx") or {}):
                 threading.Thread(target=ctxsize.sync_agent_zero, args=(name,), daemon=True).start()
             else:
@@ -114,16 +107,15 @@ def switch(name: str) -> dict:
 
 
 def load_saved():
-    """At start: use the saved pick if it is still installed and usable; otherwise stay on the default and say why."""
     global last_problem
-    corner_browse.LIVE["set"] = True                              # from here this process's MODEL is the live one, whichever it is
+    corner_browse.LIVE["set"] = True
     name = config.load().get("chat_model") or DEFAULT
-    _publish()                                                    # the default until the pick is applied below (_apply publishes it)
+    _publish()
     if name == current():
         return
     try:
         pick = next((m for m in installed() if m["name"] == name), None)
-    except Exception as e:                           # Ollama not up yet: keep the default; health shows the model row
+    except Exception as e:
         last_problem = f"Couldn't reach Ollama to load {name} ({type(e).__name__}); using {current()}."
         return
     if pick and pick["usable"]:

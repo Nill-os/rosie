@@ -1,13 +1,3 @@
-"""Rosie's own Vector server: Vector (Anki/DDL robot on WireOS) sends what he hears here instead of to wire-pod or a cloud.
-
-How Vector finds it (seen in the shipped WireOS vic-cloud with REA, and in its source): vic-cloud reads
-/data/data/server_config.json when it exists (else the built-in vicapi.pvic.xyz cloud) and trusts the certificate in
-/data/data/wirepod-cert.crt. setup_robot() puts Rosie's address and certificate there over SSH.
-
-What Vector expects from the server (gRPC over TLS): chipper (voice: Ogg Opus after the wake word, answered with an
-intent or a spoken "knowledge" answer), jdocs (his settings documents) and token (session tokens). The voice request
-is cancelled 9 s after the wake word, so a slow answer from Rosie is spoken afterwards through his SDK port
-(vector_bot.py) instead."""
 import base64
 import datetime
 import hashlib
@@ -49,45 +39,41 @@ DIR = ROOT / "data" / "vector"
 CERT = DIR / "cert.pem"
 KEY = DIR / "key.pem"
 DOCS = DIR / "jdocs.json"
-TOKEN = DIR / "client_token"                       # Rosie's SDK client token for Vector (a secret: anyone with it can drive him)
+TOKEN = DIR / "client_token"
 SSH_KEY = DIR / "ssh_root_key"
 LAST_HEARD = DIR / "last_heard.wav"
-SSH_KEY_URL = "https://raw.githubusercontent.com/kercre123/unlocking-vector/refs/heads/main/ssh_root_key"   # the public WireOS/unlocked-robot key
+SSH_KEY_URL = "https://raw.githubusercontent.com/kercre123/unlocking-vector/refs/heads/main/ssh_root_key"
 WIREPOD = Path.home() / "wire-pod" / "chipper"
-EP_CERT = DIR / "ep.crt"                           # the escape pod certificate DDL built into 2.0.1.6076ep firmware (public, in wire-pod)
+EP_CERT = DIR / "ep.crt"
 EP_KEY = DIR / "ep.key"
 EP_URL = "https://raw.githubusercontent.com/kercre123/wire-pod/main/chipper/epod/"
-EP_PORT = 443                                      # escape pod firmware always calls escapepod.local:443
+EP_PORT = 443
 PORT_RULE = "echo 'net.ipv4.ip_unprivileged_port_start=443' | sudo tee /etc/sysctl.d/60-rosie-vector.conf && sudo sysctl --system"
-VOICE_BUDGET_S = 8.0                               # vic-cloud cancels the request 9 s after the wake word
-SAY_MAX = 700                                      # characters Vector reads out in one answer
+VOICE_BUDGET_S = 8.0
+SAY_MAX = 700
 
 _lock = threading.Lock()
 _server = None
 _check = None
-_mdns = None                                       # avahi-publish: escapepod.local -> this PC, while the server runs
+_mdns = None
 _robot_obj = None
 _face = None
 _jwt_key = None
-_life = threading.RLock()                          # start / stop / robot() one at a time
-_cmd_seq = 0                                       # the latest sit / move command wins (a quick "sit, no, you can move")
-timers = vector_face.Timers()                      # timers Rosie keeps while he sits (shown on his face)
+_life = threading.RLock()
+_cmd_seq = 0
+timers = vector_face.Timers()
 status = {"running": False, "last": None, "error": ""}
-brain = None                                       # set by server.py: brain(text) -> reply text (Rosie's own chat)
-tts = None                                         # set by server.py: tts(text) -> (float audio, sample rate) in Rosie's own voice
-ROSIE_SPEAKS_INTENT = "intent_greeting_hello"      # the voice request's answer when Rosie's voice follows: his greeting starts and
-                                                   # is cut by Rosie taking control a moment later (wire-pod does the same). An intent
-                                                   # sent while Rosie already held control went unclaimed, and on release he played
-                                                   # "can't do that" over her audio and vic-anim crashed (2026-10-21 19:46).
+brain = None
+tts = None
+ROSIE_SPEAKS_INTENT = "intent_greeting_hello"
+                                                   # board #799 fix-take-control-delay
 TAKE_CONTROL_AFTER_S = 0.2
 
 
-# addresses and certificate ---------------------------------------------------------------------------------------
 def lan_ip() -> str:
-    """This PC's address on the home network (the one Vector can reach)."""
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
-        s.connect(("10.255.255.255", 1))           # no packet is sent; this only picks the outgoing interface
+        s.connect(("10.255.255.255", 1))
         return s.getsockname()[0]
     except Exception:
         return "127.0.0.1"
@@ -100,15 +86,13 @@ def host() -> str:
 
 
 def ensure_cert(addr: str) -> str:
-    """Rosie's server certificate for `addr` (made once, remade when the address changes). Returns the PEM."""
     from cryptography import x509
     from cryptography.hazmat.primitives import hashes, serialization
     from cryptography.hazmat.primitives.asymmetric import rsa
     from cryptography.x509.oid import NameOID
     import ipaddress
     if CERT.exists() and KEY.exists() and addr.startswith("127."):
-        # no network yet (Rosie started before the Wi-Fi): keep the certificate Vector trusts. A new one for 127.0.0.1 made Vector stop
-        # trusting Rosie until the robot setup was run again, and every later start made yet another (audit pass 3)
+        # board #799 why-keep-old-certificate
         return CERT.read_text()
     if CERT.exists() and KEY.exists():
         cert = x509.load_pem_x509_certificate(CERT.read_bytes())
@@ -142,7 +126,6 @@ def ensure_cert(addr: str) -> str:
 
 
 def server_config(addr: str | None = None) -> dict:
-    """What goes into Vector's /data/data/server_config.json."""
     cfg = config.load()
     addr = addr or host()
     grpc_at = f"{addr}:{int(cfg.get('vector_port', 8084))}"
@@ -150,7 +133,6 @@ def server_config(addr: str | None = None) -> dict:
             "logfiles": "s3://anki-device-logs-prod/victor", "appkey": "oDoa0quieSeir6goowai7f"}
 
 
-# settings documents and tokens ---------------------------------------------------------------------------------------
 def _load_docs() -> dict:
     try:
         return json.loads(DOCS.read_text())
@@ -167,7 +149,6 @@ def _save_docs(docs: dict):
 
 
 def import_wirepod() -> int:
-    """Take over the settings documents and SDK token wire-pod kept for each robot, so nothing on Vector is reset."""
     n = 0
     try:
         old = json.loads((WIREPOD / "jdocs" / "jdocs.json").read_text())
@@ -191,7 +172,7 @@ def import_wirepod() -> int:
         if r.get("esn") and not any(x.get("esn") == r["esn"] for x in robots):
             robots.append({"esn": r["esn"], "ip": r.get("ip_address", "")})
         if r.get("guid") and not TOKEN.exists():
-            _write_token(r["guid"])                     # the robot already accepts wire-pod's token: Rosie keeps using it
+            _write_token(r["guid"])
     _set_cfg(vector_robots=robots)
     return n
 
@@ -216,7 +197,6 @@ def client_token() -> str:
 
 
 def token_hash(guid: str, salt: bytes | None = None) -> str:
-    """vic-gateway's check: base64(sha256(token bytes + salt) + salt), 16-byte salt."""
     salt = salt if salt is not None else secrets.token_bytes(16)
     return base64.b64encode(hashlib.sha256(base64.b64decode(guid) + salt).digest() + salt).decode()
 
@@ -227,7 +207,6 @@ def token_matches(guid: str, hashed: str) -> bool:
 
 
 def _app_tokens(thing: str) -> dict:
-    """vic.AppTokens for a robot, always including Rosie's own client token."""
     docs = _load_docs()
     doc = docs.get(thing, {}).get("vic.AppTokens") or {"doc_version": 1, "fmt_version": 1, "client_metadata": "rosie", "json_doc": "{}"}
     try:
@@ -247,7 +226,6 @@ def _app_tokens(thing: str) -> dict:
 
 
 def _jwt(esn: str) -> str:
-    """A session token in the shape vic-cloud reads (it only looks at the claims; wire-pod signs with a throwaway key too)."""
     from cryptography.hazmat.primitives import hashes
     from cryptography.hazmat.primitives.asymmetric import padding, rsa
     b64 = lambda b: base64.urlsafe_b64encode(b).rstrip(b"=").decode()
@@ -257,13 +235,12 @@ def _jwt(esn: str) -> str:
               "token_id": secrets.token_hex(16), "token_type": "user+robot", "user_id": "rosie"}
     head = b64(json.dumps({"alg": "RS512", "typ": "JWT"}).encode()) + "." + b64(json.dumps(claims).encode())
     global _jwt_key
-    if _jwt_key is None:                              # one throwaway key per run: making an RSA key per request is slow
+    if _jwt_key is None:
         _jwt_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     key = _jwt_key
     return head + "." + b64(key.sign(head.encode(), padding.PKCS1v15(), hashes.SHA512()))
 
 
-# who may talk to the server --------------------------------------------------------------------------------------------
 def _peer_ip(context) -> str:
     p = context.peer() or ""
     m = re.match(r"ipv4:([\d.]+):\d+", p) or re.match(r"ipv6:\[(?:::ffff:)?([^\]]+)\]:\d+", p)
@@ -271,8 +248,7 @@ def _peer_ip(context) -> str:
 
 
 def allowed(ip: str) -> bool:
-    """Only the addresses of Rosie's own robots. A robot at a new address is not taken on trust (someone on the network
-    could pass his requests through and collect his token): the owner reconnects him on the Vector page."""
+    # board #799 safety-trust-known-addresses
     return any(r.get("ip") == ip for r in config.load().get("vector_robots") or [])
 
 
@@ -290,7 +266,6 @@ def _esn(device_id: str) -> str:
     return (device_id or "").split(":")[-1].lower()
 
 
-# the voice path ------------------------------------------------------------------------------------------------------
 def _hear(first, rest, t0) -> str:
     _listening.set()
     try:
@@ -299,32 +274,32 @@ def _hear(first, rest, t0) -> str:
         _listening.clear()
 
 
-FOLLOWUP_WAIT_MS = 6000                            # a follow-up: how long he waits for you to start talking (a wake word: 3.5 s)
+FOLLOWUP_WAIT_MS = 6000
 
 
 def _hear_inner(first, rest, t0) -> str:
     mic = vector_audio.MicStream(first.input_audio)
     followup = time.time() < _followup_until
-    if followup and rosie_voice():                       # Rosie answers at once after hearing, so most of his 9 s can be listening
+    if followup and rosie_voice():
         ep = vector_audio.Endpointer(no_speech_ms=FOLLOWUP_WAIT_MS, max_ms=7500)
         limit = 8.0
     else:
-        ep = vector_audio.Endpointer(max_ms=max(1500, int((VOICE_BUDGET_S - 3.0) * 1000)))   # at least 3 s is left for Rosie
+        ep = vector_audio.Endpointer(max_ms=max(1500, int((VOICE_BUDGET_S - 3.0) * 1000)))
         limit = max(2.0, VOICE_BUDGET_S - 2.5)
     ep.add(mic.add(first.input_audio))
     while not ep.done and time.time() - t0 < limit:
-        if _face is not None and _menu.recent_press(2.0):  # his backpack button while he sits: the menu, not a question
+        if _face is not None and _menu.recent_press(2.0):
             return ""
         try:
             req = next(rest)
-        except (StopIteration, grpc.RpcError, ValueError):     # he stopped sending, or cancelled the request
+        except (StopIteration, grpc.RpcError, ValueError):
             break
         ep.add(mic.add(req.input_audio))
     status["heard_s"] = round(len(mic.pcm) / 32000, 1)
     if not ep.heard:
         return ""
     import stt
-    try:                                                 # the last thing he heard, to tune listening (overwritten each time, stays on this PC)
+    try:
         DIR.mkdir(parents=True, exist_ok=True)
         LAST_HEARD.write_bytes(vector_audio.wav_bytes(bytes(mic.pcm)))
     except OSError:
@@ -334,7 +309,7 @@ def _hear_inner(first, rest, t0) -> str:
     return text
 
 
-_heard_log: list = []                               # (time, words) of what Vector heard lately
+_heard_log: list = []
 
 
 def _note_heard(text: str):
@@ -344,8 +319,8 @@ def _note_heard(text: str):
         del _heard_log[:-10]
 
 
-_listening = threading.Event()                    # a voice request from him is being heard right now
-_speaking_until = 0.0                              # Rosie talks through him until about then (and a moment after)
+_listening = threading.Event()
+_speaking_until = 0.0
 
 
 def _speaking_for(secs: float):
@@ -354,14 +329,10 @@ def _speaking_for(secs: float):
 
 
 def busy() -> bool:
-    """He is hearing a request or Rosie is talking through him: the PC's and phone's listening ignore what they hear
-    now (it is his conversation, or his own voice coming out of his speaker)."""
     return _listening.is_set() or time.time() < _speaking_until
 
 
 def heard_same(text: str, within_s: float = 15.0, wait_s: float = 4.0) -> bool:
-    """True when Vector heard (nearly) the same words in the last `within_s` seconds: the same "Hey Rosie" also woke
-    the phone or the PC, and only one of them should answer. If he is still hearing a request, wait for it first."""
     if _listening.is_set():
         end = time.time() + wait_s
         while _listening.is_set() and time.time() < end:
@@ -376,16 +347,14 @@ def heard_same(text: str, within_s: float = 15.0, wait_s: float = 4.0) -> bool:
     return False
 
 
-VECTOR_WORDS = "Rosie, Vector. Sit. Stay. You can move. What time is it? Set a timer."   # words he hears most: a hint to speech to text
+VECTOR_WORDS = "Rosie, Vector. Sit. Stay. You can move. What time is it? Set a timer."
 
 
 def _transcribe(pcm) -> str:
-    """Speech to text tuned for short spoken commands: greedy decoding (beam 1) and no second VAD pass (his audio is
-    already cut at the end of speech). About twice as fast as the default; same model, glossary and junk filter."""
     import stt
     if not hasattr(stt, "get_model"):
         return " ".join(s["text"] for s in stt.transcribe(pcm)).strip()
-    model = config.load().get("vector_stt_model") or "base.en"   # base.en: about 0.5 s a sentence on this PC, small.en about 1.5 s
+    model = config.load().get("vector_stt_model") or "base.en"
     segs, _ = stt.get_model(model).transcribe(pcm, language="en", beam_size=1, best_of=1, vad_filter=False,
                                                    condition_on_previous_text=False, without_timestamps=True,
                                                    initial_prompt=(VECTOR_WORDS + " " + stt.glossary()).strip())
@@ -397,7 +366,7 @@ def _speakable(text: str) -> str:
     t = re.sub(r"```.*?```", " ", text, flags=re.S)
     t = re.sub(r"[*_#`>|\[\]]", "", t)
     t = re.sub(r"https?://\S+", "a link", t)
-    t = re.sub(r"[^\x00-\x7FÀ-ɏ]", "", t)          # emoji and symbols Vector would spell out
+    t = re.sub(r"[^\x00-\x7FÀ-ɏ]", "", t)
     t = " ".join(t.split())
     if len(t) > SAY_MAX:
         cut = t[:SAY_MAX]
@@ -406,7 +375,6 @@ def _speakable(text: str) -> str:
 
 
 def robot() -> "vector_bot.Robot | None":
-    """Rosie's SDK connection to her robot (the first one set up), made when first needed."""
     global _robot_obj
     cfg = config.load()
     robots = cfg.get("vector_robots") or []
@@ -417,7 +385,7 @@ def robot() -> "vector_bot.Robot | None":
     with _life:
         if _robot_obj is None or _robot_obj.ip != r["ip"]:
             if _robot_obj is not None:
-                _robot_obj.close(restore_volume=False)  # his address changed: the old connection goes
+                _robot_obj.close(restore_volume=False)
             if not pinned.exists():
                 DIR.mkdir(parents=True, exist_ok=True)
                 pinned.write_text(vector_bot.fetch_cert(r["ip"]))
@@ -427,7 +395,6 @@ def robot() -> "vector_bot.Robot | None":
 
 
 def _loud():
-    """His wake word started a request: give him his voice back (quiet when idle)."""
     def up():
         bot = robot()
         if bot is not None:
@@ -437,7 +404,6 @@ def _loud():
 
 
 def _quiet_after(out):
-    """Mute him again once his answer is over: spoken words take about 0.5 s each; a skill (dance, fist bump) up to 20 s."""
     if not config.load().get("vector_quiet_idle"):
         return
     secs = 4 + 0.5 * len(out[1].split()) if out[0] == "say" else 20
@@ -459,12 +425,10 @@ def _later(fn, *a):
 
 
 def rosie_voice() -> bool:
-    """Speak with Rosie's own voice (Settings > Vector > Voice), not his built-in one."""
     return tts is not None and (config.load().get("vector_voice") or "rosie") == "rosie"
 
 
 def speak(words: str, bot=None, ctl="borrow"):
-    """Say `words` through him: Rosie's voice streamed to his speaker, or his own voice."""
     bot = bot or robot()
     if bot is None:
         raise RuntimeError("no robot set up")
@@ -485,8 +449,6 @@ def _say(words: str):
 
 
 def _voice_answer(out):
-    """A spoken answer in Rosie's voice: answer the voice request first (his greeting starts), then take control and
-    play her voice."""
     if out[0] != "say" or not rosie_voice():
         return out
     bot = robot()
@@ -498,7 +460,7 @@ def _voice_answer(out):
 
 def _speak_after_answer(words: str, bot):
     time.sleep(TAKE_CONTROL_AFTER_S)
-    if bot.held:                                          # he sits: his listening took control; take the hold back first
+    if bot.held:
         bot.rehold()
         speak(words, bot, ctl=None)
     else:
@@ -510,8 +472,6 @@ def commands() -> list[dict]:
 
 
 def sit(bot, say_first: str = "") -> bool:
-    """He sits: Rosie holds him, says `say_first` (in her voice) under that same hold, starts his face screens, and
-    takes control again a few times while his voice reaction finishes. The page's Sit button and "sit" both use this."""
     global _face
     if not bot.hold():
         return False
@@ -530,7 +490,6 @@ def sit(bot, say_first: str = "") -> bool:
     return True
 
 
-# his face menu while he sits (vector_menu.py) -------------------------------------------------------------------------
 def _menu_apply(body: dict):
     import vector_api
     vector_api.vector_settings(body)
@@ -538,7 +497,7 @@ def _menu_apply(body: dict):
 
 def _menu_closed():
     bot = _robot_obj
-    if bot is not None and bot.held:                     # "Hey Rosie" works again (OVERRIDE_BEHAVIORS drops it)
+    if bot is not None and bot.held:
         bot.rehold(priority=vector_bot.SIT_PRIORITY)
 
 
@@ -572,8 +531,6 @@ def _stop_menu():
 
 
 def _on_button():
-    """His backpack button while he sits (seen in his state stream). An open menu takes it at once; otherwise his
-    listening starts too, and route() opens the menu when that request comes in (or the fallback here does)."""
     if _face is None or _menu.press():
         return
     pressed = _menu.pressed_at
@@ -586,8 +543,6 @@ def _on_button():
 
 
 def _open_menu(after_wake: bool):
-    """Hold him at OVERRIDE_BEHAVIORS (more presses don't start his listening) and show the menu. After his listening:
-    his greeting intent answered the request first, so control is taken TAKE_CONTROL_AFTER_S later (the safe order)."""
     bot = _robot_obj
     if bot is None or _face is None:
         return
@@ -598,7 +553,6 @@ def _open_menu(after_wake: bool):
 
 
 def stop_face():
-    """Sit screens off, Rosie keeps holding him (game controller driving mode)."""
     global _face
     _stop_menu()
     if _face is not None:
@@ -607,7 +561,6 @@ def stop_face():
 
 
 def stand(bot, say_after: str = ""):
-    """He may move again: screens stop, Rosie lets go, then says `say_after` (borrowing control just for that)."""
     global _face
     _stop_menu()
     if _face is not None:
@@ -619,15 +572,14 @@ def stand(bot, say_after: str = ""):
 
 
 def _do_command(cmd: dict, seq: int | None = None, voiced: bool = False):
-    """voiced: Rosie says the command's reply herself (her voice); otherwise he already said it (his voice)."""
     bot = robot()
     if bot is None:
         raise RuntimeError("no robot set up")
     action = cmd.get("action")
     reply = cmd.get("reply", "") if voiced else ""
     if action == "hold":
-        time.sleep(TAKE_CONTROL_AFTER_S if voiced else 2.5)   # his own voice: let him finish saying "okay" first
-        if seq is not None and seq != _cmd_seq:          # "you can move" came in the meantime
+        time.sleep(TAKE_CONTROL_AFTER_S if voiced else 2.5)
+        if seq is not None and seq != _cmd_seq:
             return
         sit(bot, reply)
     elif action == "release":
@@ -650,7 +602,6 @@ SEE_PROMPT = ("You are looking through the camera of Vector, the small desk robo
 
 
 def see(question: str) -> str:
-    """Rosie looks through Vector's camera with her own chat model (it has vision, so nothing else is loaded on the GPU)."""
     bot = robot()
     if bot is None:
         return "I can't reach my camera right now."
@@ -672,7 +623,6 @@ SEE_CHAT = ("You are Vector, a small desk robot, talking with Rosie's voice, and
 
 
 def _vision_stream(jpg: bytes, system: str, question: str, num_predict: int = 160):
-    """Like _vision, streamed: he starts talking after the first sentence."""
     import json as _json
     import agent
     import ctxsize
@@ -691,7 +641,6 @@ def _vision_stream(jpg: bytes, system: str, question: str, num_predict: int = 16
 
 
 def _look_pieces(text: str, bot):
-    """'What do you see' as a conversation: a fresh picture, Rosie's model reacts to it in his personality (with moves)."""
     persona = config.load().get("vector_personality", "").strip()
     system = SEE_CHAT + (f" Your personality: {persona}" if persona else "") + mood_line() + vector_moves.prompt_hint(sitting())
     try:
@@ -711,7 +660,6 @@ def _look_pieces(text: str, bot):
 
 
 def _vision(jpg: bytes, system: str, question: str, num_predict: int = 120) -> str:
-    """One picture from his camera, one question, Rosie's own model's answer."""
     import agent
     import ctxsize
     import httpx
@@ -724,12 +672,11 @@ def _vision(jpg: bytes, system: str, question: str, num_predict: int = 120) -> s
 
 
 def _eyes_task(kind: str, thing: str = "", voiced: bool = True):
-    """Look around, or go to a thing, with control borrowed at DEFAULT (his cliff and pick-up reactions still win)."""
     bot = robot()
     if bot is None:
         return
     if voiced:
-        time.sleep(TAKE_CONTROL_AFTER_S)                 # his greeting intent answered the request first: the safe order
+        time.sleep(TAKE_CONTROL_AFTER_S)
     ctl = bot.borrow(priority=vector_bot.behavior_pb2.ControlRequest.DEFAULT)
     try:
         speak("Let me look around." if kind == "around" else "On my way.", bot, ctl=None)
@@ -758,8 +705,6 @@ def _eyes_task(kind: str, thing: str = "", voiced: bool = True):
 
 
 def answer(text: str, t0: float, think_fn=None) -> str:
-    """Rosie's answer when it is ready within the voice request; otherwise a short "thinking" line now, and the
-    answer is spoken through Vector's SDK port when it comes."""
     think_fn = think_fn or _ask_brain
     box: dict = {}
     lock = threading.Lock()
@@ -785,22 +730,20 @@ def answer(text: str, t0: float, think_fn=None) -> str:
     return "Let me think about that."
 
 
-# conversation: answered at once, Rosie's voice streamed sentence by sentence, then he listens again ---------------------------
-brain_stream = None                                # set by server.py: brain_stream(text) -> pieces of Rosie's reply (no tools, fast)
-FOLLOWUP_S = 12.0                                  # after he answers, he listens again (no wake word) for a follow-up
-_voice_lock = threading.Lock()                     # one voice at a time through his speaker
-_talk_gen = 0                                      # bumped by each new voice request: an older answer stops at its next sentence
+brain_stream = None
+FOLLOWUP_S = 12.0
+_voice_lock = threading.Lock()
+_talk_gen = 0
 
 
 def interrupt_talk():
-    """A new request from him: the answer still playing stops at its next sentence (no two answers at once)."""
     global _talk_gen
     _talk_gen += 1
 _followup_until = 0.0
-ONE_MOMENT_S = 3.0                                   # no first words by then: he says a short filler (never the same twice in a row)
+ONE_MOMENT_S = 3.0
 FILLERS = ("Hmm.", "One sec.", "Let me think.", "Ooh, good one.", "Hang on.")
 LOOK_FILLERS = ("Let me see.", "Ooh, let me look.", "Hmm, looking.")
-_filler_pcm: dict = {}                               # text -> 16 kHz PCM, made on first use so the filler starts at once afterwards
+_filler_pcm: dict = {}
 _last_filler = ""
 TOOL_CUES = re.compile(r"\b(calendar|schedule|appointments?|meetings?|events?|remind(?:er|ers)?|tasks?|to-?dos?|lists?|text|message|sms|"
                        r"call|phone|e-?mails?|mail|inbox|notes?|projects?|alarm|weather|search|look up|google|news|paper|"
@@ -811,12 +754,10 @@ SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
 
 
 def needs_tools(text: str) -> bool:
-    """Requests that need Rosie's tools (calendar, tasks, texts...) go to her full brain; plain talk takes the fast path."""
     return bool(TOOL_CUES.search(text))
 
 
 def sentences(pieces):
-    """Streamed text -> whole sentences as soon as each one ends (short ones are joined to the next)."""
     buf = ""
     for piece in pieces:
         buf += piece
@@ -833,7 +774,6 @@ def sentences(pieces):
 
 
 def _start_look(text: str, t0: float) -> tuple:
-    """'What do you see' in Rosie's voice: answered at once, then a conversation about the picture (with a follow-up)."""
     bot = robot()
     if bot is None:
         return ("say", answer(text, t0, see))
@@ -842,8 +782,6 @@ def _start_look(text: str, t0: float) -> tuple:
 
 
 def _start_talk(text: str, t0: float) -> tuple:
-    """Take control now (his own answer behavior stops), answer the voice request with a quiet intent at once, and
-    let Rosie talk in the background. Without control: the old way (his voice, within the 9 s limit)."""
     bot = robot()
     if bot is None:
         return ("say", answer(text, t0))
@@ -852,7 +790,6 @@ def _start_talk(text: str, t0: float) -> tuple:
 
 
 def pick_filler(look: bool = False) -> tuple:
-    """(text, 16 kHz PCM) of a random filler other than the last one said; each clip is synthesized once and kept."""
     global _last_filler
     pool = LOOK_FILLERS if look else FILLERS
     words = random.choice([w for w in pool if w != _last_filler] or list(pool))
@@ -864,12 +801,9 @@ def pick_filler(look: bool = False) -> tuple:
 
 
 def _converse(text: str, bot, ctl, look: bool = False):
-    """Rosie's answer in her voice: each sentence is synthesized while the one before plays, and his moves for that
-    sentence run while it plays (vector_moves). look: the answer is about a fresh picture from his camera. Then a
-    follow-up window."""
     global _followup_until
     gen = _talk_gen
-    if ctl == "later":                                   # the voice request is answered first; then control (his greeting stops)
+    if ctl == "later":
         time.sleep(TAKE_CONTROL_AFTER_S)
         try:
             ctl = bot.borrow(3.0)
@@ -888,14 +822,14 @@ def _converse(text: str, bot, ctl, look: bool = False):
             else:
                 pieces = [brain(text) if brain is not None else "Rosie isn't connected to me yet."]
             for sent in sentences(pieces):
-                if gen != _talk_gen:                     # he was asked something new: stop making this answer
+                if gen != _talk_gen:
                     break
                 clean, moves = vector_moves.split(sent)
                 words = _speakable(clean)
                 if words:
                     audio, sr = tts(words)
                     pcm_q.put((vector_audio.to_16k_pcm(audio, sr), moves))
-                elif moves:                              # a move tag after the last sentence: still done
+                elif moves:
                     pcm_q.put((b"", moves))
         except Exception as e:
             status["error"] = f"Talk: {type(e).__name__}: {e}"
@@ -907,7 +841,7 @@ def _converse(text: str, bot, ctl, look: bool = False):
     try:
         try:
             first = pcm_q.get(timeout=ONE_MOMENT_S)
-        except queue.Empty:                              # a slow (tool) answer: say so instead of sitting in silence
+        except queue.Empty:
             _, pcm = pick_filler(look)
             threading.Thread(target=vector_moves.perform, args=(bot, ["look_up"], sitting()), daemon=True, name="vector-think").start()
             with _voice_lock:
@@ -929,27 +863,26 @@ def _converse(text: str, bot, ctl, look: bool = False):
             ctl.stop()
         global _speaking_until
         _speaking_until = time.time() + 2.0
-    if gen != _talk_gen:                                 # a newer request took over: it does the follow-up
+    if gen != _talk_gen:
         return
     if sitting():
-        _later(_back_to_sitting)                         # after Rosie finished talking: his screens back
+        _later(_back_to_sitting)
     if config.load().get("vector_followup", True):
         ip = getattr(bot, "ip", "")
-        time.sleep(0.4)                                  # let his behaviors come back before he listens
+        time.sleep(0.4)
         if ip and vector_dev.listen(ip):
             _followup_until = time.time() + FOLLOWUP_S
 
 
 def route(text: str, t0: float) -> tuple:
-    """('intent', name, params) for Vector's own skills, or ('say', words)."""
-    if not text or vector_intents.is_filler(text):      # "uh-huh" and noise are not requests
-        if time.time() < _followup_until:               # the follow-up window closed with nothing said: the talk is over
+    if not text or vector_intents.is_filler(text):
+        if time.time() < _followup_until:
             return ("intent", "intent_system_noaudio", {})
-        if sitting() and _face is not None and _menu.recent_press():   # his backpack button while he sits: the menu
+        if sitting() and _face is not None and _menu.recent_press():
             if not _menu.open:
                 _later(_open_menu, True)
             return ("intent", ROSIE_SPEAKS_INTENT, {})
-        if sitting() and _face is not None:              # nothing said while he sits: next screen
+        if sitting() and _face is not None:
             _face.next_screen()
             return ("intent", "intent_system_noaudio", {})
         return ("intent", "intent_system_noaudio", {})
@@ -959,7 +892,7 @@ def route(text: str, t0: float) -> tuple:
     if cmd:
         global _cmd_seq
         _cmd_seq += 1
-        if rosie_voice():                                # one task does it all, in order: no two grabbing control at once
+        if rosie_voice():
             _later(_do_command, cmd, _cmd_seq, True)
             return ("intent", ROSIE_SPEAKS_INTENT, {})
         _later(_do_command, cmd, _cmd_seq)
@@ -984,7 +917,7 @@ def route(text: str, t0: float) -> tuple:
         _later(_eyes_task, "go" if thing else "around", thing, False)
         return ("say", "On it.")
     if rosie_voice():
-        return ("talk", text)                            # answered right away; Rosie's voice follows sentence by sentence
+        return ("talk", text)
     return ("say", answer(text, t0))
 
 
@@ -994,13 +927,10 @@ MOVES = {"intent_imperative_forward", "intent_imperative_turnaround", "intent_im
          "intent_system_sleep", "intent_imperative_lookatme", "intent_photo_take_extend"}
 
 
-BACK_TO_SITTING_S = (3.0, 8.0, 15.0)               # his reaction to a voice request can still own his face for several seconds
+BACK_TO_SITTING_S = (3.0, 8.0, 15.0)
 
 
 def _back_to_sitting(delays=BACK_TO_SITTING_S):
-    """After a voice request while he sits: his listening took his face, so take control again on a fresh stream and
-    redraw. Done a few times, because a fresh hold while his reaction still plays does not stick (tested on Vector
-    2026-10-21: a re-take 5 s after his listening started failed, one at 7 s worked)."""
     start = time.time()
     for at in delays:
         time.sleep(max(0.0, start + at - time.time()))
@@ -1016,7 +946,6 @@ def sitting() -> bool:
 
 
 def _while_sitting(intent: str, params: dict) -> str:
-    """His own skills need his behaviors, which are off while he sits: Rosie keeps timers and tells the time herself."""
     if intent == "intent_clock_settimer_extend":
         secs = int(params.get("timer_duration", "0"))
         timers.add(secs)
@@ -1027,7 +956,7 @@ def _while_sitting(intent: str, params: dict) -> str:
     if intent == "intent_global_stop_extend":
         return "Timer canceled." if timers.cancel() else "No timer is running."
     if intent == "intent_clock_time":
-        return "It's " + datetime.datetime.now().strftime(timefmt.nopad("%-I:%M %p")).replace("AM", "a.m.").replace("PM", "p.m.")   # "p.m." ends the sentence
+        return "It's " + datetime.datetime.now().strftime(timefmt.nopad("%-I:%M %p")).replace("AM", "a.m.").replace("PM", "p.m.")
     if intent in MOVES:
         return "I'm staying put. Say you can move first."
     return "Okay."
@@ -1036,8 +965,8 @@ def _while_sitting(intent: str, params: dict) -> str:
 def _result(text, out):
     did = out[1] if out[0] == "intent" else ("Rosie answers" if out[0] == "talk" else "said: " + out[1])
     status["last"] = {"at": time.strftime("%H:%M:%S"), "heard": text, "did": did}
-    history = status.setdefault("history", [])           # the last few requests and answers: to match his own log
-    history.append(status["last"])                       # (an "UnmatchedVoiceIntent" there = an answer he did not claim)
+    history = status.setdefault("history", [])
+    history.append(status["last"])
     del history[:-20]
 
 
@@ -1076,7 +1005,7 @@ class Chipper(cgrpc.ChipperGrpcServicer):
         text = _hear(first, request_iterator, t0)
         out = route(text, t0)
         _quiet_after(out)
-        if out[0] == "say":                              # the old intent stream has no spoken answers: say it through the SDK
+        if out[0] == "say":
             _later(_say, out[1])
             out = ("intent", "intent_imperative_affirmative", {})
         _result(text, out)
@@ -1088,7 +1017,7 @@ class Chipper(cgrpc.ChipperGrpcServicer):
         _guard(context, _esn(first.device_id))
         _loud()
         text = _hear(first, request_iterator, t0)
-        words = answer(text, t0) if text else "I didn't catch that."     # "I have a question": always Rosie
+        words = answer(text, t0) if text else "I didn't catch that."
         _quiet_after(("say", words))
         _result(text, ("say", words))
         yield cpb.KnowledgeGraphResponse(query_text=text, spoken_text=words, command_type="VOICE_COMMAND")
@@ -1171,7 +1100,6 @@ class Token(tgrpc.TokenServicer):
         return tpb.RefreshTokenResponse(data=self._bundle(context))
 
 
-# connection check URL (http and https on one port) -------------------------------------------------------------------
 def _serve_check(port: int):
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.load_cert_chain(CERT, KEY)
@@ -1183,7 +1111,7 @@ def _serve_check(port: int):
     def one(conn):
         try:
             conn.settimeout(5)
-            if conn.recv(1, socket.MSG_PEEK) == b"\x16":   # a TLS handshake starts with 0x16
+            if conn.recv(1, socket.MSG_PEEK) == b"\x16":
                 conn = ctx.wrap_socket(conn, server_side=True)
             head = conn.recv(2048).decode("latin-1")
             body = b"" if head.startswith("HEAD") else b"ok"
@@ -1197,16 +1125,14 @@ def _serve_check(port: int):
         while True:
             try:
                 conn, _ = srv.accept()
-            except OSError:                                # stop() closed the socket
+            except OSError:
                 return
             threading.Thread(target=one, args=(conn,), daemon=True).start()
     threading.Thread(target=loop, daemon=True, name="vector-check").start()
     return srv
 
 
-# start / stop / set up ------------------------------------------------------------------------------------------------
 def ensure_ep():
-    """The escape pod certificate and key: wire-pod's copy, else the public one from the wire-pod repository."""
     if EP_CERT.exists() and EP_KEY.exists():
         return
     testguard.check(EP_KEY)
@@ -1231,22 +1157,17 @@ def port_open_to_users(port: int) -> bool:
 
 
 def _publish_mdns(addr: str):
-    """escapepod.local -> this PC on the home network (what wire-pod did with its own mDNS responder)."""
     global _mdns
     if _mdns is None or _mdns.poll() is not None:
         _mdns = subprocess.Popen(["avahi-publish", "-a", "-R", "escapepod.local", addr], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def start() -> bool:
-    """Start the server when Settings > Vector is on. Safe to call again.
-    Escape pod mode (his firmware is 2.0.1.6076ep, no SSH): Rosie answers as escapepod.local:443 with the escape pod
-    certificate his firmware already trusts. WireOS mode: her own certificate on vector_port, set up over SSH."""
     with _life:
         return _start()
 
 
 def _warm_ears():
-    """Load speech-to-text now, so his first question is not the slow one (the 9 s limit)."""
     try:
         import numpy as np
         import stt
@@ -1256,7 +1177,6 @@ def _warm_ears():
 
 
 def _watch_timers(srv):
-    """Timers Rosie keeps for him: say when one is done, sitting or not, while this server runs."""
     while _server is srv:
         for t in timers.due():
             try:
@@ -1268,23 +1188,21 @@ def _watch_timers(srv):
 
 _eyes = None
 _hot = False
-HOT_C, COOL_C = 72.0, 67.0                           # his heat warning put him to sleep at about 75 C (2026-10-24); rest before that
+HOT_C, COOL_C = 72.0, 67.0  # board #799 why-cool-before-heat-limit
 
 
 def robot_temp(ip: str) -> float | None:
-    """His warmest chip in C (WireOS, over SSH with the key Setup already has; None when that is not possible)."""
     if not SSH_KEY.exists():
         return None
     r = subprocess.run(["ssh", *_ssh_args(ip), f"root@{ip}",
                         "for z in /sys/class/thermal/thermal_zone*; do echo $(cat $z/type) $(cat $z/temp); done"],
                        capture_output=True, text=True, timeout=15)
     temps = [int(t) / 1000 for name, t in (line.split() for line in r.stdout.splitlines() if len(line.split()) == 2)
-             if t.isdigit() and not name.startswith("xo-therm")]                 # xo-therm reads a fixed 125 C
+             if t.isdigit() and not name.startswith("xo-therm")]
     return max(temps) if temps else None
 
 
 def _check_heat(ip: str):
-    """Warm: his eye colour sweep rests until he has cooled down (hysteresis, so it does not flip every minute)."""
     global _hot
     t = robot_temp(ip)
     if t is None:
@@ -1293,13 +1211,11 @@ def _check_heat(ip: str):
     _hot = t >= HOT_C or (_hot and t > COOL_C)
 
 
-_sounds = {"key": None, "t": 0.0}      # what was last sent to him: (ip, on), and when
-SOUNDS_RESEND_S = 1800                 # his restarts forget runtime values without a gap we can see: send them again this often anyway
+_sounds = {"key": None, "t": 0.0}
+SOUNDS_RESEND_S = 1800
 
 
 def _apply_eye_sounds(ip: str, on: bool):
-    """Send the idle eye-sound switches once per connection (and again when the choice changes, after he was unreachable, or every
-    SOUNDS_RESEND_S), not every minute: that was 3 requests x 1,440 a day (2026-10-25 tuning review)."""
     now = time.time()
     if _sounds["key"] == (ip, on) and now - _sounds["t"] < SOUNDS_RESEND_S:
         return
@@ -1312,7 +1228,6 @@ PROBE_EVERY_S = 600
 
 
 def _reachable(ip: str) -> bool:
-    """Is his developer page there? A yes holds for PROBE_EVERY_S (the check was one request a minute, 1,440 a day); a no is asked every minute."""
     if not ip:
         return False
     now = time.time()
@@ -1324,8 +1239,6 @@ def _reachable(ip: str) -> bool:
 
 
 def _keep_looks(srv):
-    """WireOS live settings that his restarts forget: Rosie's cyan to purple eyes, and no idle eye sounds while he is
-    quiet when idle. Checked every minute while this server runs."""
     global _eyes
     while _server is srv:
         reach = False
@@ -1349,7 +1262,7 @@ def _keep_looks(srv):
         except Exception as e:
             status["error"] = f"Looks: {type(e).__name__}: {e}"
         if not reach:
-            _sounds["key"] = None                # he was not reachable: send the switches again when he is back
+            _sounds["key"] = None
         for _ in range(60):
             if _server is not srv:
                 break
@@ -1359,8 +1272,7 @@ def _keep_looks(srv):
         _eyes = None
 
 
-# he comes alive on his own (vector_life.py) ----------------------------------------------------------------------------
-recall = None                                      # set by server.py: recall(query) -> what Rosie remembers about it (text)
+recall = None
 _alive = None
 
 
@@ -1369,7 +1281,6 @@ def mood_line() -> str:
 
 
 def _quick(system: str, prompt: str, num_predict: int = 40) -> str:
-    """One short line from Rosie's own model, nothing saved (his spontaneous lines are not chat turns)."""
     import agent
     import ctxsize
     import httpx
@@ -1411,7 +1322,6 @@ def _to_bed():
 
 
 def _life_can_talk() -> bool:
-    """He keeps quiet while he talks, listens, drives, has his menu open, or Rosie's voice is off."""
     return rosie_voice() and not busy() and not vector_pad.status.get("driving") and not _menu.open and robot() is not None
 
 
@@ -1427,7 +1337,7 @@ def _start() -> bool:
             status.update(running=False, error=f"Port 443 needs a one-time change on this PC. In a terminal, run: {PORT_RULE}")
             raise PermissionError(status["error"])
         ensure_ep()
-        key, cert, bind = EP_KEY, EP_CERT, f"{addr}:{EP_PORT}"     # this PC's home address only: Tailscale has its own 443
+        key, cert, bind = EP_KEY, EP_CERT, f"{addr}:{EP_PORT}"
     else:
         ensure_cert(addr)
         key, cert, bind = KEY, CERT, f"0.0.0.0:{int(cfg.get('vector_port', 8084))}"
@@ -1450,7 +1360,7 @@ def _start() -> bool:
     else:
         try:
             _check = _serve_check(int(cfg.get("vector_check_port", 8085)))
-        except OSError as e:                            # only his "am I online" check: voice still works without it
+        except OSError as e:
             status.update(running=True, error=f"Online check port: {e}")
             return True
     status.update(running=True, error="")
@@ -1485,7 +1395,7 @@ def _stop():
     if _check is not None:
         c, _check = _check, None
         try:
-            c.shutdown(socket.SHUT_RDWR)                # close() alone does not wake a thread blocked in accept()
+            c.shutdown(socket.SHUT_RDWR)
         except OSError:
             pass
         c.close()
@@ -1512,8 +1422,6 @@ def _ssh_args(ip: str) -> list[str]:
 
 
 def adopt_robot(ip: str) -> str:
-    """Escape pod firmware: no files to copy. Prove the robot at `ip` is ours (he accepts Rosie's SDK token), pin his
-    certificate, note his address, and turn on escape pod mode."""
     pem = vector_bot.fetch_cert(ip)
     bot = vector_bot.Robot(ip, client_token(), pem)
     try:
@@ -1531,10 +1439,8 @@ def adopt_robot(ip: str) -> str:
 
 
 def connect(ip: str) -> str:
-    """The page's one button: escape pod robots are adopted (nothing on him changes); WireOS robots get Rosie's
-    address and certificate over SSH."""
     if vector_bot.reachable(ip, 22):
-        if config.load().get("vector_escapepod"):        # WireOS: her own certificate on vector_port, not escapepod.local
+        if config.load().get("vector_escapepod"):
             _set_cfg(vector_escapepod=False)
             stop()
             start()
@@ -1546,8 +1452,6 @@ def connect(ip: str) -> str:
 
 
 def setup_robot(ip: str, esn: str = "") -> str:
-    """Point Vector at Rosie: back up his current server files, copy Rosie's address and certificate, restart his cloud
-    service. Nothing else on the robot changes (no reset, no new robot key). undo_robot() puts the old files back."""
     addr = host()
     cert = ensure_cert(addr)
     DIR.mkdir(parents=True, exist_ok=True)
@@ -1558,7 +1462,7 @@ def setup_robot(ip: str, esn: str = "") -> str:
               "[ -f wirepod-cert.crt ] && [ ! -f wirepod-cert.crt.before-rosie ] && cp wirepod-cert.crt wirepod-cert.crt.before-rosie; "
               "cat > server_config.json.new; ")
     esn = esn or _robot_esn(ip)
-    pem = vector_bot.fetch_cert(ip)                     # before the restart: his SDK port is down for a while after it
+    pem = vector_bot.fetch_cert(ip)
     subprocess.run(ssh + [script], input=json.dumps(server_config(addr)), text=True, check=True, capture_output=True, timeout=30)
     subprocess.run(ssh + ["cat > /data/data/wirepod-cert.crt.new"], input=cert, text=True, check=True, capture_output=True, timeout=30)
     subprocess.run(ssh + ["cd /data/data && mv server_config.json.new server_config.json && mv wirepod-cert.crt.new wirepod-cert.crt "
@@ -1572,8 +1476,6 @@ def setup_robot(ip: str, esn: str = "") -> str:
 
 
 def restart_robot(ip: str, wait_s: int = 90) -> bool:
-    """Restart all his services and wait until his SDK port answers. WireOS keeps the SDK gateway inside vic-cloud, and
-    it cannot reconnect to the switchboard when vic-cloud restarts alone (seen on 3.0.2.34d, 2026-10-21)."""
     ssh = ["ssh", *_ssh_args(ip), f"root@{ip}"]
     subprocess.run(ssh + ["systemctl restart anki-robot.target"], check=True, capture_output=True, text=True, timeout=120)
     end = time.time() + wait_s
@@ -1584,12 +1486,11 @@ def restart_robot(ip: str, wait_s: int = 90) -> bool:
     return False
 
 
-WAKE_FILE = "/data/data/com.anki.victor/persistent/picovoice/custom_1-5-0.ppn"   # vic-anim uses it instead of hey_vector.ppn
-HEY_ROSIE = DIR / "hey_rosie_1-5.ppn"              # Porcupine 1.5 keyword "hey rosie", made on this PC (pv_porcupine_optimizer, no network)
+WAKE_FILE = "/data/data/com.anki.victor/persistent/picovoice/custom_1-5-0.ppn"
+HEY_ROSIE = DIR / "hey_rosie_1-5.ppn"
 
 
 def set_wake_word(ip: str, rosie: bool = True) -> str:
-    """WireOS: "Hey Rosie" (Rosie's keyword file) or his own "Hey Vector" again. His services restart (about 30 s)."""
     ssh = ["ssh", *_ssh_args(ip), f"root@{ip}"]
     folder = WAKE_FILE.rsplit("/", 1)[0]
     if rosie:
@@ -1618,17 +1519,14 @@ def _robot_esn(ip: str) -> str:
     return m.group(1).lower() if m else ip
 
 
-# his backpack lights in Rosie's colours (WireOS: pattern files on his system partition) ---------------------------------
 LIGHTS_DIR = "/anki/data/assets/cozmo_resources/config/engine/lights/backpackLightsWireOS"
 LIGHTS_BACKUP = "/data/data/rosie-backpack-lights-original.tar"
 THEME_CYAN = (0.0, 0.9, 1.0)
 THEME_PURPLE = (0.62, 0.3, 1.0)
-KEEP_LIGHTS = {"badCharger.json", "offline.json", "off.json", "offline_off.json"}   # warnings keep their colours; off stays off
+KEEP_LIGHTS = {"badCharger.json", "offline.json", "off.json", "offline_off.json"}
 
 
 def themed_lights(pattern: dict, name: str) -> dict:
-    """One backpack pattern in cyan and purple: each lit colour becomes cyan (outer lights) or purple (middle light) at its
-    own brightness, its timing unchanged. Idle (all dark) gets a dim cyan and purple glow."""
     def paint(colours, first, second):
         out = []
         for i, c in enumerate(colours):
@@ -1645,8 +1543,6 @@ def themed_lights(pattern: dict, name: str) -> dict:
 
 
 def set_backpack_theme(ip: str, rosie: bool = True) -> str:
-    """WireOS: write Rosie's cyan and purple into his backpack light patterns (originals kept once in LIGHTS_BACKUP on
-    him), or put the originals back. His services restart (about 30 s)."""
     ssh = ["ssh", *_ssh_args(ip), f"root@{ip}"]
     run = lambda cmd, **kw: subprocess.run(ssh + [cmd], check=True, capture_output=True, timeout=120, **kw)
     run(f"[ -f {LIGHTS_BACKUP} ] || (cd {LIGHTS_DIR}/.. && tar cf {LIGHTS_BACKUP} backpackLightsWireOS)")

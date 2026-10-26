@@ -1,4 +1,3 @@
-"""Life Quest page API. Login-protected like every /api/ route (server.py middleware). The game rules and storage are in lifequest.py."""
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel

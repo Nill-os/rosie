@@ -1,21 +1,19 @@
-"""The Agent Deck's readings on Windows (owner 2026-10-24: "add in the agent deck if possible" for the partner's Windows PC). agentdeck.py
-reads Linux's /proc and /sys; here psutil (BSD-3) gives the same numbers in the same shapes, so the Deck page needs no changes. Only
-agentdeck.py imports this, and only when it is not on Linux. Read only: the controls stay in agentdeck.act."""
+# board #709 owner-deck-windows-partner
 import os
 import platform
 import time
 
 import psutil
 
-CLK = 100                                    # agentdeck.py's tick unit off Linux: CPU seconds x 100
+CLK = 100
 DISK_FS = {"ntfs", "refs", "exfat", "fat32", "fat"}
 STATUS = {psutil.STATUS_RUNNING: "R", psutil.STATUS_SLEEPING: "S", psutil.STATUS_STOPPED: "T", psutil.STATUS_ZOMBIE: "Z",
           psutil.STATUS_DISK_SLEEP: "D", psutil.STATUS_IDLE: "I", psutil.STATUS_DEAD: "X"}
 ME_NAME = (os.environ.get("USERNAME") or "").lower()
-MINE, OTHER = -1, -2                         # agentdeck.ME is -1 off Linux: "mine" means the signed-in user's processes
-ATTRS = ["pid", "username", "cpu_times", "create_time", "memory_info"]   # the fast ones on Windows (hundredths of a second for ~380)
-CMD_BUDGET_S = 0.8                           # command lines are slow on Windows (~8 ms each): read once per process, a little each refresh
-FIRST = ("python", "pythonw", "ollama", "ollama app", "claude", "node", "docker", "uvicorn")   # whose command lines the Deck needs first
+MINE, OTHER = -1, -2
+ATTRS = ["pid", "username", "cpu_times", "create_time", "memory_info"]
+CMD_BUDGET_S = 0.8  # board #709 quirk-windows-cmdline-slow
+FIRST = ("python", "pythonw", "ollama", "ollama app", "claude", "node", "docker", "uvicorn")
 _cmds: dict = {}
 
 
@@ -32,7 +30,6 @@ def uptime() -> float:
 
 
 def cpu_lines() -> dict:
-    """{"cpu": (total, idle), "cpu0": ...}: the same ratios as /proc/stat (in seconds here, which the percentages don't mind)."""
     total = psutil.cpu_times()
     out = {"cpu": (sum(total), total.idle)}
     for i, t in enumerate(psutil.cpu_times(percpu=True)):
@@ -53,7 +50,7 @@ def disks() -> list[dict]:
             continue
         try:
             u = psutil.disk_usage(p.mountpoint)
-        except OSError:                          # an empty card reader or a locked drive
+        except OSError:
             continue
         out.append({"mount": p.mountpoint, "device": p.device, "fs": p.fstype, "total": u.total, "used": u.used, "free": u.free})
     return out
@@ -65,7 +62,7 @@ def net() -> dict:
 
 def loadavg() -> list[float]:
     try:
-        return list(psutil.getloadavg())         # Windows: psutil keeps its own average (zeros for the first few seconds)
+        return list(psutil.getloadavg())  # board #709 quirk-loadavg-zeros-start
     except (AttributeError, OSError):
         return []
 
@@ -76,9 +73,8 @@ def _name(n: str) -> str:
 
 
 def _snapshot() -> dict:
-    """{pid: (parent pid, name, threads)} from one Toolhelp snapshot. psutil asks Windows for these once per process, and each ask walks
-    the whole process list (about 3 s for 380 processes on the partner's PC, 2026-10-24); the snapshot is one walk."""
-    if os.name != "nt":                                     # the tests on Linux: psutil is quick there
+    # board #709 quirk-toolhelp-one-walk
+    if os.name != "nt":
         out = {}
         for p in psutil.process_iter(["pid", "ppid", "name", "num_threads"], ad_value=None):
             out[p.info["pid"]] = (p.info.get("ppid") or 0, _name(p.info.get("name")), p.info.get("num_threads") or 0)
@@ -93,7 +89,7 @@ def _snapshot() -> dict:
                     ("szExeFile", ctypes.c_wchar * 260)]
     k32 = ctypes.WinDLL("kernel32", use_last_error=True)
     k32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
-    snap = k32.CreateToolhelp32Snapshot(0x2, 0)                        # TH32CS_SNAPPROCESS
+    snap = k32.CreateToolhelp32Snapshot(0x2, 0)
     if not snap or snap == wintypes.HANDLE(-1).value:
         return {}
     out, e = {}, Entry()
@@ -109,12 +105,11 @@ def _snapshot() -> dict:
 
 
 def procs() -> dict:
-    """{pid: process} with agentdeck._proc's keys. Other users' and system processes show with what Windows lets a user see."""
     b, snap, out, handles = boot(), _snapshot(), {}, {}
     for p in psutil.process_iter(ATTRS, ad_value=None):
         i = p.info
         if not i.get("pid"):
-            continue                             # System Idle Process
+            continue
         ppid, name, threads = snap.get(i["pid"], (0, "", 0))
         ct, mem, who = i.get("cpu_times"), i.get("memory_info"), (i.get("username") or "")
         start = max(0.0, (i.get("create_time") or b) - b)
@@ -134,7 +129,7 @@ def procs() -> dict:
                 _cmds[key] = ""
         out[pid]["cmd"] = _cmds.get(key) or out[pid]["name"]
     live = {h[1] for h in handles.values()}
-    for key in [k for k in _cmds if k not in live]:             # ended processes
+    for key in [k for k in _cmds if k not in live]:
         del _cmds[key]
     return out
 
@@ -147,7 +142,6 @@ def comm(pid: int) -> str:
 
 
 def find(procs_: dict, *needles: str) -> int:
-    """The first process whose command line has every needle (Rosie, Ollama: Windows has no systemctl to ask)."""
     for p in sorted(procs_.values(), key=lambda p: p["start"]):
         cmd = p["cmd"].lower()
         if all(n in cmd for n in needles):

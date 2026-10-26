@@ -1,5 +1,4 @@
-"""Rosie's Servers page (servers.py): what she finds on the home server, how each service is named and opened, and the owner's own
-entries. Nothing owner-specific: any server with SSH, Proxmox or not."""
+# board #893 owner-generic-servers-page
 import sys
 from pathlib import Path
 
@@ -34,7 +33,7 @@ def home(monkeypatch, tmp_path):
     monkeypatch.setattr(servers.security_watch, "_ssh_cmd", lambda: ["ssh", "-i", "k", "root@10.77.4.8"])
     monkeypatch.setattr(servers.security_watch, "_run", lambda argv, timeout, stdin=None: PROXMOX)
     webs = {8006: {"scheme": "https", "title": "Home - Proxmox Virtual Environment"}, 2283: {"scheme": "http", "title": "Immich"},
-            80: {"scheme": "", "title": ""}, 443: {"scheme": "", "title": ""}}                    # Pi-hole busy: no answer right now
+            80: {"scheme": "", "title": ""}, 443: {"scheme": "", "title": ""}}  # board #893 quirk-pihole-busy-no-answer
     monkeypatch.setattr(servers, "probe", lambda ip, port: webs.get(port, {"scheme": "", "title": ""}))
     monkeypatch.setattr(servers, "_up", lambda ip, port: None if port == 22 else 4)
     return tmp_path
@@ -46,9 +45,9 @@ def by_name(d):
 
 def test_she_finds_the_server_its_containers_and_what_can_be_opened(home):
     m = by_name(servers.discover())
-    assert m["Home"]["ip"] == "10.77.4.8" and m["Home"]["kind"] == "server"                  # its login address, not its VPN one
+    assert m["Home"]["ip"] == "10.77.4.8" and m["Home"]["kind"] == "server"  # board #893 why-login-address-not-vpn
     assert [(s["port"], s["label"], s["url"] or s["hint"]) for s in m["Home"]["services"]] == [
-        (22, "SSH", "ssh root@10.77.4.8"), (8006, "Proxmox", "https://10.77.4.8:8006/")]   # no loopback, VPN or SPICE port
+        (22, "SSH", "ssh root@10.77.4.8"), (8006, "Proxmox", "https://10.77.4.8:8006/")]
     assert [(s["port"], s["label"], s["url"]) for s in m["photos"]["services"]] == [(2283, "Immich", "http://10.77.4.52:2283/")]
     assert [(s["port"], s["label"], s["url"]) for s in m["dns"]["services"]] == [(53, "DNS", ""), (443, "Pi-hole", "https://10.77.4.53/admin/")]
     assert m["old"]["running"] is False and m["old"]["services"] == [] and m["old"]["ip"] == ""
@@ -74,7 +73,7 @@ def test_the_page_checks_each_service_now_and_keeps_renames(home):
     d = servers.listing()
     m = by_name(d)
     assert m["photos"]["services"][0]["label"] == "Photos" and m["photos"]["services"][0]["up"] and m["photos"]["up"]
-    assert m["Home"]["services"][0]["up"] is False and m["Home"]["up"]                            # SSH firewalled, Proxmox answers
+    assert m["Home"]["services"][0]["up"] is False and m["Home"]["up"]
     servers.rename("10.77.4.52", 2283, "")
     assert by_name(servers.listing())["photos"]["services"][0]["label"] == "Immich"
 

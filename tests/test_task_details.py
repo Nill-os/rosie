@@ -1,5 +1,4 @@
-"""A task's details (owner 2026-10-24: "allow me to click on tasks to see more details because she has one that just says aprove or no
-aprove without anything about it"): notes, where it came from, and the email behind it. Gmail is faked: no real account is touched."""
+# board #902 owner-task-details
 import hashlib
 import hmac
 from pathlib import Path
@@ -50,7 +49,7 @@ def test_an_approved_email_task_shows_its_email_and_keeps_the_detail_as_notes(cl
 def test_an_older_task_without_a_link_finds_its_request_by_title(client):
     _mail("m2", "t2")
     pid = proposals.add("task", "Pay the water bill", {"title": "Pay the water bill"}, detail="From City: bill", source="email:main:m2", desktop=False)
-    with proposals._db() as c:                                   # approved by an older Rosie: no ref, and the task has no notes
+    with proposals._db() as c:  # board #902 quirk-older-rosie-tasks
         c.execute("UPDATE proposals SET status='approved', created='2026-10-01T09:00:00' WHERE id=?", (pid,))
     t = tasks.add("Pay the water bill")
     d = client.get(f"/api/tasks/{t['id']}").json()

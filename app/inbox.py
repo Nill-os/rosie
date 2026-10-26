@@ -1,4 +1,3 @@
-"""Inbox (things the assistant puts in front of you), reminders, and desktop notifications."""
 import datetime as dt
 import os
 import re
@@ -28,7 +27,6 @@ def _now():
     return dt.datetime.now(gcal.TZ)
 
 
-# ---------- desktop notifications ----------
 def _in_quiet(now: dt.datetime, cfg) -> bool:
     f, t = cfg["quiet_from"], cfg["quiet_to"]
     cur = now.strftime("%H:%M")
@@ -36,7 +34,7 @@ def _in_quiet(now: dt.datetime, cfg) -> bool:
 
 
 def notify_desktop(title: str, body: str = "") -> bool:
-    if os.name == "nt":                                    # a Windows toast
+    if os.name == "nt":
         import plat
         return plat.notify(title, body)
     env = pc_tools.gui_env()
@@ -50,9 +48,8 @@ def notify_desktop(title: str, body: str = "") -> bool:
         return False
 
 
-# ---------- inbox ----------
 def add(kind, title, body="", link="", key=None, force_desktop=False, now=None, desktop=True):
-    """Add an item (deduplicated by key). Pops a desktop notification unless it's quiet hours (reminders you asked for always pop)."""
+    # board #735 why-reminders-pop-quiet
     cfg = config.load()
     with _db() as c:
         cur = c.execute("INSERT OR IGNORE INTO items(created,kind,title,body,link,key) VALUES(?,?,?,?,?,?)",
@@ -82,7 +79,6 @@ def mark_read(item_id=None):
 
 
 def mark_read_key(key):
-    """Mark the item with this key read (e.g. the Inbox entry of a proposal that was withdrawn or dismissed)."""
     with _db() as c:
         c.execute("UPDATE items SET read=1 WHERE key=?", (key,))
 
@@ -97,7 +93,6 @@ def clear_read():
         c.execute("DELETE FROM items WHERE read=1")
 
 
-# ---------- reminders ----------
 _NUM = {"a": 1, "an": 1, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
         "fifteen": 15, "twenty": 20, "thirty": 30, "forty five": 45, "half an": 0.5, "half a": 0.5}
 _DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
@@ -105,7 +100,6 @@ _PARTS = {"morning": (9, 0), "noon": (12, 0), "afternoon": (15, 0), "evening": (
 
 
 def parse_when(text: str, now: dt.datetime | None = None) -> dt.datetime:
-    """'in 20 minutes', 'at 3pm', 'tomorrow at 9', 'friday 2:30pm', 'tonight', '2026-10-04T15:00' -> aware datetime in the future."""
     now = (now or _now()).replace(second=0, microsecond=0)
     s = " ".join(text.lower().replace(",", " ").split())
     if not s:
@@ -152,7 +146,7 @@ def parse_when(text: str, now: dt.datetime | None = None) -> dt.datetime:
             hh, mm = h, mi
         elif h >= 13 or h == 0 or ":" in t.group(0) and h > 12:
             hh, mm = h, mi
-        else:   # bare hour like "at 3": the next time the clock reads that, preferring waking hours (07:00 to 23:59)
+        else:  # board #735 why-bare-hour-waking
             cands = []
             for add_days in (0, 1):
                 day = base_day + dt.timedelta(days=add_days)
@@ -175,7 +169,7 @@ def parse_when(text: str, now: dt.datetime | None = None) -> dt.datetime:
     if d <= now:
         if day_given:
             raise ValueError("That time has already passed.")
-        d += dt.timedelta(days=1)   # "at 9am" said at 2pm means tomorrow
+        d += dt.timedelta(days=1)
     return d
 
 
@@ -194,7 +188,6 @@ def list_reminders(include_fired=False):
 
 
 def cancel_reminder(rid):
-    """By id, or by words from its text."""
     with _db() as c:
         if str(rid).isascii() and str(rid).isdigit():
             n = c.execute("DELETE FROM reminders WHERE id=? AND fired=0", (int(rid),)).rowcount
@@ -210,7 +203,7 @@ def due_reminders(now: dt.datetime):
     with _db() as c:
         rows = [dict(r) for r in c.execute("SELECT id,due,text FROM reminders WHERE fired=0 ORDER BY due")]
     out = []
-    for r in rows:                                                 # compare real moments, not text: the UTC offset changes at daylight-saving time
+    for r in rows:  # board #735 why-compare-real-moments
         try:
             due = dt.datetime.fromisoformat(r["due"])
         except ValueError:

@@ -1,23 +1,16 @@
-"""The Morning Paper's cipher puzzle (owner 2026-10-14: "add another puzzle and i want it to be a cypher", "do a diffrent typer of
-cypers throughout the week", "you cam make the cyphers medium hard and work from there").
-
-The hidden message is always a REAL line from that day's own paper (an A1 headline), never made up; the answer key names the story.
-A different kind of cipher each weekday, all made by code (seeded by the date, so a remake is the same):
-  Mon Caesar shift · Tue letter swap (cryptogram) · Wed Atbash · Thu A1Z26 numbers · Fri Morse code · Sat Pigpen · Sun Rail fence.
-How much help is printed follows the Cipher level setting (default medium-hard) and gets a little less every 4 weeks after the
-first two, never past hard. Every type has encode() and decode(); decode(encode(line)) is the line (in capitals)."""
+# board #755 owner-cipher-puzzle
 import random
 import re
 import string
 
 A = string.ascii_uppercase
-KINDS = ["caesar", "swap", "atbash", "a1z26", "morse", "pigpen", "rail"]          # Monday .. Sunday
+KINDS = ["caesar", "swap", "atbash", "a1z26", "morse", "pigpen", "rail"]
 NAMES = {"caesar": "Caesar shift", "swap": "Letter swap (cryptogram)", "atbash": "Atbash", "a1z26": "A1Z26 numbers",
          "morse": "Morse code", "pigpen": "Pigpen", "rail": "Rail fence"}
 LEVELS = ("beginner", "easy", "medium", "medium-hard", "hard")
 HELP = {"beginner": 3, "easy": 2, "medium": 1, "medium-hard": 0, "hard": -1}
-RAMP_WAIT, RAMP_EVERY = 14, 28        # the same level for two weeks, then one step harder every 4 weeks (never past hard)
-LETTERS = (40, 90)                    # letters in the hidden line
+RAMP_WAIT, RAMP_EVERY = 14, 28  # board #755 why-cipher-level-ramp
+LETTERS = (40, 90)
 OK_LINE = re.compile(r"^[A-Za-z][A-Za-z ,.'’!?:;-]*$")
 
 MORSE = dict(zip(A, ".- -... -.-. -.. . ..-. --. .... .. .--- -.- .-.. -- -. --- .--. --.- .-. ... - ..- ...- .-- -..- -.-- --..".split()))
@@ -26,7 +19,6 @@ UNMORSE = {v: k for k, v in MORSE.items()}
 
 
 def help_level(level: str, days_in: int) -> int:
-    """3 (beginner) .. 0 (medium-hard) .. -1 (hard): the setting, one step harder every 4 weeks after the first two."""
     h = HELP.get(level, HELP["medium-hard"])
     return max(HELP["hard"], h - max(0, days_in - RAMP_WAIT) // RAMP_EVERY)
 
@@ -41,8 +33,6 @@ def letters(s: str) -> int:
 
 
 def pick_line(candidates: list[dict]) -> dict | None:
-    """The first candidate {text, where} that reads well on its own as a puzzle: 40-90 letters, plain letters and punctuation only
-    (no numbers), at least 4 words."""
     for c in candidates:
         t = re.sub(r"\s+", " ", (c.get("text") or "")).strip()
         if OK_LINE.match(t) and LETTERS[0] <= letters(t) <= LETTERS[1] and len(t.split()) >= 4 and t == (c.get("text") or "").strip():
@@ -50,13 +40,11 @@ def pick_line(candidates: list[dict]) -> dict | None:
     return None
 
 
-# ---------------------------------------------------------------- the ciphers (letter by letter, others kept as they are)
 def caesar_key(rnd) -> int:
     return rnd.randint(1, 25)
 
 
 def swap_key(rnd) -> dict:
-    """A derangement of A-Z: every letter goes to a different letter, none to itself."""
     while True:
         b = list(A)
         rnd.shuffle(b)
@@ -76,7 +64,6 @@ def caesar(text: str, k: int) -> str:
 
 
 def tokens(kind: str, text: str, key=None) -> list[list[str]]:
-    """The printed cipher, word by word: each word a list of symbols, one per character of the line (letters and punctuation)."""
     up = text.upper()
     if kind == "caesar":
         enc = caesar(up, key)
@@ -93,12 +80,11 @@ def tokens(kind: str, text: str, key=None) -> list[list[str]]:
         elif kind == "morse":
             out.append([MORSE.get(c, c) for c in w])
         else:
-            out.append(list(w))                      # pigpen: the letters, drawn as glyphs by the page
+            out.append(list(w))
     return out
 
 
 def untokens(kind: str, words: list[list[str]], key=None) -> str:
-    """Decode what tokens() printed."""
     if kind == "a1z26":
         dec = " ".join("".join(A[int(t) - 1] if t.isdigit() else t for t in w) for w in words)
     elif kind == "morse":
@@ -122,14 +108,12 @@ def rail_rows(n: int, rails: int) -> list[int]:
 
 
 def rail_encode(text: str, rails: int) -> str:
-    """The letters only (spaces and punctuation dropped), written in a zigzag on the rails, then read rail by rail."""
     ls = [c for c in text.upper() if c in A]
     rows = rail_rows(len(ls), rails)
     return "".join(c for r in range(rails) for c, rr in zip(ls, rows) if rr == r)
 
 
 def rail_decode(cipher: str, rails: int, pattern: str) -> str:
-    """Back to the line: undo the zigzag, then put the letters into the pattern (the line with each letter as _)."""
     rows = rail_rows(len(cipher), rails)
     order = sorted(range(len(cipher)), key=lambda i: (rows[i], i))
     plain = [""] * len(cipher)
@@ -147,10 +131,7 @@ def groups(s: str, n=5) -> str:
     return " ".join(s[i:i + n] for i in range(0, len(s), n))
 
 
-# ---------------------------------------------------------------- the puzzle of the day
 def make(day: str, line: dict | None, level: str = "medium-hard", days_in: int = 0) -> dict | None:
-    """{kind, name, how, help, words (printed symbols by word), filled (answer letters printed in place: {word index: {char index: L}}),
-    hints (lines), key (what to print as the key), plain, where, answer}. None when the paper has no line that fits."""
     if not line:
         return None
     kind = kind_for(day)
@@ -214,15 +195,12 @@ def _answer(out: dict) -> dict:
 
 
 def decode(p: dict) -> str:
-    """Solve a made puzzle from what is printed plus its secret (for the tests and the answer check)."""
     if p["kind"] == "rail":
         return rail_decode(p["cipher"], p["rails"], p["pattern"])
     return untokens(p["kind"], p["words"], p.get("secret"))
 
 
-# ---------------------------------------------------------------- Pigpen glyphs (inline SVG, drawn by code)
 def pigpen_cell(c: str) -> tuple[str, int, int, bool]:
-    """('grid', row, col, dot) for A-R; ('x', side, 0, dot) for S-Z (side 0 top, 1 left, 2 right, 3 bottom)."""
     i = A.index(c)
     if i < 18:
         return "grid", (i % 9) // 3, i % 3, i >= 9

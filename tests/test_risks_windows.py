@@ -1,18 +1,3 @@
-"""Failure-injection tests for the Windows launcher, one group per approved risk (audit 2026-10-25, RISKS.md A1-A7).
-
-Network, pip (uv), subprocess and time are faked. Scenarios other files already cover are not repeated:
-
-| Risk | Already covered in                                                                                                   |
-|------|----------------------------------------------------------------------------------------------------------------------|
-| A1   | test_windows_launcher: test_a_failed_build_leaves_nothing_staged, test_switch_refuses_when_the_idle_slot_does_not_hold_the_staged_version, test_an_exception_in_the_loop_is_logged_and_the_loop_continues |
-| A2   | test_windows_launcher: test_a_second_launcher_exits_and_opens_the_running_rosie, test_the_lock_is_refused_while_another_holder_has_it, test_no_rollback_before_she_answered_within_the_startup_grace, test_a_smoke_timeout_marks_the_version_bad_only_the_second_time |
-| A3   | test_windows_launcher: test_three_build_failures_of_the_same_version_mark_it_bad, test_the_required_checks_are_the_workflows_job_ids; test_health: test_windows_updates_row_follows_the_launchers_state (old last_check and failed last_result warn) |
-| A4   | test_windows_launcher: test_removing_a_slot_never_touches_the_shared_data, test_a_download_cannot_write_outside_its_slot |
-| A5   | test_windows_launcher: test_relaunch_starts_a_new_process_with_the_same_arguments                                      |
-| A7   | test_windows_launcher: test_only_a_commit_whose_every_check_passed_counts, test_the_required_jobs_must_all_exist_and_succeed |
-
-A6 is review-only. Junction behavior itself runs only on Windows (skipif below); Linux uses the symlinks the launcher also handles.
-"""
 import os
 import re
 import subprocess
@@ -30,7 +15,7 @@ NEW = "new1"
 
 
 class _Death(BaseException):
-    """A simulated process death (power loss): not an Exception, so no `except Exception` in the launcher can absorb it."""
+    pass
 
 
 def job(n, c, status="completed"):
@@ -42,7 +27,6 @@ GOOD = [job("pytest", "success"), job("windows", "success"), job("windows-start"
 
 @pytest.fixture
 def env(L, monkeypatch):
-    """Fake uv/pip: `uv venv` makes the venv's python file, `uv pip` does nothing."""
     monkeypatch.setattr(L, "uv", lambda: "uv")
     calls = []
 
@@ -91,7 +75,6 @@ class FakeProc:
 
 
 def drive(L, monkeypatch, tmp_path, ticks=1, gh=None, probation=None, auto=True, quiet=True, real_rollback=False, healthz=None, popen=None):
-    """Run run()'s loop for `ticks` passes on a fake clock. Returns (log lines, clock start). Raises whatever escapes run() except _Stop."""
     t0 = time.time()
     clock = [t0]
     (tmp_path / "secrets").mkdir(exist_ok=True)
@@ -133,7 +116,6 @@ def drive(L, monkeypatch, tmp_path, ticks=1, gh=None, probation=None, auto=True,
 
 
 def stage_ready(L, sha=NEW):
-    """Slot A live, slot B built and checked for `sha`, update waiting for a quiet PC."""
     st = make_active(L)
     py = L.venv_python("B")
     py.parent.mkdir(parents=True, exist_ok=True)
@@ -144,7 +126,6 @@ def stage_ready(L, sha=NEW):
     return L.load()
 
 
-# ------------------------------------------------------------------ A1: an update never leaves her without a working Rosie
 def _inject(L, monkeypatch, step, exc):
     gh = Faulty(checks={NEW: GOOD})
     gh.exc = exc
@@ -175,31 +156,28 @@ def _assert_safe(L):
     now = L.load()
     assert now["active"] == "A" and L.venv_python("A").exists()
     if now["staged"]:
-        assert now["heads"].get(L.other(now["active"])) == now["staged"]     # never staged without a matching build
-    assert not L.switch(dict(now)) or now["staged"] == now["heads"].get("B")  # a switch only to a slot whose head == staged
+        assert now["heads"].get(L.other(now["active"])) == now["staged"]
+    assert not L.switch(dict(now)) or now["staged"] == now["heads"].get("B")
     return now
 
 
 @pytest.mark.parametrize("step", ["head", "checks", "download", "pip", "smoke"])
 def test_A1_exception_at_each_update_step_keeps_the_active_slot_and_the_loop(L, env, monkeypatch, tmp_path, step):
-    """An ordinary exception at <step> of the update leaves slot A live with its venv and the run loop alive."""
     make_active(L)
     gh = _inject(L, monkeypatch, step, OSError("boom"))
-    lines, _ = drive(L, monkeypatch, tmp_path, ticks=2, gh=gh)          # two passes: the loop survives the failure
+    lines, _ = drive(L, monkeypatch, tmp_path, ticks=2, gh=gh)
     _assert_safe(L)
     assert not any(x.startswith("ROLLBACK") for x in lines)
 
 
 @pytest.mark.parametrize("step", ["head", "checks", "download", "pip", "smoke"])
 def test_A1_process_death_at_each_update_step_then_restart_recovers(L, env, monkeypatch, tmp_path, step):
-    """Power loss during <step> (state as saved so far, next step never ran): slot A is intact and a restarted launcher finishes the update."""
     make_active(L)
     gh = _inject(L, monkeypatch, step, _Death("power"))
     with pytest.raises(_Death):
         L.check(L.load(), gh)
     now = _assert_safe(L)
-    assert now["staged"] is None                                       # nothing waits for a build that did not finish
-    # the "restart": same folders, fault gone
+    assert now["staged"] is None
     monkeypatch.setattr(L, "smoke", lambda slot: {"ok": True, "checks": {}})
     monkeypatch.setattr(L.subprocess, "run", lambda args, **k: (L.venv_python("B").parent.mkdir(parents=True, exist_ok=True), L.venv_python("B").write_text(""), subprocess.CompletedProcess(args, 0))[2])
     L.check(L.load(), Faulty(checks={NEW: GOOD}))
@@ -208,7 +186,6 @@ def test_A1_process_death_at_each_update_step_then_restart_recovers(L, env, monk
 
 
 def test_A1_death_after_staged_is_cleared_leaves_nothing_staged(L, env, monkeypatch):
-    """Death inside the build (after the old staged version was cleared) leaves staged empty on disk, so no stale switch."""
     st = stage_ready(L, "older")
     gh = Faulty(fail_on="codeload", exc=_Death("power"), checks={NEW: GOOD})
     with pytest.raises(_Death):
@@ -218,12 +195,11 @@ def test_A1_death_after_staged_is_cleared_leaves_nothing_staged(L, env, monkeypa
     assert not L.switch(now)
 
 
-STARTUP_OSERROR = pytest.param("startup", OSError("disk full"))   # was a strict xfail; fixed 2026-10-25
+STARTUP_OSERROR = pytest.param("startup", OSError("disk full"))
 
 
 @pytest.mark.parametrize("where,exc", [("loop", OSError("disk full")), ("loop", _Death("power")), STARTUP_OSERROR, ("startup", _Death("power"))])
 def test_A1_fault_while_switching_keeps_the_old_slot_live(L, env, monkeypatch, tmp_path, where, exc):
-    """A fault saving the switch (exception or death before the state is written), at start-up or in the loop, leaves A active; the next clean pass switches."""
     stage_ready(L)
     real_save = L.save
 
@@ -245,7 +221,6 @@ def test_A1_fault_while_switching_keeps_the_old_slot_live(L, env, monkeypatch, t
 
 
 def test_A1_a_stale_staged_version_is_never_switched_to(L, env, monkeypatch, tmp_path):
-    """Staged names a version that slot B no longer holds (overwritten): switch refuses, at start-up and in the loop, and A stays live."""
     st = stage_ready(L)
     st["heads"]["B"] = "something-else"
     L.save(st)
@@ -256,7 +231,6 @@ def test_A1_a_stale_staged_version_is_never_switched_to(L, env, monkeypatch, tmp
 
 
 def test_A1_staged_without_the_idle_venv_is_never_switched_to(L, env, monkeypatch, tmp_path):
-    """Death mid-build left slot B without its venv while staged still names the sha: A stays live."""
     st = stage_ready(L)
     L.venv_python("B").unlink()
     assert not L.switch(L.load())
@@ -264,13 +238,12 @@ def test_A1_staged_without_the_idle_venv_is_never_switched_to(L, env, monkeypatc
     assert L.load()["active"] == "A"
 
 
-RELAUNCH_LOOP = pytest.param("loop", OSError("no process"))   # was a strict xfail; fixed 2026-10-25
-RELAUNCH_STARTUP = pytest.param("startup", OSError("no process"))   # was a strict xfail; fixed 2026-10-25
+RELAUNCH_LOOP = pytest.param("loop", OSError("no process"))
+RELAUNCH_STARTUP = pytest.param("startup", OSError("no process"))
 
 
 @pytest.mark.parametrize("where,exc", [RELAUNCH_LOOP, ("loop", _Death("power")), RELAUNCH_STARTUP, ("startup", _Death("power"))])
 def test_A1_fault_at_relaunch_keeps_a_working_slot_and_rosie_starts_again(L, env, monkeypatch, tmp_path, where, exc):
-    """The switch is saved, then the new launcher cannot start (or the PC dies): the new slot is live with its venv, A is kept, Rosie is restarted."""
     stage_ready(L)
     newer = L.slot_dir("B") / "tools" / "windows"
     newer.mkdir(parents=True)
@@ -298,9 +271,7 @@ def test_A1_fault_at_relaunch_keeps_a_working_slot_and_rosie_starts_again(L, env
         assert started[-1] == ["x"] and len(started) >= (2 if where == "loop" else 1), "Rosie was not started again after the failed relaunch"
 
 
-# ------------------------------------------------------------------ A2: a good update is never rolled back or marked bad by mistake
 def test_A2_a_second_launcher_exits_without_starting_rosie_or_touching_state(L, env, monkeypatch, tmp_path):
-    """A second launcher (lock held) exits 0 and starts nothing, runs no set-up, and leaves state.json and the log untouched."""
     st = make_active(L)
     st["probation_until"] = time.time() + 1000
     L.save(st)
@@ -317,7 +288,6 @@ def test_A2_a_second_launcher_exits_without_starting_rosie_or_touching_state(L, 
 
 
 def test_A2_a_second_launcher_with_the_real_lock_exits_without_starting_rosie(L, env, monkeypatch):
-    """The real lock held by another process makes run() exit 0 before it loads state or starts anything."""
     if L.WIN:
         pytest.skip("msvcrt locking is covered on Windows CI")
     import fcntl
@@ -335,7 +305,6 @@ def test_A2_a_second_launcher_with_the_real_lock_exits_without_starting_rosie(L,
 
 
 def test_A2_probation_does_not_roll_back_before_she_answered_within_the_startup_grace(L, env, monkeypatch, tmp_path):
-    """4.5 minutes of silence right after a switch, with the real rollback: no rollback, active slot and bad list unchanged."""
     st = make_active(L)
     st.update(previous="B", active="A")
     L.venv_python("B").parent.mkdir(parents=True, exist_ok=True)
@@ -348,7 +317,6 @@ def test_A2_probation_does_not_roll_back_before_she_answered_within_the_startup_
 
 
 def test_A2_a_single_smoke_timeout_does_not_mark_the_version_bad(L, env, monkeypatch):
-    """One 'no answer in 2 minutes' smoke result leaves the sha out of the bad list and nothing staged; it is retried."""
     make_active(L)
     monkeypatch.setattr(L, "build", lambda *a, **k: None)
     monkeypatch.setattr(L, "smoke", lambda slot: {"ok": False, "checks": {}, "error": L.SMOKE_TIMEOUT})
@@ -356,13 +324,11 @@ def test_A2_a_single_smoke_timeout_does_not_mark_the_version_bad(L, env, monkeyp
     now = L.load()
     assert NEW not in now["bad"] and now["staged"] is None and now["active"] == "A"
     gh = Faulty(checks={NEW: GOOD})
-    L.check(L.load(), gh)                                                  # the next check still looks at it
+    L.check(L.load(), gh)
     assert any("codeload" in u or "check-runs" in u for u in gh.calls)
 
 
-# ------------------------------------------------------------------ A3: updates never stop without anyone being told
 def test_A3_the_workflow_job_ids_are_exactly_the_required_checks():
-    """tests.yml job ids == REQUIRED_CHECKS, so a renamed CI job cannot silently block (or bypass) every update."""
     wf = (REPO / ".github" / "workflows" / "tests.yml").read_text(encoding="utf-8")
     ids = set(re.findall(r"^  ([A-Za-z0-9_-]+):\s*$", wf.split("\njobs:", 1)[1], re.M))
     import importlib.util
@@ -373,11 +339,10 @@ def test_A3_the_workflow_job_ids_are_exactly_the_required_checks():
 
 
 def test_A3_the_same_build_failure_three_times_marks_the_sha_bad_and_stops_retrying(L, env, monkeypatch):
-    """Three build failures of one sha add it to bad; a fourth check makes no download and says so in last_result."""
     make_active(L)
 
     def boom(*a, **k):
-        raise subprocess.CalledProcessError(1, ["uv", "pip", "install"])   # a broken build (network trouble never counts)
+        raise subprocess.CalledProcessError(1, ["uv", "pip", "install"])
     monkeypatch.setattr(L, "build", boom)
     for _ in range(3):
         L.check(L.load(), Faulty(checks={NEW: GOOD}))
@@ -389,7 +354,6 @@ def test_A3_the_same_build_failure_three_times_marks_the_sha_bad_and_stops_retry
 
 
 def test_A3_check_errors_are_recorded_for_the_health_page(L, env, monkeypatch):
-    """GitHub unreachable or its checks unreadable: last_check is now and last_result starts 'Could not', which the Updates row warns on."""
     make_active(L)
     for fail_on, text in (("/commits/main", "Could not reach GitHub"), ("/check-runs", "Could not read GitHub's checks")):
         before = time.time()
@@ -399,7 +363,7 @@ def test_A3_check_errors_are_recorded_for_the_health_page(L, env, monkeypatch):
 
 
 def test_A3_a_crashing_check_is_retried_at_the_next_check_time_not_every_pass(L, env, monkeypatch, tmp_path):
-    """check() raising inside the loop sets last_check to now, so it is called once, not every 15 seconds."""
+    # board #885 why-failing-check-throttled
     make_active(L)
     calls = []
 
@@ -411,7 +375,6 @@ def test_A3_a_crashing_check_is_retried_at_the_next_check_time_not_every_pass(L,
     assert len(calls) == 1 and L.load()["last_check"] is not None
 
 
-# ------------------------------------------------------------------ A4: updates and rollbacks never touch her data, secrets or vault
 def _canaries(L):
     out = {}
     for n in L.SHARED:
@@ -434,7 +397,6 @@ def _slot_files():
 
 
 def test_A4_update_builds_and_slot_rebuilds_leave_the_shared_folders_alone(L, env):
-    """Build A, build B, rebuild A and B again (junction/symlink slots replaced): canary files in data, secrets and vault are unchanged."""
     canaries = _canaries(L)
     gh = GitHub(files=_slot_files())
     for slot in ("A", "B", "A", "B", "A"):
@@ -446,7 +408,6 @@ def test_A4_update_builds_and_slot_rebuilds_leave_the_shared_folders_alone(L, en
 
 
 def test_A4_a_leftover_new_folder_with_links_is_cleared_without_touching_the_targets(L, env):
-    """A death after linking left .B-new with links to the shared folders: the next build removes it and the canaries survive."""
     canaries = _canaries(L)
     tmp = L.SLOTS / ".B-new"
     tmp.mkdir(parents=True)
@@ -461,7 +422,7 @@ def test_A4_a_leftover_new_folder_with_links_is_cleared_without_touching_the_tar
 
 
 def test_A4_a_download_into_a_slot_with_links_leaves_the_targets_alone(L, env):
-    """download() empties an existing slot that has links first; a zip with data/ files never writes through them."""
+    # board #885 safety-links-cleared-before-download
     canaries = _canaries(L)
     L.build("A", "new1", GitHub(files=_slot_files()))
     L.download("new1", L.slot_dir("A"), GitHub(files=_slot_files()))
@@ -469,7 +430,6 @@ def test_A4_a_download_into_a_slot_with_links_leaves_the_targets_alone(L, env):
 
 
 def test_A4_a_rollback_leaves_the_shared_folders_alone(L, env):
-    """switch() then rollback() (and a rebuild of the bad slot) never changes the shared canaries."""
     canaries = _canaries(L)
     gh = GitHub(files=_slot_files())
     L.build("A", "old1", gh)
@@ -486,7 +446,6 @@ def test_A4_a_rollback_leaves_the_shared_folders_alone(L, env):
 
 
 def test_A4_removing_a_slot_unlinks_the_links_and_never_deletes_through_them(L, env):
-    """_remove() takes the links out of a slot and keeps the targets, and the slot's own files go."""
     canaries = _canaries(L)
     L.build("A", "new1", GitHub(files=_slot_files()))
     slot = L.slot_dir("A")
@@ -497,7 +456,6 @@ def test_A4_removing_a_slot_unlinks_the_links_and_never_deletes_through_them(L, 
 
 @pytest.mark.skipif(os.name != "nt", reason="real directory junctions exist only on Windows")
 def test_A4_real_junctions_are_unlinked_before_the_slot_is_deleted(L, env):
-    """On Windows a slot with real junctions to data, secrets and vault is deleted and rebuilt without touching the targets."""
     canaries = _canaries(L)
     gh = GitHub(files=_slot_files())
     L.build("A", "new1", gh)
@@ -508,7 +466,6 @@ def test_A4_real_junctions_are_unlinked_before_the_slot_is_deleted(L, env):
     _assert_canaries(L, canaries)
 
 
-# ------------------------------------------------------------------ A5: a launcher self-update always leaves a launcher running
 def _self_update(L, monkeypatch, tmp_path):
     newer = L.slot_dir("A") / "tools" / "windows"
     newer.mkdir(parents=True)
@@ -521,7 +478,6 @@ def _self_update(L, monkeypatch, tmp_path):
 
 
 def test_A5_the_lock_is_released_before_the_new_launcher_starts_and_it_can_take_it(L, monkeypatch, tmp_path):
-    """The old launcher closes its lock before Popen; at that moment a second lock attempt (the new launcher) succeeds."""
     if L.WIN:
         pytest.skip("msvcrt locking is covered on Windows CI")
     import fcntl
@@ -549,7 +505,6 @@ def test_A5_the_lock_is_released_before_the_new_launcher_starts_and_it_can_take_
 
 
 def test_A5_the_old_launcher_keeps_the_lock_if_nothing_changed(L, monkeypatch, tmp_path):
-    """With no newer launcher in the slot nothing is closed, copied or started."""
     me = _self_update(L, monkeypatch, tmp_path)
     (L.slot_dir("A") / "tools" / "windows" / "launcher.py").write_text(me.read_text())
     monkeypatch.setattr(L.subprocess, "Popen", lambda *a, **k: pytest.fail("relaunched"))
@@ -557,23 +512,20 @@ def test_A5_the_old_launcher_keeps_the_lock_if_nothing_changed(L, monkeypatch, t
 
 
 def test_A5_a_relaunch_never_loops(L, monkeypatch, tmp_path):
-    """After the copy the bytes are equal, so the new launcher's own check starts nothing; the copy equals the slot's file."""
     me = _self_update(L, monkeypatch, tmp_path)
     popens = []
     monkeypatch.setattr(L.subprocess, "Popen", lambda args, **k: popens.append(args))
     with pytest.raises(SystemExit):
         L.relaunch_if_launcher_changed({"active": "A"}, L.Runner())
     assert me.read_bytes() == (L.slot_dir("A") / "tools" / "windows" / "launcher.py").read_bytes()
-    L.relaunch_if_launcher_changed({"active": "A"}, L.Runner())        # what the new launcher does at its own switch: no exit, no start
+    L.relaunch_if_launcher_changed({"active": "A"}, L.Runner())
     assert len(popens) == 1
 
 
-# ------------------------------------------------------------------ A7: only a commit whose every required job succeeded is installed
 REQ = ("pytest", "windows", "windows-start")
 
 
 def _runs(**over):
-    """The three required jobs as successes, with `over` = {name: conclusion or ('queued'|'in_progress')} replacing them; None drops a job."""
     runs = {n: job(n, "success") for n in REQ}
     for n, v in over.items():
         n = n.replace("_", "-")
@@ -592,7 +544,6 @@ A7_BAD = [(n, v, False if v is not None and v not in ("queued", "in_progress") o
 
 @pytest.mark.parametrize("name,state,verdict", A7_BAD)
 def test_A7_a_commit_with_a_required_job_missing_skipped_failed_cancelled_or_running_is_never_built(L, env, monkeypatch, name, state, verdict):
-    """Required job <name> is <state>: checks_passed is False (or None while running) and check() never builds."""
     make_active(L)
     runs = _runs(**{name: state})
     gh = Faulty(checks={NEW: runs})
@@ -605,7 +556,6 @@ def test_A7_a_commit_with_a_required_job_missing_skipped_failed_cancelled_or_run
 @pytest.mark.parametrize("extra,allowed", [(job("lint", "skipped"), True), (job("lint", "neutral"), True), (job("lint", "failure"), False),
                                            (job("lint", "cancelled"), False), (job("lint", None, "in_progress"), False)])
 def test_A7_only_a_skipped_extra_check_is_allowed(L, env, monkeypatch, extra, allowed):
-    """An extra non-required check that is skipped (or neutral) is allowed; failed, cancelled or running is not."""
     make_active(L)
     built = []
     monkeypatch.setattr(L, "build", lambda slot, sha, get=None: built.append(sha))
@@ -616,7 +566,6 @@ def test_A7_only_a_skipped_extra_check_is_allowed(L, env, monkeypatch, extra, al
 
 @pytest.mark.parametrize("where", ["loop", "startup"])
 def test_A5_a_successful_relaunch_starts_no_second_rosie(L, env, monkeypatch, tmp_path, where):
-    """Gate review 2026-10-25: the old launcher must exit after starting the new one, never start Rosie again on its way out (port clash)."""
     stage_ready(L)
     newer = L.slot_dir("B") / "tools" / "windows"
     newer.mkdir(parents=True)
@@ -635,7 +584,6 @@ def test_A5_a_successful_relaunch_starts_no_second_rosie(L, env, monkeypatch, tm
 
 
 def test_A2_a_slow_first_answer_in_the_smoke_test_counts_as_a_timeout(L, monkeypatch):
-    """Pass-1 note 2026-10-25: a timeout on /api/home marked a good version bad at once; it now gets the second-time rule."""
     import urllib.error
     for d in ("app", "static"):
         (L.slot_dir("A") / d).mkdir(parents=True, exist_ok=True)
@@ -662,9 +610,7 @@ def test_A2_a_slow_first_answer_in_the_smoke_test_counts_as_a_timeout(L, monkeyp
         assert L.smoke("A")["error"] == L.SMOKE_TIMEOUT, exc
 
 
-# ------------------------------------------------------------------ A3: helpers from the old slot (her PC, 2026-10-25)
 def test_A3_old_slot_helpers_are_matched_by_exact_folder(L):
-    """Claude Code's Rosie helpers keep running from the old slot and lock it; only programs inside that exact slot folder match."""
     a, b = L.slot_dir("A"), L.slot_dir("B")
     listing = "\n".join([
         f"101\t{a}\\.venv\\Scripts\\python.exe\t\"{a}\\.venv\\Scripts\\python.exe\" \"{a}\\app\\board_mcp.py\"",
@@ -678,7 +624,7 @@ def test_A3_old_slot_helpers_are_matched_by_exact_folder(L):
 
 
 def test_A3_the_old_slots_helpers_are_stopped_before_it_is_rebuilt(L, monkeypatch):
-    """A build of the idle slot first stops what still runs from it (WinError 32 on her PC); the live slot's programs are never touched."""
+    # board #885 quirk-winerror-32-stop-first
     st = L.load()
     st["heads"] = {"A": "old"}
     L.save(st)

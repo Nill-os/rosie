@@ -1,15 +1,4 @@
-"""Claude token report (owner 2026-10-25: "build a token report into rosie and have you look at it every so often to make sure we are
-doing good on tokens"). Reads Claude Code's session logs (<claude home>/projects/**/*.jsonl, subagent logs included) and the local-model
-ledger (skills/token-saver/ledger.jsonl) and keeps only numbers and ids, never message text.
-
-* refresh() is incremental: data/token_report.json remembers, per log file, its size, mtime and the byte offset already read, so a
-  refresh reads only appended bytes. One refresh reads at most `cap` bytes (newest files first) and carries on next time.
-* Each API response counts once: Claude Code writes the same usage on one line per content block, so lines are de-duplicated by
-  requestId (or message id).
-* Days are local days. Families: opus, sonnet, haiku, other. Thread: main, or sub (a file under subagents/, or isSidechain).
-* summary() gives the totals, the per-day series, the top sessions and the plain-language flags; hook_line() is the one line the
-  Claude session-start hook shows; `python app/tokens.py` prints the summary for Claude.
-Standard library only (the Claude hook imports it) and every read is quiet on errors."""
+# board #786 owner-token-report-numbers
 import datetime as dt
 import json
 import os
@@ -21,15 +10,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 STATE = ROOT / "data" / "token_report.json"
 FAMILIES = ("opus", "sonnet", "haiku", "other")
-KEEP_DAYS = 40                      # older days are dropped from the cache
-MAX_AGE_DAYS = 35                   # log files not touched for this long are skipped
-CAP_BYTES = 200 * 1024 * 1024       # most bytes one refresh reads
-KEEP_IDS = 30                       # request ids remembered per file (one response's lines sit next to each other)
-CLI_CAP = 3 * 1024 * 1024 * 1024    # `python app/tokens.py` reads everything that is new
-GOALS = {"token_goal_main_share": 50,          # the main (top) model may write at most this % of the output tokens over 7 days
-         "token_goal_cache_read_ratio": 80,    # at least this % of the input should come from the cache over 7 days
-         "token_spike_factor": 2.0}            # today's output above this many times the 7-day average is a spike
-MIN_SHARE_OUT = 50_000              # a share over fewer output tokens than this says nothing yet
+KEEP_DAYS = 40
+MAX_AGE_DAYS = 35
+CAP_BYTES = 200 * 1024 * 1024
+KEEP_IDS = 30
+CLI_CAP = 3 * 1024 * 1024 * 1024
+GOALS = {"token_goal_main_share": 50,
+         "token_goal_cache_read_ratio": 80,
+         "token_spike_factor": 2.0}
+MIN_SHARE_OUT = 50_000  # board #786 why-share-needs-volume
 MIN_SPIKE_OUT = 50_000
 _lock = threading.Lock()
 
@@ -61,7 +50,6 @@ def family(model) -> str:
 
 
 def _day(ts: str):
-    """ISO UTC time -> local day 'YYYY-MM-DD' (None if it can't be read)."""
     try:
         d = dt.datetime.fromisoformat(ts.replace("Z", "+00:00"))
         if d.tzinfo is None:
@@ -89,7 +77,6 @@ def _save(st: dict):
 
 
 def _add(st: dict, day, fam, sub, vals, project, sid):
-    """vals = (output, input, cache_read, cache_write)."""
     cell = st["days"].setdefault(day, {}).setdefault(fam, {}).setdefault("sub" if sub else "main", [0, 0, 0, 0, 0])
     for i, v in enumerate(vals):
         cell[i] += v
@@ -103,7 +90,6 @@ def _add(st: dict, day, fam, sub, vals, project, sid):
 
 
 def _read_file(st: dict, path: Path, rec: dict, project: str, budget: int) -> int:
-    """Read the new complete lines of one log. Returns the bytes read."""
     sub = "subagents" in path.parts
     sid_dir = path.parent.parent.name if sub else path.stem
     ids = rec.setdefault("ids", [])
@@ -113,7 +99,7 @@ def _read_file(st: dict, path: Path, rec: dict, project: str, budget: int) -> in
         f.seek(rec["off"])
         while n_read < budget:
             line = f.readline()
-            if not line.endswith(b"\n"):                # half-written last line: read it next time
+            if not line.endswith(b"\n"):  # board #786 why-half-line-read-later
                 break
             rec["off"] += len(line)
             n_read += len(line)
@@ -150,7 +136,7 @@ def _read_ledger(st: dict, budget: int = 8 * 1024 * 1024):
     try:
         size = p.stat().st_size
         if size < led["off"]:
-            led["off"], led["days"] = 0, {}              # the file was replaced
+            led["off"], led["days"] = 0, {}
         with open(p, "rb") as f:
             f.seek(led["off"])
             while budget > 0:
@@ -165,7 +151,7 @@ def _read_ledger(st: dict, budget: int = 8 * 1024 * 1024):
                     off, ret = int(r.get("tokens_offloaded") or 0), int(r.get("tokens_returned") or 0)
                 except (ValueError, KeyError, TypeError):
                     continue
-                c = led["days"].setdefault(day, [0, 0, 0])      # kept out, offloaded, calls
+                c = led["days"].setdefault(day, [0, 0, 0])
                 c[0] += max(off - ret, 0)
                 c[1] += off
                 c[2] += 1
@@ -187,8 +173,6 @@ def _prune(st: dict):
 
 
 def refresh(cap: int = CAP_BYTES, budget_s: float = 0) -> dict:
-    """Read what is new in the logs (at most `cap` bytes, newest files first; `budget_s` > 0 also stops after that many seconds),
-    save the cache and return it. Several callers at once: the others wait."""
     with _lock:
         st = _load()
         proj = claude_home() / "projects"
@@ -211,7 +195,7 @@ def refresh(cap: int = CAP_BYTES, budget_s: float = 0) -> dict:
         left = cap
         for mtime, size, p in found:
             rec = st["files"].setdefault(str(p), {"size": 0, "mtime": 0, "off": 0, "ids": []})
-            if size < rec["off"]:                                   # replaced or truncated: start over for this file
+            if size < rec["off"]:
                 rec.update(off=0, ids=[])
             if size > rec["off"] and left > 0 and not (budget_s and time.time() - t0 > budget_s):
                 try:
@@ -230,8 +214,6 @@ def refresh(cap: int = CAP_BYTES, budget_s: float = 0) -> dict:
             pass
         return st
 
-
-# ---------------------------------------------------------------- numbers
 
 def _dayrow(st: dict, day: str) -> dict:
     row = {"day": day, "out": 0, "in": 0, "cache_read": 0, "cache_write": 0, "n": 0, "main": 0, "sub": 0,
@@ -276,7 +258,6 @@ def _fmt(n) -> str:
 
 
 def flags(today: dict, week: dict, prior: list, goals: dict = None) -> list:
-    """Plain-language flags: [{"id", "text"}]; the first one is the most urgent."""
     g = goals or _goals()
     out = []
     avg = sum(r["out"] for r in prior) / len(prior) if prior else 0
@@ -294,7 +275,6 @@ def flags(today: dict, week: dict, prior: list, goals: dict = None) -> list:
 
 
 def _report(st: dict) -> dict:
-    """Everything the page, the hook and the CLI show, computed from the cache."""
     today_d = dt.date.today()
     days = [(today_d - dt.timedelta(days=i)).isoformat() for i in range(29, -1, -1)]
     rows = [_dayrow(st, d) for d in days]
@@ -328,9 +308,8 @@ def _report(st: dict) -> dict:
 
 
 def summary(refresh_now: bool = False) -> dict:
-    """The report from the cache; refresh_now reads the new log bytes first."""
     st = refresh() if refresh_now else _load()
-    rep = _report(st)                  # recomputed: a cache from yesterday must still show today as today
+    rep = _report(st)
     rep["updated"] = st.get("at", 0)
     return rep
 
@@ -355,7 +334,6 @@ def text(rep: dict) -> str:
 
 
 def hook_line():
-    """The one line the Claude session-start hook shows, from the cache only (never a scan); None if there is no cache."""
     try:
         st = json.loads(STATE.read_text(encoding="utf-8"))
         if st.get("v") != 1 or not st.get("at"):
@@ -372,7 +350,6 @@ def hook_line():
 
 
 def job(now, cfg, add=None, background=True):
-    """Hourly: refresh the report (capped, at most 20 s) and, once a day when a flag is active, put one item in the Inbox."""
     if cfg.get("token_report_on", True) is False:
         return None
     last = _JOB.get("at")

@@ -1,4 +1,3 @@
-"""Full-text search over the notes vault (SQLite FTS5, incremental by modification time)."""
 import os
 import re
 import sqlite3

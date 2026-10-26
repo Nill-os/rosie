@@ -1,6 +1,4 @@
-"""Stop runaway turns (Rosie, 2026-10-19): a small local model can loop for half an hour, inventing
-user messages and fake tools, and it holds the shared GPU the whole time. At WARN_AT steps the agent is told to
-answer with what it has; at STOP_AT the turn ends."""
+# board #808 why-step-cap-runaway
 from agent import LoopData
 from helpers.errors import HandledException
 from helpers.extension import Extension

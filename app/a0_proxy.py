@@ -1,9 +1,4 @@
-"""Agent Zero's own web page as Rosie's Chat (owner 2026-10-23: "i want rosies chat to just be agent zero with all its functions").
-Agent Zero's page has no login, listens on this PC only and uses absolute paths (/public/..., /api/...) and websockets, so it can't sit
-under a path of Rosie's page. This is a reverse proxy on its OWN port (a0_proxy_port): the page works unchanged there, and Rosie's Chat
-shows it in a frame. Agent Zero can run commands, so the login is the whole security boundary: no request and no websocket gets through
-without Rosie's own session cookie (checked the way her middleware does, in constant time), and that cookie is never passed on.
-Cookies belong to a host, not a port, so the cookie Rosie sets also reaches this port."""
+# board #699 owner-rosie-chat-is-agent-zero
 import asyncio
 import os
 import re
@@ -27,9 +22,9 @@ import testguard
 COOKIE = "assistant_session"
 DEFAULT_PORT = 8771
 HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer", "trailers", "transfer-encoding", "upgrade",
-       "proxy-connection"}                                       # RFC 9110 hop-by-hop headers: they belong to one connection, not to the page
+       "proxy-connection"}
 _client: httpx.AsyncClient | None = None
-_transport = None                                                # tests put an httpx MockTransport here
+_transport = None
 
 
 def port() -> int:
@@ -41,17 +36,15 @@ def port() -> int:
 
 
 def host() -> str:
-    return os.environ.get("ROSIE_HOST") or "127.0.0.1"           # the address Rosie herself listens on (the Windows launcher sets it)
+    return os.environ.get("ROSIE_HOST") or "127.0.0.1"
 
 
 def _allowed(cookie: str) -> bool:
-    """Rosie's own check (server._logged_in): constant time, and it never raises, so a missing key just fails closed."""
     import server
     return server._logged_in(cookie)
 
 
 def _cookie_without_login(header: str) -> str:
-    """The Cookie header for Agent Zero: everything but Rosie's session cookie."""
     keep = [c.strip() for c in header.split(";") if c.strip() and c.strip().split("=", 1)[0].strip() != COOKIE]
     return "; ".join(keep)
 
@@ -66,7 +59,7 @@ def _upstream_headers(src, origin: str) -> dict:
             v = _cookie_without_login(v)
             if not v:
                 continue
-        elif k == "origin":                                       # Agent Zero checks that the Origin is its own
+        elif k == "origin":
             v = origin
         elif k == "referer":
             v = origin + (urlsplit(v).path or "/") + ("?" + urlsplit(v).query if urlsplit(v).query else "")
@@ -75,7 +68,6 @@ def _upstream_headers(src, origin: str) -> dict:
 
 
 def _relative(location: str, up) -> str:
-    """A redirect to Agent Zero's own address becomes a path on this port."""
     loc = urlsplit(location)
     if loc.scheme and loc.netloc in (up.netloc, f"localhost:{up.port}", f"127.0.0.1:{up.port}"):
         return (loc.path or "/") + ("?" + loc.query if loc.query else "") + ("#" + loc.fragment if loc.fragment else "")
@@ -84,13 +76,13 @@ def _relative(location: str, up) -> str:
 
 def _http_client() -> httpx.AsyncClient:
     global _client
-    if _client is None:                                            # no read timeout: Agent Zero streams answers for minutes
+    if _client is None:
         _client = httpx.AsyncClient(transport=_transport, timeout=httpx.Timeout(30, read=None), follow_redirects=False)
     return _client
 
 
 async def _http(request: Request):
-    if not _allowed(request.cookies.get(COOKIE, "")):              # THE security boundary for every page, script and API call
+    if not _allowed(request.cookies.get(COOKIE, "")):  # board #699 safety-cookie-boundary
         return PlainTextResponse("Log in to Rosie first.", status_code=401)
     base = a0_host.url()
     up = urlsplit(base)
@@ -107,14 +99,13 @@ async def _http(request: Request):
         k = k.lower()
         if k in HOP:
             continue
-        out.append((k.encode("latin-1"), (_relative(v, up) if k == "location" else v).encode("latin-1")))   # Set-Cookie passes on as it came
-    r = StreamingResponse(resp.aiter_raw(), status_code=resp.status_code, background=_Close(resp))   # raw: the encoding header stays true
+        out.append((k.encode("latin-1"), (_relative(v, up) if k == "location" else v).encode("latin-1")))
+    r = StreamingResponse(resp.aiter_raw(), status_code=resp.status_code, background=_Close(resp))
     r.raw_headers = out
     return r
 
 
 class _Close:
-    """Starlette background task that closes the upstream response once the page has it all (or the browser left)."""
     def __init__(self, resp):
         self.resp = resp
 
@@ -127,9 +118,7 @@ def _name(hostport: str) -> str:
 
 
 def _same_site(headers) -> bool:
-    """The websocket's page is this host: its Origin names the Host it reached, or the forwarded host when Tailscale serve (or another
-    local proxy) passed it on from 127.0.0.1. No Origin (not a browser) is fine: the cookie check already ran. (SameSite=strict keeps
-    Rosie's cookie off other sites' requests; this is a second lock.)"""
+    # board #699 safety-websocket-origin-lock
     origin = headers.get("origin", "")
     if not origin:
         return True
@@ -139,10 +128,10 @@ def _same_site(headers) -> bool:
 
 
 async def _ws(ws: WebSocket):
-    if not _allowed(ws.cookies.get(COOKIE, "")):                  # same check as the pages; the middleware doesn't cover websockets
+    if not _allowed(ws.cookies.get(COOKIE, "")):
         await ws.close(code=4401)
         return
-    if not _same_site(ws.headers):                                 # a page on another site can't use the cookie here
+    if not _same_site(ws.headers):
         await ws.close(code=4403)
         return
     import websockets
@@ -151,7 +140,7 @@ async def _ws(ws: WebSocket):
     target = ("wss" if up.scheme == "https" else "ws") + "://" + up.netloc + ws.url.path + ("?" + ws.url.query if ws.url.query else "")
     extra = _upstream_headers(ws.headers, origin)
     for k in ("sec-websocket-key", "sec-websocket-version", "sec-websocket-extensions", "sec-websocket-protocol", "origin", "user-agent"):
-        extra.pop(k, None)                                         # the websockets library makes its own handshake headers
+        extra.pop(k, None)
     wanted = [p.strip() for p in ws.headers.get("sec-websocket-protocol", "").split(",") if p.strip()]
     try:
         upstream = await websockets.connect(target, subprotocols=wanted or None, origin=origin, additional_headers=extra or None,
@@ -194,14 +183,12 @@ def make_app() -> Starlette:
 
 
 def start():
-    """Serve in a background thread. Skipped in tests and the update check's sandbox."""
     if testguard.active() or os.environ.get("ROSIE_SANDBOX"):
         return
     import a0_mcp
     threading.Thread(target=a0_mcp._serve, args=(make_app, host(), port()), name="a0-proxy", daemon=True).start()
 
 
-# ---------------------------------------------------------------- what Settings and the Chat page need to know
 def listening(timeout=0.5) -> bool:
     try:
         with socket.create_connection((host() if host() != "0.0.0.0" else "127.0.0.1", port()), timeout=timeout):
@@ -211,13 +198,12 @@ def listening(timeout=0.5) -> bool:
 
 
 def phone_command() -> str:
-    """The one command the owner runs once so the phone can open this port over HTTPS (Tailscale needs it for each port; sudo on Linux)."""
+    # board #699 why-owner-runs-https-command
     p = port()
     return ("" if plat.IS_WIN else "sudo ") + f"tailscale serve --bg --https={p} http://127.0.0.1:{p}"
 
 
 def phone_served() -> bool | None:
-    """Does `tailscale serve status` (read only) list this port? None when Tailscale isn't there."""
     ts = plat.tailscale_bin()
     if not ts:
         return None

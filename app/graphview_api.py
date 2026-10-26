@@ -1,4 +1,3 @@
-"""The Memory graph page's API (graphview.py does the reading; static/graph.js draws it). Read-only."""
 from fastapi import APIRouter
 
 import graphview

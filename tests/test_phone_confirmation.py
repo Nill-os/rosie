@@ -12,7 +12,7 @@ def set_cfg(**kw):
 def test_text_asks_first_by_default_and_uses_the_name(fake_phone):
     q = phone.send_sms("Mom", "see you at six")
     assert q["status"] == "needs_confirmation" and q["summary"] == 'Text Mom: "see you at six"' and q["auto"] is False
-    assert not fake_phone.did("sms")                             # nothing sent until the user says yes
+    assert not fake_phone.did("sms")  # board #876 safety-nothing-sent-until-yes
 
 
 def test_same_person_two_numbers_uses_the_mobile(fake_phone):
@@ -49,7 +49,7 @@ def test_sms_modes(fake_phone):
 
 def test_call_modes(fake_phone):
     q = phone.call("Mom")
-    assert q["summary"] == "Calling Mom" and q["auto"] is True and not fake_phone.did("call")       # announce, then a cancel window
+    assert q["summary"] == "Calling Mom" and q["auto"] is True and not fake_phone.did("call")  # board #876 why-call-cancel-window
     set_cfg(call_confirm="ask")
     assert phone.call("Mom")["auto"] is False
     set_cfg(call_confirm="now")
@@ -58,7 +58,7 @@ def test_call_modes(fake_phone):
 
 
 def test_confirming_runs_the_job_and_cancelling_does_not(fake_phone):
-    import agent  # registers the executor for confirmed tools
+    import agent  # board #876 quirk-agent-import-registers
     q = phone.send_sms("Mom", "hi")
     actions.cancel(q["token"])
     assert not fake_phone.did("sms")

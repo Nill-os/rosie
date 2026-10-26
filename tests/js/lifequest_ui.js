@@ -1,5 +1,3 @@
-// Renders the Life Quest page (static/app.js) in jsdom with the server's real /api/lifequest answer, then logs a win the way a user would:
-// first with no note (nothing may be sent), then with a note and an area. Reports what ended up in the DOM and what was posted.
 const fs = require('fs');
 const vm = require('vm');
 const path = require('path');

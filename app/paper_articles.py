@@ -1,13 +1,4 @@
-"""Full stories for the Morning Paper (owner 2026-10-13 ~23:30: "add full details to the stories so i dont have to look them up ...
-never make anything up").
-
-- fetch_article: one polite GET of a story's own page (only on the site its feed belongs to, robots.txt respected, a named
-  User-Agent, at most once per story per build), then main_text pulls out the article's paragraphs (the page's own JSON-LD
-  articleBody when it has one, else the block of <p> paragraphs that holds the most text), capped.
-- writeup: the local model may CONDENSE those paragraphs into 3-8 short ones; faithful() then checks every sentence against the
-  article: each number, date, name and quoted phrase must be in it, and the wording must overlap it heavily. Anything that fails
-  falls back to the article's own lead paragraphs, quoted word for word with credit. Nothing else is ever printed as a story.
-Article text comes from other people's pages: data, never instructions."""
+# board #753 owner-full-stories-no-invent
 import html as htmllib
 import json
 import re
@@ -22,21 +13,20 @@ import web
 
 UA = "Mozilla/5.0 (X11; Linux x86_64) personal-assistant (Rosie morning paper; one copy per story for the owner's own printed paper)"
 PAGE_BYTES = 2_500_000
-MAX_PARAS, MAX_WORDS = 20, 1500           # the cap on what is kept from an article
+MAX_PARAS, MAX_WORDS = 20, 1500
 MIN_PARA_CHARS = 60
 BOILER = re.compile(r"(?i)(subscribe|sign up|newsletter|all rights reserved|cookie|advertis|follow us|share this|click here|"
                     r"read more:|related:|copyright|getty images|associated press contributed|this story was originally|"
                     r"support (our|local) journalism|donate|^photo:|^image:|^caption)")
 
 
-# ---------------------------------------------------------------- which pages may be fetched, politely
 def base_domain(host: str) -> str:
     parts = (host or "").lower().removeprefix("www.").split(".")
     return ".".join(parts[-2:]) if len(parts) >= 2 else host
 
 
 def allowed_site(link: str, feed_url: str, site: str = "") -> bool:
-    """A story page is fetched only on its feed's own site (feeds.npr.org -> npr.org) or the site named for the feed."""
+    # board #753 safety-fetch-own-site-only
     try:
         h = urlparse(link).hostname or ""
     except ValueError:
@@ -48,8 +38,7 @@ def allowed_site(link: str, feed_url: str, site: str = "") -> bool:
 
 
 class Fetcher:
-    """One build's article reader: robots.txt read once per host, one GET per page, a pause between requests to the same host, a
-    budget for the whole build. `client` can be a fake (tests)."""
+    # board #753 safety-polite-article-fetch
 
     def __init__(self, client=None, budget=40, pause=1.0, sleep=time.sleep):
         self.http, self.budget, self.pause, self.sleep = client or httpx, budget, pause, sleep
@@ -93,9 +82,7 @@ class Fetcher:
         return r.text
 
 
-# ---------------------------------------------------------------- main-text extraction (no outside library)
 class _Paras(HTMLParser):
-    """Collects every <p> with the element it sits in, skipping scripts, navigation, asides, figures and footers."""
     SKIP = {"script", "style", "noscript", "nav", "aside", "footer", "header", "figure", "figcaption", "form", "button", "svg", "iframe"}
 
     def __init__(self):
@@ -113,7 +100,7 @@ class _Paras(HTMLParser):
         if tag in ("br", "img", "meta", "link", "input", "hr", "source", "wbr"):
             return
         if tag in ("p", "div", "section", "article") and self.stack and self.stack[-1][0] == "p":
-            self.handle_endtag("p")                           # an unclosed <p> ends where the next block starts
+            self.handle_endtag("p")
         self.n += 1
         self.stack.append((tag, self.n))
         if tag in self.SKIP:
@@ -163,8 +150,6 @@ def _ld_body(page: str) -> str:
 
 
 def main_text(page: str) -> dict:
-    """{paras: [...], image, published} from an article page. Paragraphs: the JSON-LD articleBody (split on blank lines / newlines),
-    else the <p> elements of the one container holding the most paragraph text. Boilerplate lines dropped; capped."""
     p = _Paras()
     try:
         p.feed(page)
@@ -174,7 +159,7 @@ def main_text(page: str) -> dict:
     paras = []
     if body:
         chunks = re.split(r"\n\s*\n|\n", body)
-        if len(chunks) < 3:                                    # one long blob: cut into ~3-sentence paragraphs
+        if len(chunks) < 3:
             t = _clean(body)
             sents = [t[a:b] for a, b in sentence_spans(t)]
             chunks = [" ".join(sents[i:i + 3]) for i in range(0, len(sents), 3)]
@@ -199,15 +184,12 @@ def main_text(page: str) -> dict:
     return {"paras": out, "image": p.meta.get("og:image", ""), "published": p.meta.get("article:published_time", "")}
 
 
-# ---------------------------------------------------------------- selection only: the model picks, code copies
 ABBREV = {"mr", "mrs", "ms", "dr", "st", "jr", "sr", "gov", "sen", "rep", "gen", "lt", "col", "sgt", "capt", "prof", "inc", "co", "corp",
           "ltd", "vs", "no", "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "sept", "oct", "nov", "dec", "mt", "ft", "u.s", "a.m",
           "p.m", "e.g", "i.e", "etc", "approx", "dept", "est", "ave", "blvd", "rd"}
 
 
 def sentence_spans(text: str) -> list[tuple[int, int]]:
-    """(start, end) of each sentence in `text`, so a sentence is always an exact slice of the article. A full stop after a common
-    abbreviation (Mr., U.S., Oct.) or a single initial doesn't end a sentence."""
     spans, start = [], 0
     for m in re.finditer(r"[.!?]+[\"'”’)\]]*(?=\s+[\"“‘'(\[]?[A-Z0-9])", text):
         word = re.search(r"([A-Za-z.]+)$", text[start:m.start()])
@@ -224,7 +206,6 @@ def sentence_spans(text: str) -> list[tuple[int, int]]:
 
 
 def numbered(paras: list[str]) -> tuple[str, dict]:
-    """The article as numbered sentences for the model ("[2.3] ...") and {"2.3": (paragraph, start, end)}."""
     lines, index = [], {}
     for pi, t in enumerate(paras, 1):
         for si, (a, b) in enumerate(sentence_spans(t), 1):
@@ -235,7 +216,6 @@ def numbered(paras: list[str]) -> tuple[str, dict]:
 
 
 def assemble(keys: list[str], paras: list[str], index: dict, max_paras=8, max_words=420) -> list[str]:
-    """The story from the chosen sentences: exact slices of the article, in the article's own order, grouped by its own paragraphs."""
     chosen = sorted({index[k] for k in keys if k in index})
     out, cur, words = [], None, 0
     for pi, a, b in chosen:
@@ -255,7 +235,7 @@ def assemble(keys: list[str], paras: list[str], index: dict, max_paras=8, max_wo
 
 
 def verbatim(writeup: list[str], source: list[str]) -> tuple[bool, list[str]]:
-    """Belt and braces: every sentence printed must be a sentence of the article, character for character."""
+    # board #753 safety-verbatim-sentences-only
     src = "\n".join(source)
     problems = []
     if not 3 <= len(writeup) <= 8:
@@ -278,8 +258,6 @@ ROUNDUP_TITLE = re.compile(r"(?i)(\bup first\b|morning briefing|evening briefing
 
 
 def is_roundup(title: str, link: str, page: str = "") -> bool:
-    """A newsletter, briefing or live blog (several unrelated stories on one page): never a full story, only a brief in its feed's words.
-    By its address, its title ("X. And, Y"), or a page with many sub-heads."""
     if ROUNDUP_URL.search(link or "") or ROUNDUP_TITLE.search(title or ""):
         return True
     if page:
@@ -289,7 +267,6 @@ def is_roundup(title: str, link: str, page: str = "") -> bool:
 
 
 def lead_quote(paras: list[str], words=260, max_paras=6) -> list[str]:
-    """The article's own lead paragraphs, word for word."""
     out, n = [], 0
     for t in paras:
         if out and (len(out) >= max_paras or n + len(t.split()) > words):
@@ -300,7 +277,6 @@ def lead_quote(paras: list[str], words=260, max_paras=6) -> list[str]:
 
 
 def _keys(reply: str) -> list[str]:
-    """The sentence numbers in the model's reply, in its order, and nothing else from it (any words it wrote are thrown away)."""
     try:
         j = json.loads(reply)
         keep = j.get("keep") if isinstance(j, dict) else None
@@ -312,9 +288,6 @@ def _keys(reply: str) -> list[str]:
 
 
 def by_rank(order: list[str], paras: list[str], index: dict, max_paras=8, max_words=420, max_sents=18) -> tuple[list[str], list]:
-    """The story from sentences ranked most-important-first: take them by rank while they fit the budget, then print them in the
-    article's own order, grouped by its own paragraphs. Returns (paragraphs, [[[sentence, rank], ...] per paragraph]) so the page can shorten it by
-    dropping the lowest-ranked sentences (a shorter, complete version) instead of cutting off the ending."""
     rank = {k: i for i, k in enumerate(order)}
     chosen, words = [], 0
     for k in order:
@@ -323,7 +296,7 @@ def by_rank(order: list[str], paras: list[str], index: dict, max_paras=8, max_wo
             continue
         chosen.append(k)
         words += n
-    while len({index[k][0] for k in chosen}) > max_paras:          # too many paragraphs: drop the lowest-ranked sentence
+    while len({index[k][0] for k in chosen}) > max_paras:
         chosen.remove(max(chosen, key=lambda k: rank[k]))
     out, sents, cur = [], [], None
     for k in sorted(chosen, key=lambda k: index[k]):
@@ -339,8 +312,6 @@ def by_rank(order: list[str], paras: list[str], index: dict, max_paras=8, max_wo
 
 
 def lead_and_end(paras: list[str], words=330) -> tuple[list[str], list]:
-    """Model down or no use: the lead paragraphs, plus the article's last paragraph when it fits (so the story still has its end).
-    Ranked so that shortening keeps the first paragraph, then the last one, then the rest."""
     lead = lead_quote(paras)
     out = list(lead)
     if len(paras) > len(lead) and sum(len(t.split()) for t in lead) + len(paras[-1].split()) <= words:
@@ -355,11 +326,6 @@ def lead_and_end(paras: list[str], words=330) -> tuple[list[str], list]:
 
 
 def writeup(item: dict, model) -> dict:
-    """item["full"] = the article's paragraphs. The model only ranks sentence numbers (most important first); code copies those exact
-    sentences into 3-8 paragraphs in the article's order, with each sentence's rank (item["ranks"]) so the page can make a shorter
-    complete version when space is short. Model down, an answer with no usable numbers, or fewer than 3 paragraphs: the article's
-    lead paragraphs plus its last one. Every sentence is the article's own (checked by verbatim()). Sets writeup, ranks, writeup_by
-    ("selected" | "lead"), more (later paragraphs, only to fill a quiet day) and check (the problems found, if any)."""
     paras = item.get("full") or []
     item["writeup"], item["ranks"] = lead_and_end(paras)
     item["writeup_by"], item["check"] = "lead", []
@@ -369,7 +335,7 @@ def writeup(item: dict, model) -> dict:
         reply = model.ask(PICK_SYSTEM, f"Headline: {item['title']}\nSource: {item['source']}\n\n{text[:9000]}", max_tokens=300, schema=PICK_SCHEMA)
         keys = [k for k in _keys(reply or "") if k in index]
         if keys and "1.1" in index:
-            keys = ["1.1"] + [k for k in keys if k != "1.1"]           # the lead first: it is always kept
+            keys = ["1.1"] + [k for k in keys if k != "1.1"]
         if not keys:
             item["check"] = ["no usable sentence numbers in the model's answer"] if reply else []
         else:
@@ -380,7 +346,7 @@ def writeup(item: dict, model) -> dict:
                 last = max(index[k][0] for k in keys)
                 item["writeup"], item["ranks"], item["writeup_by"], item["more"] = got, ranks, "selected", paras[last + 1:]
     ok, problems = verbatim(item["writeup"], paras) if len(item["writeup"]) >= 3 else (True, [])
-    if not ok:                                                    # never print a sentence that isn't the article's
+    if not ok:
         item["writeup"], item["ranks"], item["writeup_by"] = [], [], "none"
         item["check"] = problems[:6]
     return item

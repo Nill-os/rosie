@@ -1,4 +1,3 @@
-"""Vector's talk polish: filler-only transcripts are ignored, thinking fillers vary and are cached, voice games."""
 import time
 
 import pytest

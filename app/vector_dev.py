@@ -1,10 +1,4 @@
-"""WireOS developer settings on Vector (his animation process's web page, port 8889): live switches the SDK does not have.
-Seen on WireOS 3.0.2.34d, 2026-10-21. Values are runtime only (gone after his services restart), so Rosie applies them
-again from time to time. Nothing here writes to his storage.
-
-- FakeButtonPressType = 1: the same as one press of his backpack button: he starts listening (follow-up questions).
-- (His eye colour is not here: ProcFace_Hue is overwritten by his engine. vector_bot.save_eye_color / eye_color.)
-- EnableKeepAlive{EyeBlink,EyeDart,EyeSquint}AudioEvents: the little sounds his idle eye moves make."""
+# board #791 why-runtime-settings-reapplied
 import math
 import threading
 import time
@@ -13,8 +7,8 @@ import httpx
 
 PORT = 8889
 EYE_SOUNDS = ("EnableKeepAliveEyeBlinkAudioEvents", "EnableKeepAliveEyeDartAudioEvents", "EnableKeepAliveEyeSquintAudioEvents")
-CYAN, PURPLE = 0.50, 0.78                          # ProcFace_Hue: 0..1 around the colour wheel
-IDLE_HUES = (CYAN, (CYAN + PURPLE) / 2, PURPLE, (CYAN + PURPLE) / 2)   # his saved colour while free, one step at a time
+CYAN, PURPLE = 0.50, 0.78
+IDLE_HUES = (CYAN, (CYAN + PURPLE) / 2, PURPLE, (CYAN + PURPLE) / 2)
 
 
 def _url(ip: str, path: str) -> str:
@@ -43,7 +37,6 @@ def available(ip: str) -> bool:
 
 
 def listen(ip: str) -> bool:
-    """Start his listening as if his button was pressed once."""
     return set_var(ip, "FakeButtonPressType", 1)
 
 
@@ -52,21 +45,16 @@ def eye_sounds(ip: str, on: bool) -> bool:
 
 
 def gradient_hue(t: float, period: float = 12.0) -> float:
-    """Cyan -> purple -> cyan, smoothly, once per `period` seconds."""
     return CYAN + (PURPLE - CYAN) * (0.5 - 0.5 * math.cos(2 * math.pi * t / period))
 
 
 class EyeSweep:
-    """Rosie's cyan to purple theme on his eyes (owner 2026-10-21: "a cyan purple gradient"). His eyes are one colour at a
-    time, so the gradient runs over time. While Rosie holds control (she talks, he drives) SetEyeColor steps once a second (four times a second kept his animation process busy and him warm: heat-warning sleep 2026-10-24); while his sit screens cover his eyes it does nothing; it
-    does nothing without control, so while he is free his saved eye colour takes one step through IDLE_HUES every
-    `idle_step_s` instead. Each save of his eye colour starts his own EyeColor reaction (about 3 s of get-in, switch and
-    get-out animations, seen 2026-10-24), so a step every 4 s kept him reacting nonstop: now every 10 minutes."""
+    # board #791 owner-cyan-purple-gradient
 
     def __init__(self, bot, step_s: float = 1.0, idle_step_s: float = 600.0, period_s: float = 12.0,
                  covered=lambda: False, hot=lambda: False):
         self.bot, self.ip = bot, bot.ip
-        self.covered, self.hot = covered, hot             # covered(): his sit screens hide his eyes; hot(): he is warm, rest
+        self.covered, self.hot = covered, hot
         self.step_s, self.idle_step_s, self.period_s = step_s, idle_step_s, period_s
         self._idle_i = 0
         self._stop = threading.Event()
@@ -84,7 +72,7 @@ class EyeSweep:
             now = time.time()
             try:
                 if self.covered() or self.hot():
-                    wait = min(self.idle_step_s, 5.0)        # nothing to see, or he needs to cool down: no colour changes
+                    wait = min(self.idle_step_s, 5.0)
                 elif getattr(self.bot, "has_control", lambda: False)():
                     self.bot.eye_color(round(gradient_hue(now - t0, self.period_s), 4), 1.0)
                     wait = self.step_s
@@ -95,5 +83,5 @@ class EyeSweep:
                 else:
                     wait = self.step_s
             except Exception:
-                wait = 5.0                                   # he is restarting or away: try again later
+                wait = 5.0
             self._stop.wait(wait)

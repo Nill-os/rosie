@@ -1,4 +1,3 @@
-"""Rosie's security watch (security_watch.py): what she counts as a hole, what she patches by herself, and what waits for the owner."""
 import datetime as dt
 import json
 import subprocess
@@ -82,7 +81,6 @@ def titles(lab):
     return [a[1] for a, _ in lab["inbox"]]
 
 
-# ---------------------------------------------------------------- versions
 @pytest.mark.parametrize("version,rng,hit", [
     ("2.4.1", "<= v3.1.0", True), ("3.2.0", "<=3.1.0", False), ("3.2.2", "v3.2.2", True), ("3.2.3", "v3.2.2", False),
     ("1.5", ">= 1.0, < 1.6", True), ("1.6", ">= 1.0, < 1.6", False), ("0.58.0 (abc)", "< 0.58.1", True), ("2.4.1", "", None),
@@ -109,7 +107,7 @@ def test_inventory_lines_from_a_container():
     text = ("OS Debian GNU/Linux 13\nSEC openssl\nSEC bad;rm -rf\nAPP immich {\"major\":2,\"minor\":4,\"patch\":1}\nAPP pi-hole v6.4.3\n"
             "APP navidrome 0.58.0 (abc)\nAPP broken \nPKG /opt/app/venv flask 3.0.0\n")
     m = sw.parse_inventory("media (container 112)", text)
-    assert m["os"] == "Debian GNU/Linux 13" and m["security"] == ["openssl"]                  # a name that isn't a package name is dropped
+    assert m["os"] == "Debian GNU/Linux 13" and m["security"] == ["openssl"]
     assert m["apps"] == {"immich": "2.4.1", "pi-hole": "6.4.3", "navidrome": "0.58.0"}
     assert m["packages"] == [("media (container 112):/opt/app/venv", "flask", "3.0.0")]
 
@@ -126,13 +124,12 @@ def test_container_patches_are_security_packages_only_and_never_prompt():
 def test_her_own_patch_stays_inside_the_major_version():
     fs = [{"kind": "package", "where": "Rosie", "name": "a", "version": "1.2", "fix": "1.4"},
           {"kind": "package", "where": "Rosie", "name": "a", "version": "1.2", "fix": "1.3"},
-          {"kind": "package", "where": "Rosie", "name": "b", "version": "1.9", "fix": "2.0"},          # a major bump waits for the owner
+          {"kind": "package", "where": "Rosie", "name": "b", "version": "1.9", "fix": "2.0"},  # board #891 owner-major-bump-waits
           {"kind": "package", "where": "Rosie", "name": "c", "version": "1.0", "fix": ""},
           {"kind": "package", "where": "~/tool", "name": "d", "version": "1.0", "fix": "1.1"}]
     assert sw.self_patch_plan(fs) == {"a": ("1.2", "1.4")}
 
 
-# ---------------------------------------------------------------- her own patch
 def ok(code=0, out=""):
     return subprocess.CompletedProcess([], code, out, "")
 
@@ -167,21 +164,20 @@ def test_a_pip_failure_changes_nothing_else():
     assert not r["ok"] and "pip" in r["why"] and calls == [["jinja2==3.1.6"], ["jinja2==3.1.2"]]
 
 
-# ---------------------------------------------------------------- the nightly check
 def test_the_check_finds_holes_patches_the_containers_and_starts_her_own_patch(lab):
     sw.check(NIGHT, lab["client"]())
     d = sw.load()
     keys = set(d["findings"])
     assert any(k.startswith("osv:Rosie:jinja2:GHSA-jin") for k in keys) and any(k.startswith("osv:~/tool:requests") for k in keys)
     assert any(k.startswith("ghsa:immich (container 101):immich:GHSA-imm") for k in keys) and not any("GHSA-old" in k for k in keys)
-    assert lab["ssh"] == [("pct exec 101 -- sh -s", sw.apt_security_cmd(["openssl", "libc6"]) + "\n")]   # only the container, security only
+    assert lab["ssh"] == [("pct exec 101 -- sh -s", sw.apt_security_cmd(["openssl", "libc6"]) + "\n")]
     assert d["machines"]["immich (container 101)"]["security"] == [] and d["patched"][-1]["where"] == "immich (container 101)"
     assert lab["started"] == [{"Jinja2": ("3.1.2", "3.1.6")}]
     t = titles(lab)
     assert any("Being exploited now: CVE-2026-9" in x for x in t) and not any("CVE-2026-8" in x or "CVE-2020-1" in x for x in t)
     assert any("CVE-2026-7" in x for x in t) and any(x.startswith("immich 2.4.1") for x in t) and any("~/tool" in x for x in t)
-    assert not any("Python packages: Rosie" in x for x in t)                # she patches those herself
-    assert not any("waiting on this PC" in x for x in t)                     # the first night: unattended-upgrades may still get it
+    assert not any("Python packages: Rosie" in x for x in t)
+    assert not any("waiting on this PC" in x for x in t)  # board #891 why-first-night-unattended
     assert any("Security updates installed" in x for x in t)
     assert d["ran_on"] == "2026-10-23" and d["kev_seen"] == ["CVE-2026-9"] and d["nvd_seen"] == ["CVE-2026-7"]
 
@@ -191,7 +187,7 @@ def test_the_next_night_reports_nothing_new_but_still_waiting_updates(lab):
     lab["inbox"].clear()
     sw.check(NIGHT + dt.timedelta(days=1), lab["client"]())
     t = titles(lab)
-    assert any("1 security updates waiting on this PC" in x for x in t)     # still there a day later
+    assert any("1 security updates waiting on this PC" in x for x in t)
     assert not any("Being exploited" in x or "CVE-2026-7" in x for x in t)
 
 
@@ -224,7 +220,6 @@ def test_self_patch_result_is_reported_once(lab):
     assert titles(lab) == ["Rosie patched herself"] and "jinja2 3.1.2 -> 3.1.6" in lab["inbox"][0][0][2]
 
 
-# ---------------------------------------------------------------- when it runs, and the owner's buttons
 def test_due_only_at_night_once_and_while_the_owner_is_away(lab, monkeypatch, tmp_path):
     monkeypatch.setattr(corner, "STAGE_FLAG", tmp_path / "no-stage")
     monkeypatch.setattr(corner, "owner_recent", lambda s: False)
@@ -255,11 +250,11 @@ def test_status_for_settings(lab):
     sw.check(NIGHT, lab["client"]())
     s = sw.status()
     assert s["on"] and s["autopatch"] and s["holes"] >= 3 and s["serious"] >= 2 and "immich on immich (container 101)" in s["apps"]
-    assert s["waiting"] == {"this PC": 1} and [p["target"] for p in s["patches"]] == ["server"]     # no Pi-hole here: no Pi-hole button
+    assert s["waiting"] == {"this PC": 1} and [p["target"] for p in s["patches"]] == ["server"]
     assert s["found"] == ["Immich", "Ollama", "Proxmox"]
 
 
-# ---------------------------------------------------------------- nothing owner-specific: any setup (owner 2026-10-23: sharing Rosie)
+# board #891 owner-sharing-rosie-setup
 @pytest.mark.parametrize("image,app", [
     ("ghcr.io/immich-app/immich-server:v2.4.1", ("immich", "2.4.1")), ("pihole/pihole:2026.10.0", ("pi-hole", "2026.10.0")),
     ("deluan/navidrome:latest", ("navidrome", "")), ("falkordb/falkordb-server:v4.22.2", ("falkordb", "4.22.2")),

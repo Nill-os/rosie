@@ -1,5 +1,3 @@
-"""Tools the assistant builds for itself. When nothing it has can do a job, it writes a small Python program, saves it here, runs it, and can reuse it later.
-They run as YOU (no sudo) with a time limit. Code that mentions credential stores or this app's secrets is refused. Saved in ~/assistant/data/user_tools (readable and editable by you)."""
 import json
 import os
 import re
@@ -10,7 +8,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 DIR = ROOT / "data" / "user_tools"
-SITE = DIR / "site"                         # packages the tools asked for, kept apart from the app's own
+SITE = DIR / "site"  # board #787 why-packages-kept-apart
 TIMEOUT = 120
 FORBIDDEN = re.compile(r"(\.ssh|\.gnupg|\.aws|\.kube|\.password-store|\.mozilla|google-chrome|chromium|keyrings|\.claude|\.codex|\.gemini|\.config[/\\](gcloud|gh)|[/\\]secrets\b|appdata[/\\]|session_key|access_code|google_token|google_client|gmail_\w+\.json|id_rsa|id_ed25519|\.netrc|\.git-credentials|\.env\b|wallet)", re.I)
 NAME = re.compile(r"^[a-z][a-z0-9_]{2,40}$")
@@ -30,7 +28,6 @@ def list_tools():
 
 
 def build_tool(name, description, code, usage="", requirements=""):
-    """Save a new tool (or replace one). It is not run yet."""
     name = (name or "").strip().lower()
     if not NAME.match(name):
         return {"error": "Tool name must be lowercase letters, digits and underscores (3-40 chars)."}
@@ -55,7 +52,6 @@ def build_tool(name, description, code, usage="", requirements=""):
 
 
 def run_tool(name, args=""):
-    """Run a saved tool. Input is passed as one text argument and on stdin; its printed output comes back."""
     name = (name or "").strip().lower()
     p = DIR / f"{name}.py"
     if not NAME.match(name) or not p.exists():
@@ -65,7 +61,7 @@ def run_tool(name, args=""):
     env = {**os.environ, "PYTHONPATH": str(SITE), "PATH": f"{Path.home()}/.local/bin:/usr/bin:/bin"}
     for k in list(env):
         if re.search(r"(TOKEN|SECRET|KEY|PASSWORD)", k, re.I):
-            env.pop(k)                                   # secrets in the environment never reach a tool
+            env.pop(k)
     try:
         r = subprocess.run([sys.executable, str(p), str(args)], input=str(args), capture_output=True, text=True, timeout=TIMEOUT, env=env, cwd=str(DIR))
     except subprocess.TimeoutExpired:

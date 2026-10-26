@@ -1,5 +1,4 @@
-"""The mail organizer (own Gmail labels), calendar requests from email, the Mail page's action list, and the one-time move of
-email-made tasks out of Tasks. Gmail and the calendar are fakes: nothing here can touch a real account."""
+# board #868 safety-fakes-only
 import datetime as dt
 import json
 import time
@@ -45,14 +44,12 @@ class Batch:
 
 
 class RateLimited(Exception):
-    """Like googleapiclient's HttpError for Gmail's per-minute quota (429)."""
     def __init__(self):
         super().__init__("Quota exceeded")
         self.resp, self.content = type("R", (), {"status": 429})(), b"rateLimitExceeded"
 
 
 class FakeGmail:
-    """users().labels().list, users().messages().get / batchModify and batch requests, over a dict {message id: set of label ids}."""
     def __init__(self, msgs):
         self.msgs, self.mods = msgs, []
 
@@ -102,7 +99,6 @@ def stored(mid, label, subject="Hello", ts=None):
     mailwatch._store("main", msg, {"importance": "normal", "needs_reply": False, "reason": "", "summary": "", "suspicious": False, "label": label})
 
 
-# ---------- the label choice ----------
 def test_the_label_can_only_be_an_allowed_one_or_none(monkeypatch):
     seen = {}
 
@@ -115,11 +111,11 @@ def test_the_label_can_only_be_an_allowed_one_or_none(monkeypatch):
     t = mailwatch.triage(msg, {"Orders": "things I bought", "Bills": ""})
     assert seen["schema"]["properties"]["label"]["enum"] == ["Orders", "Bills", "none"]
     assert "things I bought" in seen["system"] and t["label"] == "Orders"
-    seen["answer"] = "Secret stuff"                              # the model invented one: dropped
+    seen["answer"] = "Secret stuff"
     assert mailwatch.triage(msg, {"Orders": ""})["label"] == ""
     seen["answer"] = "none"
     assert mailwatch.triage(msg, {"Orders": ""})["label"] == ""
-    assert "label" not in mailwatch.schema_for([])["properties"]          # organizer off: the shape is unchanged
+    assert "label" not in mailwatch.schema_for([])["properties"]
 
 
 def test_nothing_is_chosen_until_the_owner_picks_labels(gm):
@@ -129,11 +125,10 @@ def test_nothing_is_chosen_until_the_owner_picks_labels(gm):
     assert not mailorganize.enabled() and mailorganize.choices_for("main") == {}
     assert "error" in mailorganize.preview()
     mailorganize.set_allowed({"Bills": "x", "Nope": "not a real label"})
-    assert config.load()["mail_labels"] == {"Bills": "x"}               # only labels the account really has
+    assert config.load()["mail_labels"] == {"Bills": "x"}
     assert mailorganize.choices_for("main") == {"Bills": "x"}
 
 
-# ---------- preview, apply, undo ----------
 def test_preview_changes_nothing(gm):
     settings()
     gm.msgs.update({"a": {"INBOX"}, "b": {"INBOX"}})
@@ -150,14 +145,14 @@ def test_apply_adds_only_allowed_labels_and_skips_starred(gm):
     gm.msgs.update({"a": {"INBOX"}, "star": {"INBOX", "STARRED"}, "fam": {"INBOX"}, "gone": {"INBOX"}})
     stored("a", "Bills")
     stored("star", "Bills")
-    stored("fam", "Family")                                    # a real label, but the owner did not allow it
+    stored("fam", "Family")
     r = mailorganize.apply()
     assert r["status"] == "done" and r["changed"] == 1
-    assert gm.msgs["a"] == {"INBOX", "LBL_1"}                   # labeled, still in the Inbox
+    assert gm.msgs["a"] == {"INBOX", "LBL_1"}
     assert gm.msgs["star"] == {"INBOX", "STARRED"} and gm.msgs["fam"] == {"INBOX"}
-    assert all(set(m) == {"ids", "addLabelIds"} for m in gm.mods)    # add only: never remove, trash or delete
+    assert all(set(m) == {"ids", "addLabelIds"} for m in gm.mods)  # board #868 safety-add-labels-only
     assert "TRASH" not in json.dumps(gm.mods)
-    assert mailorganize.apply().get("status") == "nothing"     # not labeled twice
+    assert mailorganize.apply().get("status") == "nothing"
 
 
 def test_apply_respects_the_cap(gm, monkeypatch):
@@ -177,7 +172,7 @@ def test_undo_removes_the_labels(gm):
     mailorganize.apply()
     assert mailorganize.undo()["restored"] == 1
     assert gm.msgs["a"] == {"INBOX"} and not mailorganize.UNDO.exists()
-    assert mailorganize.preview()["total"] == 0                 # an undone choice is not offered again
+    assert mailorganize.preview()["total"] == 0
 
 
 def test_archive_is_off_by_default_and_undo_puts_the_inbox_back(gm):
@@ -192,7 +187,7 @@ def test_archive_is_off_by_default_and_undo_puts_the_inbox_back(gm):
     stored("b", "Orders")
     assert mailorganize.preview()["archive"] is True
     mailorganize.apply()
-    assert gm.msgs["b"] == {"LBL_2"}                           # labeled and out of the Inbox
+    assert gm.msgs["b"] == {"LBL_2"}
     mailorganize.undo()
     assert gm.msgs["b"] == {"INBOX"}
 
@@ -205,7 +200,6 @@ def test_apply_needs_the_modify_login(gm, monkeypatch):
     assert mailorganize.apply()["error"] == mailclean.NEED_LOGIN and gm.mods == []
 
 
-# ---------- appointments become calendar requests; to-dos go to the Mail page ----------
 def _msg():
     return {"id": "m1", "from": "Clinic <c@example.com>", "subject": "Visit", "ts": int(time.time())}
 
@@ -242,7 +236,7 @@ def test_no_date_goes_to_the_mail_action_list_not_tasks():
     assert _pending() == [] and tasks.upcoming() == [] and tasks.overdue() == [] and tasks.list_for() == []
     got = {t["title"]: t for t in mailwatch.todos()}
     assert got["Call back"]["note"] == "No date found" and got["Send the form"]["due"] == ""
-    mailwatch._propose("main", _msg(), {"tasks": [{"title": "Send the form", "when": ""}], "events": []}, {})   # not repeated
+    mailwatch._propose("main", _msg(), {"tasks": [{"title": "Send the form", "when": ""}], "events": []}, {})
     assert len(mailwatch.todos()) == 2
     mailwatch.todo_done(got["Call back"]["id"])
     assert [t["title"] for t in mailwatch.todos()] == ["Send the form"]
@@ -253,7 +247,6 @@ def test_a_task_with_a_day_keeps_its_due_date_on_the_action_list():
     assert mailwatch.todos()[0]["due"] == (dt.datetime.fromtimestamp(_msg()["ts"]).date() + dt.timedelta(days=1)).isoformat()
 
 
-# ---------- the one-time move out of Tasks ----------
 def _approved_email_task(title, mid):
     pid = proposals.add("task", title, {"title": title, "due": ""}, source=f"email:main:{mid}", key=f"k:{mid}")
     proposals.approve(pid)
@@ -261,16 +254,16 @@ def _approved_email_task(title, mid):
 
 
 def test_migration_moves_only_matched_email_tasks_and_backs_them_up(tmp_path):
-    _approved_email_task("Renew passport", "m1")                 # recorded by id
+    _approved_email_task("Renew passport", "m1")
     old = _approved_email_task("Return the form", "m2")
     with proposals._db() as c:
-        c.execute("UPDATE proposals SET ref='' WHERE id=?", (old,))     # an older approval that recorded nothing: matched by title and time
+        c.execute("UPDATE proposals SET ref='' WHERE id=?", (old,))  # board #868 fix-match-old-approvals
     done_pid = _approved_email_task("Already finished", "m3")
     tasks.complete(next(t["id"] for t in tasks.upcoming() + tasks.list_for() if t["title"] == "Already finished"))
     vet = _approved_email_task("Call the vet", "m4")
     with proposals._db() as c:
         c.execute("UPDATE proposals SET ref='' WHERE id=?", (vet,))
-    tasks.add("Call the vet")                                    # no recorded id and the owner has the same title: not certain, stays
+    tasks.add("Call the vet")  # board #868 safety-unsure-task-stays
     own = tasks.add("Buy milk")
     meeting = tasks.add("Follow up from standup meeting")
     r = mailwatch.migrate_email_tasks()
@@ -292,7 +285,7 @@ def test_migration_with_nothing_to_move_writes_no_backup():
     assert [t["title"] for t in tasks.list_for()] == ["Only mine"]
 
 
-# ---------- Gmail's per-minute quota (2026-10-24: the first run stopped with a 403 rateLimitExceeded) ----------
+# board #868 quirk-gmail-minute-quota
 def test_a_busy_gmail_is_waited_out_and_reads_that_were_refused_are_asked_again(gm, monkeypatch):
     from googleapiclient.errors import HttpError
     settings()
@@ -302,7 +295,7 @@ def test_a_busy_gmail_is_waited_out_and_reads_that_were_refused_are_asked_again(
     waits, tries = [], {"n": 0}
     monkeypatch.setattr(mailorganize, "_sleep", waits.append)
     refused = {"m2"}
-    gm.fail_get = lambda rid: rid in refused and not refused.discard(rid)      # m2's first read is refused, the second works
+    gm.fail_get = lambda rid: rid in refused and not refused.discard(rid)
     real = gm.batchModify
 
     def busy_once(userId, body):
@@ -318,12 +311,12 @@ def test_a_busy_gmail_is_waited_out_and_reads_that_were_refused_are_asked_again(
     monkeypatch.setattr(gm, "batchModify", busy_once)
     r = mailorganize.apply()
     assert r["changed"] == 2 and all("LBL_1" in gm.msgs[m] for m in ("m1", "m2"))
-    assert len(waits) == 2 and tries["n"] == 2                                  # one wait for the refused read, one for the busy change
+    assert len(waits) == 2 and tries["n"] == 2
 
 
 def test_a_second_run_soon_after_keeps_the_first_runs_undo(gm, monkeypatch):
     settings()
-    monkeypatch.setattr(mailclean, "CAP", 1)                                    # one email a run: two runs, like a run stopped part way
+    monkeypatch.setattr(mailclean, "CAP", 1)
     for m in ("m1", "m2"):
         gm.msgs[m] = {"INBOX"}
         stored(m, "Bills")

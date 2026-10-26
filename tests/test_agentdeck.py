@@ -1,5 +1,4 @@
-"""Agent Deck in Rosie (owner 2026-10-21): the Claude token counter against made-up transcripts (tests/data/deck), the /api/deck
-endpoints behind the login, its polling not counting as the owner using Rosie, and controls that are off under tests."""
+# board #845 owner-deck-polling-not-owner
 import hashlib
 import hmac
 import json
@@ -13,14 +12,14 @@ import agentdeck
 import agentdeck_tokens as tokens
 
 HERE = Path(__file__).resolve().parent
-DATA = HERE / "deck_transcripts"                                            # made-up Claude Code transcripts
+DATA = HERE / "deck_transcripts"
 
 
 def _counter(tmp_path):
     sub = tmp_path / "proj" / "sub"
     sub.mkdir(parents=True)
     shutil.copy(DATA / "s1.jsonl", tmp_path / "proj")
-    shutil.copy(DATA / "s1_more.jsonl", sub)                       # subfolders count too (subagent transcripts)
+    shutil.copy(DATA / "s1_more.jsonl", sub)  # board #845 why-subfolders-count
     return tokens.TokenCounter(str(tmp_path)).refresh(), tmp_path / "proj" / "s1.jsonl"
 
 
@@ -45,9 +44,9 @@ def test_days_follow_the_local_clock(tmp_path):
 def test_refresh_reads_only_new_lines_and_waits_for_a_whole_line(tmp_path):
     c, f = _counter(tmp_path)
     c.refresh()
-    assert c.by_session()["s1"]["messages"] == 4                             # no double counting
+    assert c.by_session()["s1"]["messages"] == 4
     with open(f, "a") as fh:
-        fh.write(_line("m5") + "\n" + _line("m6")[:40])                    # one whole line, one half-written
+        fh.write(_line("m5") + "\n" + _line("m6")[:40])
     c.refresh()
     assert c.by_session()["s1"]["messages"] == 5
     with open(f, "a") as fh:
@@ -85,7 +84,6 @@ def test_the_chat_title_comes_from_the_transcript_and_a_rename_wins(tmp_path):
 
 
 
-# ---------------------------------------------------------------- inside Rosie
 @pytest.fixture
 def deck(tmp_path, monkeypatch):
     import server
@@ -95,12 +93,12 @@ def deck(tmp_path, monkeypatch):
     claude = tmp_path / "claude"
     (claude / "sessions").mkdir(parents=True)
     (claude / "projects").mkdir()
-    monkeypatch.setattr(agentdeck, "CLAUDE", claude)                         # never the real transcripts
-    monkeypatch.setattr(agentdeck, "live_slot", lambda: tmp_path)              # nor the real board, config or corner database
-    monkeypatch.setattr(agentdeck, "A0_CHATS", tmp_path / "a0-chats")            # nor Agent Zero's chats
+    monkeypatch.setattr(agentdeck, "CLAUDE", claude)
+    monkeypatch.setattr(agentdeck, "live_slot", lambda: tmp_path)
+    monkeypatch.setattr(agentdeck, "A0_CHATS", tmp_path / "a0-chats")
     monkeypatch.setattr(agentdeck, "_a0_chats", lambda: tmp_path / "a0-chats")
     monkeypatch.setattr(agentdeck, "_counter", tokens.TokenCounter(str(claude / "projects")))
-    monkeypatch.setattr(agentdeck, "_tok_thread", {"t": "off"})            # no background reader under tests
+    monkeypatch.setattr(agentdeck, "_tok_thread", {"t": "off"})  # board #845 quirk-no-background-reader
     monkeypatch.setattr(agentdeck, "_containers", lambda: {})
     monkeypatch.setattr(agentdeck, "_gpu", lambda: None)
     monkeypatch.setattr(agentdeck, "_unit_pid", lambda *a, **k: 0)
@@ -123,14 +121,14 @@ def test_the_deck_needs_the_login_and_shows_every_process(deck):
     s = c.get("/api/deck/snapshot").json()
     assert s["procs"] and any(p["pid"] for p in s["procs"]) and s["mem"]["total"] > 0
     assert {"claude", "rosie", "ollama", "agent_zero", "memory", "others", "total"} <= set(s["agents"])
-    assert 0 <= s["agents"]["total"]["cpu"] <= 100                           # % of the whole CPU, like the header
+    assert 0 <= s["agents"]["total"]["cpu"] <= 100  # board #845 quirk-cpu-percent-whole
 
 
 def test_an_open_deck_is_not_the_owner_using_rosie(deck):
     server, _ = deck
     for p in ("/api/deck/snapshot", "/api/deck/board", "/api/deck/proc"):
         assert p.startswith(server.BACKGROUND)
-    assert not "/api/deck/action".startswith(server.BACKGROUND)               # pressing a control is
+    assert not "/api/deck/action".startswith(server.BACKGROUND)
 
 
 def test_controls_are_off_in_the_test_copy(deck, monkeypatch):

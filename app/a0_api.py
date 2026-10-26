@@ -1,11 +1,4 @@
-"""The Agent Zero page (owner 2026-10-19: "an agent zero monitor ... think about this as everyday use") and Shut down all.
-
-What it shows: whether Agent Zero's container runs and answers, the turn it is working on now (the request, how long, which of
-Rosie's tools it called), Rosie's recent tool calls by Agent Zero, the model on the GPU, and its own recent activity (its log,
-colour codes removed). What it can do: start, stop or restart Agent Zero (a restart is also how a stuck task is stopped).
-It also shows the agent board (agentboard.py): what the owner's Claude sessions, Rosie and Agent Zero are doing, their claims and
-posts; the owner can leave a note for them and end a stuck claim.
-Shut down all: power.py."""
+# board #696 owner-agent-zero-monitor
 import datetime as dt
 import re
 import subprocess
@@ -52,7 +45,7 @@ def container() -> dict:
     if r.returncode:
         return {"state": "missing", "error": "There is no agent-zero container on this PC."}
     st, started, restarts, image = (r.stdout.strip().split("|") + ["", "", "", ""])[:4]
-    try:                                                      # Docker gives UTC; show the PC's own time
+    try:  # board #696 quirk-docker-utc-time
         started = dt.datetime.fromisoformat(started[:19] + "+00:00").astimezone().strftime("%Y-%m-%d %H:%M")
     except ValueError:
         started = started[:16].replace("T", " ")
@@ -67,7 +60,6 @@ def reachable() -> bool:
 
 
 def activity(n=25) -> list[str]:
-    """Agent Zero's own recent steps from its log: messages in, tools used, errors."""
     try:
         r = _docker("logs", "--tail", "400", CONTAINER, timeout=15)
     except (OSError, subprocess.SubprocessError):
@@ -108,7 +100,6 @@ def chats() -> int | None:
 
 @router.get("/api/a0/proxy")
 def a0_proxy_status():
-    """For the Chat page and Settings: is Agent Zero's own page served (behind the login), and what the phone needs."""
     cfg = config.load()
     on = a0_proxy.listening()
     return {"port": a0_proxy.port(), "on": on, "answers": on and reachable(), "brain": cfg.get("brain"), "chat_ui": bool(cfg.get("a0_chat_ui", True)),
@@ -128,7 +119,7 @@ def a0_status():
 def board() -> dict:
     try:
         return agentboard.snapshot()
-    except Exception as e:                                     # the board is extra: the page still shows Agent Zero
+    except Exception as e:  # board #696 why-board-optional
         return {"error": f"{type(e).__name__}: {e}"}
 
 

@@ -1,6 +1,4 @@
-"""Agent Deck inside Rosie (owner 2026-10-21: "add the agent deck into rosie"): the live view of every agent and process, behind
-Rosie's login. The work is in agentdeck.py (shared with the desktop window); the page is static/deck/, shown in Rosie's Agent Deck
-page. The read endpoints are background requests (server.BACKGROUND): an open deck is not the owner using Rosie."""
+# board #707 why-deck-reads-background
 from fastapi import APIRouter
 
 import agentdeck

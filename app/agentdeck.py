@@ -1,14 +1,4 @@
-"""Agent Deck: one live view of everything the owner's agents do on this PC, with controls (owner 2026-10-21: "a program on my desktop
-that shows a live view of everything my agents are doing and their ram, cpu, token etc use and allow controls ... see everything
-neohtop can", then "add the agent deck into rosie").
-
-Standard library only, so both Rosie (agentdeck_api.py, /api/deck/*, behind her login) and the desktop window (~/agent-deck, which
-imports this file from Rosie's live slot) use the same code. The page is static/deck/.
-
-What it reads (never writes, except through the controls): /proc and /sys (CPU, memory, disks, network, every process), nvidia-smi,
-Claude Code's session files and transcripts (token counts, chat titles, latest step), the agent board, Rosie's config and corner
-database, Ollama's /api/ps, docker inspect and systemctl. Controls stop processes by PID only (never by name), post on the board as
-"owner", and are off in the test copy (ROSIE_TESTING / ROSIE_SANDBOX)."""
+# board #706 owner-agent-deck-live-view
 import json
 import os
 import re
@@ -22,16 +12,16 @@ import time
 import urllib.request
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent                    # the Rosie slot this file is in
+ROOT = Path(__file__).resolve().parent.parent
 HOME = Path.home()
 OPS = Path(os.environ.get("ROSIE_OPS_DIR") or HOME / "rosie-ops")
 CLAUDE = HOME / ".claude"
 OLLAMA = "http://127.0.0.1:11434"
 ROSIE_URL = "http://127.0.0.1:8765"
 CONTAINERS = ("agent-zero", "rosie-graph")
-A0_CHATS = HOME / "agent-zero" / "usr" / "chats"            # Agent Zero's chats on the owner's PC (root's files, but their times are readable)
+A0_CHATS = HOME / "agent-zero" / "usr" / "chats"
 USER_UNITS = ("assistant-dictation", "assistant-overlay", "graphiti-mcp")
-LINUX = sys.platform.startswith("linux")                    # it reads /proc and /sys: on Windows the Deck is off (agentdeck_api says so)
+LINUX = sys.platform.startswith("linux")
 CLK = os.sysconf("SC_CLK_TCK") if LINUX else 100
 PAGE = os.sysconf("SC_PAGE_SIZE") if LINUX else 4096
 NCPU = os.cpu_count() or 1
@@ -42,11 +32,11 @@ STATES = {"R": "Running", "S": "Sleeping", "D": "Disk wait", "Z": "Zombie", "T":
 sys.path.insert(0, str(ROOT / "app"))
 import agentdeck_tokens as tokens  # noqa: E402
 
-WIN = None                                                   # off Linux, psutil gives the same readings (agentdeck_win.py, owner 2026-10-24)
+WIN = None  # board #706 owner-windows-psutil-readings
 if not LINUX:
     try:
         import agentdeck_win as WIN  # noqa: E402
-    except ImportError:                                      # psutil missing: the Deck stays off, as before
+    except ImportError:
         WIN = None
 AVAILABLE = LINUX or WIN is not None
 
@@ -60,7 +50,6 @@ _tok_thread = {"t": None}
 
 
 def start_counting():
-    """The token reader starts with the first look at the deck, not with Rosie: nothing runs while nobody watches."""
     with _tok_lock:
         if _tok_thread["t"] is None:
             _tok_thread["t"] = threading.Thread(target=_count_tokens, daemon=True, name="agentdeck-tokens")
@@ -68,7 +57,6 @@ def start_counting():
 
 
 def _count_tokens():
-    """Reads new transcript lines every few seconds in the background (the first read of a month of transcripts takes a few seconds)."""
     while True:
         try:
             fresh = tokens.TokenCounter(str(CLAUDE / "projects")) if not _counter.files else None
@@ -85,7 +73,6 @@ def _count_tokens():
 
 
 def cached(key, ttl, fn):
-    """fn() at most once per ttl seconds; a failure gives None (the page shows the part as unknown)."""
     hit = _cache.get(key)
     if hit and time.time() - hit[0] < ttl:
         return hit[1]
@@ -105,7 +92,7 @@ def read(path, default=""):
 
 
 def _env() -> dict:
-    """Rosie runs as a system service: systemctl --user needs the owner's user bus spelled out."""
+    # board #706 quirk-systemctl-user-bus
     rt = f"/run/user/{ME}"
     return {**os.environ, "XDG_RUNTIME_DIR": os.environ.get("XDG_RUNTIME_DIR") or rt,
             "DBUS_SESSION_BUS_ADDRESS": os.environ.get("DBUS_SESSION_BUS_ADDRESS") or f"unix:path={rt}/bus"}
@@ -133,7 +120,6 @@ def live_slot() -> Path:
     return ROOT
 
 
-# ---------------------------------------------------------------- system
 def _cpu_lines():
     if WIN:
         return WIN.cpu_lines()
@@ -142,7 +128,7 @@ def _cpu_lines():
         if line.startswith("cpu"):
             name, *vals = line.split()
             v = [int(x) for x in vals[:8]]
-            out[name] = (sum(v), v[3] + v[4])                    # total, idle + iowait
+            out[name] = (sum(v), v[3] + v[4])
     return out
 
 
@@ -205,7 +191,7 @@ def _gpu():
 
 def _cpu_temp():
     if WIN:
-        return None                                      # Windows doesn't tell a user program the CPU temperature
+        return None
     for hw in Path("/sys/class/hwmon").glob("hwmon*"):
         if read(hw / "name").strip() in ("k10temp", "coretemp", "zenpower"):
             t = read(hw / "temp1_input").strip()
@@ -214,7 +200,6 @@ def _cpu_temp():
     return None
 
 
-# ---------------------------------------------------------------- processes
 def _proc(pid: int):
     d = f"/proc/{pid}"
     try:
@@ -241,7 +226,6 @@ def _proc(pid: int):
 
 
 def sample():
-    """Everything that needs a time delta (CPU per core and per process, network, disk I/O), one sample per call."""
     with _lock:
         now = time.time()
         dt = max(now - _prev["t"], 0.05) if _prev["t"] else None
@@ -252,7 +236,7 @@ def sample():
             procs = {}
             try:
                 pids = os.listdir("/proc")
-            except OSError:                              # no /proc and no psutil: nothing to list
+            except OSError:
                 pids = []
             for name in pids:
                 if name.isdigit():
@@ -263,10 +247,10 @@ def sample():
         for p in procs.values():
             o = old.get(p["pid"])
             same = o and o["start"] == p["start"]
-            cores = (p["cpu_ticks"] - o["cpu_ticks"]) / CLK / dt if same and dt else 0.0      # how many cores it kept busy
-            p["cores_s"] = (cores + o["cores_s"]) / 2 if same and "cores_s" in o else cores    # smoothed: models work in bursts
+            cores = (p["cpu_ticks"] - o["cpu_ticks"]) / CLK / dt if same and dt else 0.0
+            p["cores_s"] = (cores + o["cores_s"]) / 2 if same and "cores_s" in o else cores  # board #706 why-cpu-smoothed-bursts
             p["cores"] = round(p["cores_s"], 2)
-            p["cpu"] = round(100 * p["cores_s"] / NCPU, 1)    # % of the whole CPU, the same scale as the header and System
+            p["cpu"] = round(100 * p["cores_s"] / NCPU, 1)
             p["rd_rate"] = (p["rd"] - o["rd"]) / dt if same and dt and p["rd"] is not None and o["rd"] is not None else None
             p["wr_rate"] = (p["wr"] - o["wr"]) / dt if same and dt and p["wr"] is not None and o["wr"] is not None else None
             p["age"] = max(0.0, uptime - p["start"])
@@ -308,7 +292,6 @@ def group(procs, pids, gpu=None) -> dict:
                                     for p in sorted(ps, key=lambda p: -p["rss"])][:40]}
 
 
-# ---------------------------------------------------------------- agents
 def _board():
     db = live_slot() / "data" / "board.db"
     if not db.exists():
@@ -331,8 +314,6 @@ def _unit_pid(unit, user_unit=False) -> int:
 
 
 def board_full() -> dict:
-    """The Agent board tab: every post still on the board (it keeps 14 days) plus older ones from its permanent copy (graph_posts),
-    who is around, claims, and a display name for each Claude session (its chat title)."""
     db = live_slot() / "data" / "board.db"
     c = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=2)
     c.row_factory = sqlite3.Row
@@ -386,8 +367,6 @@ def _cgroup_pids(cg: str) -> list[int]:
 
 
 def job_unit(agent: str):
-    """The user service a board job runs as (hairclip-variants -> hairclip-variants.service, hairclip-night ->
-    hairclip-night-route.service): the running one first, else the latest."""
     units = [u for u in (cached("user-units", 10, _user_units) or []) if u.startswith(agent)]
     if not units:
         return None
@@ -397,7 +376,6 @@ def job_unit(agent: str):
 
 
 def _a0_host():
-    """Rosie's a0_host (which container and folder Agent Zero uses on this PC), or None when it can't be loaded (the desktop window)."""
     try:
         import a0_host
         return a0_host
@@ -422,7 +400,6 @@ def _a0_chats() -> Path:
 
 
 def _containers():
-    """Status by the deck's own names: Agent Zero is always "agent-zero" here, whatever its container is called on this PC."""
     out = {}
     real = _a0_container()
     names = [real if c == "agent-zero" else c for c in CONTAINERS]
@@ -441,7 +418,6 @@ def _http_json(url, timeout=1.5):
 
 
 def _a0_activity() -> dict:
-    """When Agent Zero last wrote a chat (it saves the chat as it works) and which one. Its own CPU says little: the model runs in Ollama."""
     last, chat, n = 0.0, "", 0
     try:
         for d in _a0_chats().iterdir():
@@ -531,10 +507,10 @@ def agents(procs, gpu):
     rg = cont.get("rosie-graph") or {}
     gpid = units.get("graphiti-mcp") or 0
     memory = {"status": rg.get("status") or "missing", "mcp": bool(gpid), **group(procs, tree(procs, rg.get("pid") or 0) + tree(procs, gpid), gpu)}
-    known = {"rosie", "agent-zero", "owner"} | {c["agent"] for c in claude}       # board agents not in this list are "jobs"
+    known = {"rosie", "agent-zero", "owner"} | {c["agent"] for c in claude}
     others = []
     seen = {s["agent"]: s for s in board["sessions"]}
-    for c in board["claims"]:                                  # a job that only claims (like a nightly autoroute) still shows
+    for c in board["claims"]:
         seen.setdefault(c["agent"], {"agent": c["agent"], "task": c.get("why") or "", "seen": c["t"], "cwd": ""})
     for s in seen.values():
         if s["agent"] in known or s["agent"].startswith("claude-"):
@@ -554,14 +530,13 @@ def agents(procs, gpu):
     seen_pids = set()
     for g in [*claude, rosie, ollama, agent_zero, memory, *others]:
         seen_pids.update(g["pids"])
-    total = group(procs, list(seen_pids), gpu)                  # every agent process once, even when two groups share one
+    total = group(procs, list(seen_pids), gpu)
     return {"claude": claude, "rosie": rosie, "ollama": ollama, "agent_zero": agent_zero, "memory": memory, "others": others,
             "board": board, "tokens_today": today, "tokens_total": _sum(tok.values()),
             "total": {k: total[k] for k in ("cpu", "cores", "rss", "count", "vram")}}
 
 
 def clean_task(t: str) -> str:
-    """A session's latest prompt as its task; Claude Code's own notices (<task-notification> ...) become one plain line."""
     t = (t or "").strip()
     if t.startswith("<"):
         m = re.search(r"<summary>(.*?)</summary>", t, re.S)
@@ -577,9 +552,8 @@ def _sum(rows):
     return out
 
 
-# ---------------------------------------------------------------- the snapshot
 def snapshot():
-    if not AVAILABLE:                                    # not Linux and no psutil: the page is hidden, this keeps a direct call from raising
+    if not AVAILABLE:
         return {"error": "The Agent Deck needs Linux's /proc or the psutil package, and this system has neither."}
     start_counting()
     procs, cores, net, uptime = sample()
@@ -645,7 +619,6 @@ def proc_info(pid: int) -> dict:
     return info
 
 
-# ---------------------------------------------------------------- controls
 SIGNALS = {"TERM": signal.SIGTERM, "KILL": getattr(signal, "SIGKILL", signal.SIGTERM), "STOP": getattr(signal, "SIGSTOP", None),
            "CONT": getattr(signal, "SIGCONT", None)}
 
@@ -671,7 +644,6 @@ def _rosie_py(code: str) -> str:
 
 
 def controls_off() -> bool:
-    """The test suite and the stage copy never stop processes, containers or Rosie, nor change settings."""
     return os.environ.get("ROSIE_TESTING") == "1" or bool(os.environ.get("ROSIE_SANDBOX"))
 
 

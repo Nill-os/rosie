@@ -1,4 +1,3 @@
-"""Study page API. Login-protected like every /api/ route (server.py middleware). Storage, scheduling and the notes check are in study.py."""
 import html
 
 from fastapi import APIRouter, Request
@@ -141,7 +140,7 @@ def rate(b: ReviewBody):
 def xp():
     try:
         return {"award": study.award_xp()}
-    except ValueError as e:                                      # Life Quest refused (no stats yet): the reviews still count later
+    except ValueError as e:  # board #781 why-reviews-count-later
         return {"award": None, "note": str(e)}
 
 
@@ -151,11 +150,10 @@ def draft(b: DraftBody):
         return study.draft_from_notes(b.deck_id, b.notes, b.n)
     except ValueError as e:
         return err(str(e))
-    except Exception as e:                                       # the local model is down or answered badly: say so, change nothing
+    except Exception as e:  # board #781 why-model-failure-changes-nothing
         return err(f"Rosie's model could not draft cards right now ({type(e).__name__}).", 503)
 
 
-# ---------------------------------------------------------------- Phase 2: ideas, tests, tutor, next study block
 class IdeaBody(BaseModel):
     course_id: int
     text: str
@@ -222,7 +220,6 @@ def next_block():
     return {"block": study.plan_for_block(study.next_block())}
 
 
-# ---------------------------------------------------------------- Phase 3: Anki import and export, deck audio, concept map
 @router.get("/api/study/anki/export")
 def anki_export(course: int = 0, deck: int = 0):
     r = safe(study.anki_export, course or None, deck or None)
@@ -233,7 +230,6 @@ def anki_export(course: int = 0, deck: int = 0):
 
 @router.post("/api/study/anki/import")
 async def anki_import(request: Request, deck: int = 0):
-    """The body is the file itself (an Anki text export, a TSV/CSV, or an .apkg/.colpkg), so no form parsing is needed."""
     if int(request.headers.get("content-length") or 0) > study.MAX_ANKI_BYTES:
         return err("That file is too big (at most 50 MB)", 413)
     return safe(study.anki_import, deck, await request.body())
@@ -241,7 +237,6 @@ async def anki_import(request: Request, deck: int = 0):
 
 @router.get("/api/study/audio")
 def deck_audio(deck: int = 0, course: int = 0, limit: int = 40):
-    """A WAV of the deck's cards (or the cards due now when no deck is given): question, pause, answer."""
     cards = study.due_cards(course or None, deck or None, max(1, min(limit, 200)), every=bool(deck))
     if not cards:
         return err("No cards to read right now")
@@ -249,7 +244,7 @@ def deck_audio(deck: int = 0, course: int = 0, limit: int = 40):
         wav = study.deck_audio(cards)
     except ValueError as e:
         return err(str(e))
-    except Exception as e:                                       # the voice model is missing or failed: say so
+    except Exception as e:
         return err(f"Rosie's voice is not available ({type(e).__name__}).", 503)
     return Response(wav, media_type="audio/wav", headers={"Content-Disposition": 'attachment; filename="study-audio.wav"'})
 
@@ -259,7 +254,6 @@ def concept_map(course: int = 0):
     return safe(study.concept_map, course)
 
 
-# ---------------------------------------------------------------- print page (the browser prints it; no PDF library needed)
 SHAPES = ['<circle cx="12" cy="12" r="9"/>', '<rect x="3.5" y="3.5" width="17" height="17"/>', '<polygon points="12,3 21,20 3,20"/>',
           '<polygon points="12,2 22,12 12,22 2,12"/>', '<polygon points="12,2 14.6,9 22,9 16,13.6 18.3,21 12,16.5 5.7,21 8,13.6 2,9 9.4,9"/>',
           '<polygon points="7,3 17,3 22,12 17,21 7,21 2,12"/>']
@@ -289,8 +283,7 @@ def _card_html(c: dict, i: int, side: str) -> str:
 
 @router.get("/api/study/print", response_class=HTMLResponse)
 def print_page(course: int = 0, deck: int = 0, side: str = "front", layout: str = "letter", rotate: int = 0):
-    """Fronts or backs, 8 to a letter sheet (cut on the dashed lines) or one per 3x5 index card. Backs are laid out mirrored, so after the
-    stack is turned over the back of each card lands on its front. rotate=1 turns the backs upside down for printers that flip the other way."""
+    # board #781 quirk-mirrored-backs-printing
     side = "back" if side == "back" else "front"
     cards = study.print_cards(course or None, deck or None)["cards"]
     if not cards:
@@ -303,7 +296,7 @@ def print_page(course: int = 0, deck: int = 0, side: str = "front", layout: str 
         for s in range(0, len(cards), 8):
             chunk = list(enumerate(cards))[s:s + 8]
             cells = [_card_html(c, i, side) for i, c in chunk] + ['<div></div>'] * (8 - len(chunk))
-            if side == "back":                                   # long-edge flip: left and right swap on the back of the sheet
+            if side == "back":
                 cells = [x for r in range(4) for x in (cells[r * 2 + 1], cells[r * 2])]
             pages.append(f'<div class="sheet{flip}">{"".join(cells)}</div>')
     other = "back" if side == "front" else "front"

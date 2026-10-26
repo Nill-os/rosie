@@ -1,4 +1,4 @@
-"""Rosie plans with Claude (claude_plan.py; owner 2026-10-20: "use claude for planning unless i dont have tokens or turn it off in settings")."""
+# board #854 owner-claude-planning
 import json
 import subprocess
 import sys
@@ -15,10 +15,10 @@ class FakeClaude:
         self.calls, self.reply = [], {"type": "result", "is_error": False, "result": "9:00 study block\nRosie can add: task 'Read ch. 4'"}
         self.code = 0
         monkeypatch.setattr(claude_plan, "_run", self.run)
-        monkeypatch.setattr(claude_plan, "binary", lambda: sys.executable)     # a file that exists on every OS
+        monkeypatch.setattr(claude_plan, "binary", lambda: sys.executable)
         monkeypatch.setattr(claude_plan, "context", lambda days=7: "Now: Tuesday\nCalendar, next 7 days: nothing.")
         cfg = config.load()
-        cfg["claude_planning"] = True                                    # off by default in the public copy
+        cfg["claude_planning"] = True  # board #854 safety-off-public-copy
         config.save(cfg)
 
     def run(self, cmd, prompt, timeout):
@@ -49,7 +49,7 @@ def test_claude_gets_no_tools_no_settings_and_only_the_planning_picture(fake):
         assert flag in cmd
     assert cmd[cmd.index("--tools") + 1] == "" and cmd[cmd.index("--setting-sources") + 1] == "project"
     assert "never move, delete or reschedule them" in cmd[cmd.index("--system-prompt") + 1]
-    assert "I have an exam Friday" not in fake.calls[0]["prompt"] and "The owner's request: plan my week" in fake.calls[0]["prompt"]   # only the request
+    assert "I have an exam Friday" not in fake.calls[0]["prompt"] and "The owner's request: plan my week" in fake.calls[0]["prompt"]  # board #854 safety-only-request-sent
 
 
 def test_out_of_tokens_pauses_claude_until_the_reset_and_rosie_plans_herself(fake):
@@ -59,7 +59,7 @@ def test_out_of_tokens_pauses_claude_until_the_reset_and_rosie_plans_herself(fak
     st = claude_plan.status()
     assert st["paused_until"] == reset and "usage limit" in st["line"] and not claude_plan.available()
     fake.code, fake.reply = 0, {"is_error": False, "result": "ok"}
-    assert claude_plan.plan("plan my day") is None and len(fake.calls) == 1          # not asked again while paused
+    assert claude_plan.plan("plan my day") is None and len(fake.calls) == 1  # board #854 why-not-asked-while-paused
     assert "Make the plan yourself" in claude_plan.tool_plan("plan my day")["error"]
 
 

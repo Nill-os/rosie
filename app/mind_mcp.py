@@ -1,9 +1,4 @@
-"""MCP server for Rosie's mind (app/mind.py): lets Claude Code (or any MCP client on this PC) search and think over what Rosie remembers,
-and tell her something worth remembering. It speaks over stdio; nothing listens on the network.
-
-recall and reflect are read-only. remember queues text for her to read in the background (her own model turns it into facts when she
-is idle), marked as coming from the client, so it is never mistaken for the owner's own words. Every call is logged (what was asked,
-never the answers) in data/mcp_audit.log."""
+# board #747 safety-stdio-only-no-network
 import json
 import os
 import sys

@@ -20,7 +20,7 @@ def test_refusal_detector():
 def test_every_phone_tool_is_registered_and_grouped():
     names = [n for n in agent.TOOLS if n.startswith("phone_")]
     assert len(names) >= 14 and all(agent.GROUPS[n] in ("phone", "internal") for n in names)
-    assert agent.GROUPS["phone_screen_tap"] == "internal"          # only runs after the user confirms
+    assert agent.GROUPS["phone_screen_tap"] == "internal"  # board #844 safety-screen-tap-confirm
 
 
 def test_confirming_tools_are_write_tools():

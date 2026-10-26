@@ -1,15 +1,4 @@
-"""Every test runs against throwaway databases and a fake phone: nothing here can touch real data or send anything.
-
-Isolation, in layers:
-1. Before any app module is imported, the env-configurable paths (ops folder, slots, backups, MCP audit, search DB) point
-   into a throwaway folder, and ROSIE_TESTING is set.
-2. The autouse `isolated` fixture points every module-level data/secrets path at the test's tmp_path (PATCHES below).
-3. Real network is refused at the socket level (app/testguard.py: any connect or name lookup that isn't loopback or a Unix socket
-   raises, whatever the client: httpx, requests, urllib, asyncio), installed when this file loads and again by the fixture; httpx's
-   real transports also raise ConnectError (fake MockTransport clients still work). No test can reach a real web service or
-   the weather service; desktop notifications are swallowed.
-4. app/testguard.py refuses real data / secrets / ~/rosie-ops paths under pytest, and test_isolation.py checks every
-   loaded module's paths."""
+# board #830 safety-tests-throwaway-data
 import atexit
 import os
 import shutil
@@ -27,10 +16,10 @@ os.environ["ROSIE_TESTING"] = "1"
 for _k, _v in {"ROSIE_OPS_DIR": "rosie-ops", "ROSIE_CHATS_DB": "chats.db", "ROSIE_SLOT_A": "slot-A", "ROSIE_SLOT_B": "slot-B",
                "ROSIE_BACKUP_DIR": "backups", "ROSIE_BACKUP_CONF": "backup-conf", "ASSISTANT_MCP_AUDIT": "mcp_audit.log",
                "ASSISTANT_SEARCH_DB": "search.db", "ASSISTANT_VAULT": "vault"}.items():
-    os.environ[_k] = str(_SANDBOX / _v)                      # always a stand-in, even if the shell had a real one set
-os.environ["ROSIE_PORT"] = "1"                               # never the live port (8765) or the staging port
-os.environ["TZ"] = "America/Los_Angeles"                    # the test data's clock times are Pacific: same results in any zone
-if hasattr(time, "tzset"):                                   # Windows has none: its CI job sets the machine's zone to Pacific instead
+    os.environ[_k] = str(_SANDBOX / _v)
+os.environ["ROSIE_PORT"] = "1"  # board #830 safety-never-live-port
+os.environ["TZ"] = "America/Los_Angeles"
+if hasattr(time, "tzset"):
     time.tzset()
 os.environ["ROSIE_STAGE_PORT"] = "2"
 
@@ -38,9 +27,8 @@ sys.path.insert(0, str(ROOT / "app"))
 
 import testguard  # noqa: E402
 
-testguard.block_network()                                    # from collection on, also for imports and module-level fixtures
+testguard.block_network()
 
-# (module, attribute, stand-in name under tmp_path). Modules marked lazy are only patched when something already imported them.
 PATCHES = [("config", "PATH", "config.json"), ("tasks", "DB", "tasks.db"), ("lifequest", "DB", "lifequest.db"), ("canvas", "SECRET", "secrets/canvas.json"), ("canvas", "EXTRA", "canvas_extra.json"), ("canvas", "STATE", "canvas_state.json"), ("study", "DB", "study.db"), ("inbox", "DB", "inbox.db"), ("chats", "DB", "chats.db"),
            ("memory", "DB", "memory.db"), ("lessons", "DB", "lessons.db"), ("mind", "DB", "mind.db"),
            ("proposals", "DB", "proposals.db"), ("skills", "DIR", "skills"), ("pc_tools", "LOG", "audit.log"),
@@ -70,8 +58,7 @@ ALWAYS = ("config", "tasks", "inbox", "chats", "memory", "lessons", "proposals",
           "briefs", "projects", "mailwatch", "mailorganize", "gcal", "gmail", "workflows", "corner_graph", "a0", "paper", "agentboard", "skill_sync", "vector_pod", "vector_pad", "lifequest", "board_link", "canvas", "study")
 
 
-# Linux-only parts (owner 2026-10-23, the Windows copy): on Windows these features are off (hub.pages_off) or replaced, so their tests
-# don't run there. Everything else runs on both.
+# board #830 owner-linux-only-tests
 LINUX_ONLY = ["test_agentdeck.py", "test_backup.py", "test_slots.py", "test_selfdev.py", "test_skill_sync.py", "test_a0_monitor.py",
               "test_audit_1020.py", "test_vector.py", "test_vector_pad.py", "test_vector_menu.py", "test_vector_life.py", "test_vector_talk.py", "test_terminals.py", "test_dictation.py", "test_overlay.py", "test_meetings.py",
               "test_power.py", "test_security_watch.py"]
@@ -79,7 +66,7 @@ collect_ignore = LINUX_ONLY if sys.platform == "win32" else []
 
 
 def _symlinks_work() -> bool:
-    """Windows makes a symlink only with administrator rights or Developer Mode; tests that need one skip when it can't be made."""
+    # board #830 quirk-windows-symlink-admin
     d = Path(tempfile.mkdtemp(prefix="rosie-link-", dir=_SANDBOX))
     try:
         (d / "target").write_text("x", encoding="utf-8")
@@ -97,7 +84,6 @@ class NetworkBlocked(Exception):
 
 
 def _no_network(monkeypatch):
-    """httpx's real transports refuse to connect; clients built on httpx.MockTransport (the fake stores) are untouched."""
     import httpx
 
     def refuse(self, request):
@@ -119,19 +105,18 @@ def isolated(tmp_path, monkeypatch):
         if m is not None and hasattr(m, attr):
             monkeypatch.setattr(m, attr, tmp_path / stand_in)
     import inbox
-    monkeypatch.setattr(inbox, "notify_desktop", lambda *a, **k: False)       # never a real desktop notification
-    import pchealth                                          # a healthy PC with nobody at it, whatever this PC's memory, heat and power are
+    monkeypatch.setattr(inbox, "notify_desktop", lambda *a, **k: False)
+    import pchealth
     monkeypatch.setattr(pchealth, "mem_available", lambda fresh=False: 32 * 1024 ** 3)
     monkeypatch.setattr(pchealth, "cpu_temp", lambda: 50.0)
     monkeypatch.setattr(pchealth, "on_battery", lambda: False)
     monkeypatch.setattr(pchealth, "input_idle_s", lambda: 3600.0)
     _no_network(monkeypatch)
-    testguard.block_network(monkeypatch.setattr)             # even if a test swapped a socket function, it's guarded again
+    testguard.block_network(monkeypatch.setattr)
     return tmp_path
 
 
 class FakePhone:
-    """Stands in for the phone app: records every job it is given."""
     def __init__(self, monkeypatch):
         import phone
         self.jobs = []

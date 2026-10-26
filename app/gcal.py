@@ -1,4 +1,3 @@
-"""Google Calendar access. Token lives in secrets/, never in code."""
 import datetime as dt
 from pathlib import Path
 
@@ -18,7 +17,7 @@ TZ = get_localzone()
 
 
 class LoginExpired(Exception):
-    """Google login is missing or expired; run ./login.sh"""
+    pass
 
 
 def login():
@@ -63,7 +62,7 @@ def _fmt(ev):
 
 def list_events(start: dt.datetime, end: dt.datetime, calendar_id="primary", query=None):
     items, token = [], None
-    for _ in range(10):                                            # follow the pages: a busy calendar must not silently lose events
+    for _ in range(10):  # board #730 why-follow-event-pages
         r = service().events().list(
             calendarId=calendar_id, timeMin=start.isoformat(), timeMax=end.isoformat(),
             singleEvents=True, orderBy="startTime", q=query, maxResults=250, pageToken=token,
@@ -81,11 +80,10 @@ def events_on(day: dt.date, calendar_id="primary"):
 
 
 def search(query: str, days_ahead=60, calendar_id="primary"):
-    start = dt.datetime.combine(dt.date.today(), dt.time.min, tzinfo=TZ)  # include earlier today
+    start = dt.datetime.combine(dt.date.today(), dt.time.min, tzinfo=TZ)
     return list_events(start, start + dt.timedelta(days=days_ahead), calendar_id, query)
 
 
-# ---------- writes ----------
 def _service_cal():
     return service().events()
 
@@ -129,13 +127,11 @@ def delete_event(event_id, calendar_id=None):
     _service_cal().delete(calendarId=calendar_id or write_calendar_id(), eventId=event_id).execute()
 
 
-# ---------- conflicts and free time ----------
 def get_event(event_id, calendar_id=None):
     return _fmt(_service_cal().get(calendarId=calendar_id or write_calendar_id(), eventId=event_id).execute())
 
 
 def conflicts(start: dt.datetime, end: dt.datetime, exclude_id=None):
-    """Timed events (on the main calendar) that overlap [start, end). All-day events are not counted as clashes."""
     out = []
     for e in list_events(start, end, "primary"):
         if e["all_day"] or e["id"] == exclude_id:
@@ -147,7 +143,6 @@ def conflicts(start: dt.datetime, end: dt.datetime, exclude_id=None):
 
 
 def free_slots(day: dt.date, minutes=60, earliest="08:00", latest="21:00", exclude_id=None):
-    """Open gaps on a day that are at least `minutes` long, between earliest and latest (never in the past)."""
     h1, m1 = map(int, earliest.split(":"))
     h2, m2 = map(int, latest.split(":"))
     lo = dt.datetime.combine(day, dt.time(h1, m1), tzinfo=TZ)

@@ -4,7 +4,7 @@
 <meta name="theme-color" content="#000000"><link rel="manifest" href="/manifest.json">
 <link rel="icon" href="/icon.svg"><title>Rosie</title>
 <link rel="stylesheet" href="/app.css">
-<script>/* the theme before the first paint (app.js applyLook keeps it up to date) */(function(){try{var v=JSON.parse(localStorage.getItem('rosie.look')||'null'),t=(v&&v.theme)||JSON.parse(localStorage.getItem('rosie.theme.default')||'null');if(t)document.documentElement.dataset.theme=t}catch(e){}})()</script>
+<script> (function(){try{var v=JSON.parse(localStorage.getItem('rosie.look')||'null'),t=(v&&v.theme)||JSON.parse(localStorage.getItem('rosie.theme.default')||'null');if(t)document.documentElement.dataset.theme=t}catch(e){}})()</script>
 </head><body>
 <div id="app">
  <aside id="side" aria-label="Navigation">

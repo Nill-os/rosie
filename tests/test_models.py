@@ -1,4 +1,4 @@
-"""Settings > AI model: the owner picks Rosie's local model; it is tested before use, applies everywhere at once, and is kept."""
+# board #872 owner-model-tested-before-use
 import httpx
 import pytest
 
@@ -48,7 +48,7 @@ def test_installed_marks_usable_and_gpu_fit(fake_ollama):
     assert not rows["nomic-embed-text:latest"]["usable"] and "embedding" in rows["nomic-embed-text:latest"]["why_not"]
     assert not rows["plain:latest"]["usable"] and "tools" in rows["plain:latest"]["why_not"]
     names = [r["name"] for r in models.installed()]
-    assert names.index("qwen3-30b:latest") < names.index("plain:latest")     # usable first, then too-big, then unusable
+    assert names.index("qwen3-30b:latest") < names.index("plain:latest")  # board #872 why-model-order
 
 
 def test_switch_tests_then_applies_everywhere_and_saves(fake_ollama, monkeypatch):

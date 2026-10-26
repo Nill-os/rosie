@@ -1,6 +1,3 @@
-// Loads the real page shell (static/index.html + app.js) in jsdom with canned API answers and checks the menu layout: the merge of the built-in
-// NAV with a saved menu_layout, and the Settings > Menu editor (move up/down/to a group, drag, add and remove a group, reset, the saved payload).
-// Usage: node menu_ui.js <static dir>. No network: fetch is a stub that records POSTs. Prints JSON (tests/test_menu_ui.py checks it).
 const fs = require('fs');
 const vm = require('vm');
 const path = require('path');
@@ -32,31 +29,29 @@ async function main() {
   await sleep(80);
   const J = (s) => JSON.parse(T('JSON.stringify(' + s + ')'));
 
-  // ---- the merge ----
   const def = J('menuGroups(NAV, [])');
   out.defLabels = def.map((g) => g.label);
   out.defPages = def.flatMap((g) => g.pages);
-  out.defFlatSame = J("JSON.stringify(navEff()) === JSON.stringify(NAV)");   // no layout: the built-in menu, untouched
+  out.defFlatSame = J("JSON.stringify(navEff()) === JSON.stringify(NAV)");
   const without = (k) => def.map((g) => ({ label: g.label, pages: g.pages.filter((x) => x !== k) }));
   const where = (groups, k) => { const g = groups.find((x) => x.pages.includes(k)); return g ? g.label : null; };
   let m = J('menuGroups(NAV, ' + JSON.stringify(without('notes')) + ')');
-  out.newPageHome = where(m, 'notes');                                       // missing from the saved layout: back in its own group
+  out.newPageHome = where(m, 'notes');
   const gone = def.filter((g) => g.label !== 'Work');
   m = J('menuGroups(NAV, ' + JSON.stringify(gone) + ')');
-  out.homeGone = [where(m, 'notes'), m[m.length - 1].pages.slice(-1)[0]];   // its group is gone: the last group, Settings stays last
+  out.homeGone = [where(m, 'notes'), m[m.length - 1].pages.slice(-1)[0]];
   m = J('menuGroups(NAV, ' + JSON.stringify([{ label: 'A', pages: ['home', 'nope', 'home', 'old-page'] }, { label: '', pages: ['settings'] }]) + ')');
   out.dropped = [m[0].pages.includes('nope'), m[0].pages.includes('old-page'), m[0].pages.filter((x) => x === 'home').length];
   const moved = def.map((g) => ({ label: g.label, pages: g.pages.filter((x) => x !== 'brief') }));
-  moved.find((g) => g.label === 'Work').pages.push('brief');                  // a tab group moves as ONE entry
+  moved.find((g) => g.label === 'Work').pages.push('brief');
   m = J('menuGroups(NAV, ' + JSON.stringify(moved) + ')');
   out.tabMoved = [where(m, 'brief'), m.some((g) => g.pages.includes('paper'))];
-  out.tabActive = T("TAB_GROUP['paper']");                                    // the old route still lights the group entry
+  out.tabActive = T("TAB_GROUP['paper']");
   T("menuLayout = " + JSON.stringify([{ label: 'First', pages: ['tasks', 'home'] }, { label: '', pages: ['settings'] }]));
   T("pagesHidden = ['home']; renderNav('tasks')");
   out.navShown = Array.from(w.document.querySelectorAll('#nav > *')).map((e) => e.textContent.trim());
   T("pagesHidden = []; menuLayout = []");
 
-  // ---- the editor ----
   const host = w.document.createElement('div'); w.document.body.append(host);
   const mount = () => { host.replaceChildren(T('menuBox(() => {})')); };
   const rows = (gi) => Array.from(host.querySelectorAll('.mg-card')[gi].querySelectorAll('.mg-row')).map((r) => r.dataset.key);
@@ -81,16 +76,16 @@ async function main() {
   rowEl('home').dispatchEvent(new w.Event('dragover', { bubbles: true, cancelable: true }));
   rowEl('home').dispatchEvent(new w.Event('drop', { bubbles: true, cancelable: true }));
   out.afterDrag = Array.from(host.querySelectorAll('.mg-card'))[0].dataset.group && rows(0).concat(['|'], rows(1));
-  click('.mg-foot .btn');                                                      // Add group
+  click('.mg-foot .btn');
   out.cardsAfterAdd = host.querySelectorAll('.mg-card').length;
   out.lastRows = rows(host.querySelectorAll('.mg-card').length - 1);
   const emptyIdx = host.querySelectorAll('.mg-card').length - 2;
   rowEl('notes').dispatchEvent(new w.Event('dragstart', { bubbles: true }));
-  host.querySelectorAll('.mg-card')[emptyIdx].dispatchEvent(new w.Event('drop', { bubbles: true, cancelable: true }));   // drop into the empty group
+  host.querySelectorAll('.mg-card')[emptyIdx].dispatchEvent(new w.Event('drop', { bubbles: true, cancelable: true }));
   out.emptyFilled = rows(emptyIdx);
   const ti = host.querySelectorAll('.mg-title')[emptyIdx]; ti.value = 'My new group'; ti.dispatchEvent(new w.Event('input', { bubbles: true }));
   await sleep(750);
-  out.postsAfterEdit = out.posts.length;                                       // one save for all those clicks (debounced)
+  out.postsAfterEdit = out.posts.length;
   out.saved = host.querySelector('.mg-status').textContent;
   out.payload = out.posts[out.posts.length - 1] && out.posts[out.posts.length - 1].body;
   out.menuLayoutNow = J('menuLayout').length;
@@ -101,7 +96,7 @@ async function main() {
   click('[data-f="g:' + emptyIdx + ':rm"]'); out.removeAccepted = host.querySelectorAll('.mg-card').length;
   out.notesAfterRemove = where(J('menuGroups(NAV, ' + JSON.stringify(J('menuLayout')) + ')'), 'notes');
   out.posts.length = 0;
-  click('.mg-foot .btn.dim');                                                  // Reset to default
+  click('.mg-foot .btn.dim');
   await sleep(50);
   out.reset = out.posts.map((p) => p.body);
   out.afterReset = host.querySelectorAll('.mg-card').length === def.length;

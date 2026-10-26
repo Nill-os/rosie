@@ -28,7 +28,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
-/** What Rosie can do on the phone, using Android's own features. Texts and calls are only ever sent after you confirmed on the PC side. */
+// board #687 safety-confirm-before-send
 public class PhoneActions {
     static boolean has(Context c, String perm) { return c.checkSelfPermission(perm) == PackageManager.PERMISSION_GRANTED; }
 
@@ -135,7 +135,7 @@ public class PhoneActions {
         String sel = null; String[] args = null;
         if (!from.isEmpty()) {
             String digits = from.replaceAll("[^0-9]", "");
-            if (digits.isEmpty()) {                                  // a name: look up their numbers first
+            if (digits.isEmpty()) {
                 JSONObject m = findContact(c, from);
                 JSONArray arr = m.optJSONArray("matches");
                 if (arr != null && arr.length() > 0) digits = arr.getJSONObject(0).optString("number").replaceAll("[^0-9]", "");

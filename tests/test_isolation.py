@@ -1,4 +1,3 @@
-"""The test run itself: no module path may point at real data, real secrets or the live ~/rosie-ops while tests run."""
 import sys
 from pathlib import Path
 
@@ -16,7 +15,7 @@ def _paths(v, seen=None):
     if isinstance(v, Path):
         yield v
     elif isinstance(v, dict):
-        if id(v) in seen:                                   # generated protobuf modules keep _globals = globals(), which holds itself
+        if id(v) in seen:  # board #866 quirk-protobuf-self-reference
             return
         seen.add(id(v))
         for x in v.values():
@@ -75,7 +74,6 @@ def test_desktop_notifications_are_swallowed():
     assert inbox.notify_desktop("t", "b") is False
 
 
-# ---------------------------------------------------------------- socket-level network guard (every client, not just httpx)
 def test_the_socket_guard_is_installed():
     assert testguard.network_blocked()
 
@@ -184,15 +182,15 @@ def test_uvloop_cannot_start_under_tests():
     with pytest.raises(OSError):
         uvloop.run(coro)
     coro.close()
-    assert asyncio.run(probe()) == 1                    # asyncio's own loop (guarded at the socket level) still works
+    assert asyncio.run(probe()) == 1
 
 
 def test_the_weather_tool_cannot_reach_the_network():
     import web
-    out = web.weather("Riverton")                       # the real function, unstubbed: the lookup is refused, nothing is fetched
+    out = web.weather("Riverton")
     assert "blocked in tests" in out.get("error", ""), out
 
 
 def test_the_weather_asks_for_a_place_when_none_is_set():
     import web
-    assert "Which place?" in web.weather("")["error"]          # no home area and no newspaper place: no city is guessed
+    assert "Which place?" in web.weather("")["error"]  # board #866 why-no-city-guess

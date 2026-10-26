@@ -1,4 +1,3 @@
-/* Agent Deck: Rosie's cyberdeck look (mono, cyan and purple neon, "> " headings) with a clear frosted-glass finish */
 :root{
   color-scheme:dark;
   --fg:#E8E8F0;--mute:#8696AE;--acc:#00F0FF;--pur:#B04DFF;--pink:#FF2BD6;--ok:#22E58A;--warn:#FFD23F;--bad:#FF3B5C;
@@ -6,10 +5,10 @@
   --mono:ui-monospace,"JetBrains Mono","DejaVu Sans Mono",Menlo,Consolas,monospace;--r:14px;
 }
 *{box-sizing:border-box}
-[hidden]{display:none!important}               /* main{display:flex} must not undo hidden tabs and sections */
+[hidden]{display:none!important}  /* board #822 quirk-hidden-beats-flex */
 html{background:#04070c}
 body{margin:0;height:100vh;display:flex;flex-direction:column;overflow:hidden;color:var(--fg);font:var(--fs,13px)/1.45 var(--mono);background:transparent}
-/* the page itself never scrolls: the header stays put and only the tab's content scrolls (a sticky header glitched in WebKitGTK) */   /* the light shows through */
+
 ::selection{background:var(--acc);color:#000}
 *{scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.18) transparent}
 ::-webkit-scrollbar{width:10px;height:10px}::-webkit-scrollbar-track{background:transparent}
@@ -21,18 +20,15 @@ button{cursor:pointer}
 b{color:#fff}
 .muted{color:var(--mute)}
 
-/* the light the glass bends: slow neon blobs behind everything */
 .aurora{position:fixed;inset:0;z-index:-1;overflow:hidden;pointer-events:none}
-/* one layer of radial gradients, no blur filter: a blurred fixed layer flickered under the sticky header while scrolling in WebKit */
 .aurora{opacity:min(1,var(--glow,1));filter:brightness(max(1,var(--glow,1)));
   background:radial-gradient(52vmax 52vmax at 2% -8%,rgba(0,240,255,.34),transparent 70%),
              radial-gradient(56vmax 56vmax at 106% 38%,rgba(157,0,255,.40),transparent 70%),
              radial-gradient(48vmax 48vmax at 48% 114%,rgba(255,43,214,.18),transparent 70%)}
 
 .glass{background:linear-gradient(180deg,var(--glass-hi),transparent 38%),var(--glass);border:1px solid var(--edge);border-radius:var(--r);
-  box-shadow:0 10px 34px rgba(0,0,0,.35),inset 0 1px 0 rgba(255,255,255,.10)}   /* no blur here: it cost ~40% of a core and the light behind is already soft */
+  box-shadow:0 10px 34px rgba(0,0,0,.35),inset 0 1px 0 rgba(255,255,255,.10)}  /* board #822 why-no-blur-shadow */
 
-/* ---------- header ---------- */
 #chrome{flex:none;position:relative;z-index:20;background:rgba(5,9,15,.95);border-bottom:1px solid var(--edge);box-shadow:0 6px 18px rgba(0,0,0,.35)}
 #top{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:12px 18px}
 .brand{display:flex;align-items:center;gap:6px;font-size:15px}
@@ -45,12 +41,11 @@ b{color:#fff}
 .chips{display:flex;gap:8px;flex-wrap:wrap;flex:1}
 .chip{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;border:1px solid var(--edge);background:rgba(255,255,255,.04);font-size:12px;white-space:nowrap;
   font-variant-numeric:tabular-nums}
-.chip b{display:inline-block;min-width:var(--w,0);text-align:right}         /* fixed widths: the header never changes height as numbers change */
+.chip b{display:inline-block;min-width:var(--w,0);text-align:right}
 .chip b{font-weight:700}
 .chip.hot{border-color:rgba(255,59,92,.55);color:#ffd0d8}.chip.warm{border-color:rgba(255,210,63,.5)}
 .tools{display:flex;align-items:center;gap:8px}
 
-/* ---------- buttons and inputs ---------- */
 .btn{border:1px solid var(--edge);background:rgba(255,255,255,.05);border-radius:9px;padding:5px 11px;min-height:30px;transition:background .15s,border-color .15s,box-shadow .15s}
 .btn:hover{background:rgba(255,255,255,.10);border-color:rgba(255,255,255,.22)}
 .btn.acc{border-color:var(--edge-acc);color:var(--acc)}.btn.acc:hover{box-shadow:0 0 14px rgba(0,240,255,.25)}
@@ -60,7 +55,7 @@ b{color:#fff}
 .btn.sm{padding:2px 8px;min-height:26px;font-size:12px}
 .btn[disabled]{opacity:.4;cursor:default}
 input,select{background:rgba(0,0,0,.28);border:1px solid var(--edge);border-radius:9px;padding:5px 9px;min-height:30px}
-select{display:none}                                   /* every <select> is drawn as a dark drop-down by deck.js (GTK drew them white) */
+select{display:none}  /* board #822 quirk-gtk-select-white */
 .selwrap{position:relative;display:inline-block}
 .selbtn{display:inline-flex;align-items:center;gap:8px;justify-content:space-between;min-width:64px;background:rgba(0,0,0,.28)}
 #top .selmenu,.procbar .selmenu{left:auto;right:0}
@@ -76,14 +71,12 @@ input[type=checkbox]:not(.swi):checked{background:var(--acc);border-color:var(--
 input[type=checkbox]:not(.swi):checked::after{content:"✓";color:#001014;font-size:11px;font-weight:700;line-height:1}
 input::placeholder{color:#6b7a90}
 
-/* switches */
 .sw{display:inline-flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;user-select:none}
 .sw input{appearance:none;-webkit-appearance:none;width:34px;height:18px;min-height:0;padding:0;border-radius:999px;background:rgba(255,255,255,.12);border:1px solid var(--edge);position:relative;cursor:pointer;transition:background .15s}
 .sw input::after{content:"";position:absolute;top:2px;left:2px;width:12px;height:12px;border-radius:50%;background:#cfd6e2;transition:transform .15s}
 .sw input:checked{background:rgba(0,240,255,.35);border-color:var(--edge-acc)}
 .sw input:checked::after{transform:translateX(16px);background:var(--acc);box-shadow:0 0 8px var(--acc)}
 
-/* ---------- sections (the drop-downs) ---------- */
 main{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:14px 18px 40px;display:flex;flex-direction:column;gap:14px}
 main>*{flex-shrink:0}
 .sec>summary{list-style:none;cursor:pointer;display:flex;align-items:baseline;gap:8px;padding:4px 2px 10px;color:var(--acc);font-weight:700;letter-spacing:.14em;text-transform:uppercase;font-size:12px}
@@ -93,7 +86,6 @@ main>*{flex-shrink:0}
 .tw{display:inline-block;transition:transform .15s;color:var(--mute);order:2}
 .sec:not([open])>summary .tw{transform:rotate(-90deg)}
 
-/* ---------- agents ---------- */
 .agents{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:12px}
 .card{padding:14px;display:flex;flex-direction:column;gap:10px;min-width:0;position:relative;overflow:hidden}
 .card::before{content:"";position:absolute;inset:0 0 auto 0;height:2px;background:linear-gradient(90deg,transparent,var(--c,var(--acc)),transparent);opacity:.8}
@@ -126,7 +118,6 @@ main>*{flex-shrink:0}
 .model{display:flex;align-items:center;gap:8px;background:rgba(0,0,0,.2);border:1px solid var(--edge);border-radius:9px;padding:6px 8px;font-size:12px}
 .model .n{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
-/* ---------- board ---------- */
 .boardwrap{display:grid;gap:12px}
 #board{display:grid;grid-template-columns:minmax(260px,1fr) minmax(260px,1fr) minmax(320px,2fr);gap:12px}
 #board .glass{padding:12px;min-width:0}
@@ -140,7 +131,6 @@ main>*{flex-shrink:0}
 .note{display:flex;gap:8px;align-items:center;padding:10px 12px;flex-wrap:wrap}
 .note input{flex:1;min-width:220px}
 
-/* ---------- system ---------- */
 .sysgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px}
 .syscard{padding:12px 14px;min-width:0}
 .syscard>summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:8px;font-weight:700;margin-bottom:8px}
@@ -160,7 +150,6 @@ main>*{flex-shrink:0}
 .bigbar{height:10px;margin:4px 0 8px}
 .spark{width:100%;height:42px;display:block;margin-top:6px}
 
-/* ---------- processes ---------- */
 .procbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:10px 12px;margin-bottom:10px;position:relative;z-index:5}
 #search{flex:1;min-width:260px}
 .dd{position:relative}
@@ -188,7 +177,6 @@ table#ptable{width:100%;border-collapse:collapse;font-size:12px}
 .ib:hover{background:rgba(255,255,255,.12)}
 .ib.pinned{color:var(--acc);border-color:var(--edge-acc)}.ib.k{color:var(--bad)}
 
-/* ---------- modal and toast ---------- */
 .scrim{position:fixed;inset:0;z-index:50;background:rgba(0,0,0,.45);display:grid;place-items:center;padding:20px}
 .scrim[hidden]{display:none}
 .dialog{backdrop-filter:blur(12px);width:min(720px,100%);max-height:86vh;overflow:auto;padding:18px;background:rgba(12,18,28,.86)}
@@ -198,7 +186,6 @@ table#ptable{width:100%;border-collapse:collapse;font-size:12px}
 #toast div{padding:9px 14px;border-radius:10px;border:1px solid var(--edge-acc);background:rgba(10,16,26,.9);backdrop-filter:blur(14px);box-shadow:0 8px 24px rgba(0,0,0,.4)}
 #toast div.err{border-color:rgba(255,59,92,.6)}
 
-/* ---------- at a glance: one big row per agent ---------- */
 .glance{padding:4px 0;display:flex;flex-direction:column}
 .grow{display:grid;grid-template-columns:auto minmax(110px,170px) 1fr auto;gap:12px;align-items:center;padding:10px 14px;border-bottom:1px solid rgba(255,255,255,.06)}
 .grow:last-child{border-bottom:0}
@@ -218,7 +205,6 @@ table#ptable{width:100%;border-collapse:collapse;font-size:12px}
 .tbar i.rest{background:rgba(176,77,255,.55);box-shadow:none}
 .grow.claude{--c:#FF9A5A}.grow.rosie{--c:var(--acc)}.grow.ollama{--c:var(--ok)}.grow.a0{--c:var(--pur)}.grow.mem{--c:var(--pink)}.grow.job{--c:var(--warn)}
 
-/* ---------- tabs and the Agent board tab ---------- */
 #tabs{display:flex;gap:4px;padding:0 18px;border-top:1px solid rgba(255,255,255,.05)}
 #tabs button{border:0;background:none;padding:9px 14px;color:var(--mute);font-weight:700;letter-spacing:.1em;text-transform:uppercase;font-size:.85em;border-bottom:2px solid transparent}
 #tabs button.on{color:var(--acc);border-bottom-color:var(--acc);text-shadow:0 0 10px rgba(0,240,255,.5)}
@@ -248,7 +234,6 @@ table#ptable{width:100%;border-collapse:collapse;font-size:12px}
 label.bold{display:flex;gap:6px;align-items:center;color:var(--mute);font-size:.9em;cursor:pointer}
 #bsearch{flex:1;min-width:160px}
 
-/* ---------- settings ---------- */
 .set{display:grid;grid-template-columns:150px 1fr;gap:12px 14px;align-items:center;margin:8px 0 4px}
 .set>span{color:var(--mute)}
 .seg{display:inline-flex;border:1px solid var(--edge);border-radius:10px;overflow:hidden;flex-wrap:wrap}
@@ -263,7 +248,6 @@ body.compact .card{padding:9px 10px;gap:6px}body.compact .grow{padding:6px 12px}
 body.compact main{gap:8px}body.compact #ptable td{padding:3px 7px}
 body.big .card{padding:16px;gap:12px}body.big .grow{padding:14px 16px}body.big .metric{padding:8px 10px}
 
-/* ---------- half a screen (the owner's usual spot): about 690 px wide ---------- */
 @media (max-width:1000px){
   #top{display:grid;grid-template-columns:1fr auto;gap:8px 10px;padding:10px 12px}
   .chips{grid-column:1/-1;grid-row:2;gap:5px}
@@ -287,19 +271,15 @@ body.big .card{padding:16px;gap:12px}body.big .grow{padding:14px 16px}body.big .
 }
 @media (max-width:560px){.metrics,.toks{grid-template-columns:repeat(2,1fr)}.cores{grid-template-columns:1fr}}
 
-/* inside Rosie's page: her header already says Agent Deck */
 .framed .brand{display:none}
 .framed #top{padding-top:8px}
 
-/* the process table in a narrow window: name with a small line of PID, status, user and run time under it, then CPU and RAM */
 #ptable .pn{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #ptable .psub{font-size:.82em;color:var(--mute);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px}
 #ptable.narrow td:first-child{max-width:0;width:100%}
 #ptable.narrow td,#ptable.narrow th{padding:5px 6px}
 #ptable.narrow .acts{gap:2px}#ptable.narrow .ib{width:24px;height:24px}
 
-/* a compact header in a narrow window (owner 2026-10-21: "shrink the top section"): tabs and the buttons on one row, the status chips
-   on one scrolling line under them */
 @media (max-width:1000px){
   #chrome{display:grid;grid-template-columns:auto 1fr auto;grid-template-areas:"brand tabs tools" "chips chips chips";align-items:center;column-gap:8px;padding:0 10px}
   #top{display:contents}
@@ -315,7 +295,6 @@ body.big .card{padding:16px;gap:12px}body.big .grow{padding:14px 16px}body.big .
   .chip b{min-width:0}
 }
 
-/* the Monitor tab's board section, and moving sections around */
 .mboard{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px}
 .mbcol{padding:12px 14px;min-width:0}
 .mbcol h4{margin:0 0 6px;font-size:.78em;letter-spacing:.12em;text-transform:uppercase;color:var(--mute)}
@@ -328,8 +307,7 @@ details.sec.dropafter{box-shadow:0 3px 0 var(--acc)}
 .secrow{display:flex;align-items:center;justify-content:space-between;gap:8px}
 .secmove{display:flex;gap:2px}
 
-/* Jetsons theme (owner 2026-10-24: easy to read for the partner): the same palette and font as Rosie's (static/app.css), followed from
-   Settings > Display through localStorage. Every text color is at least 7:1 on the navy; no all caps, letter spacing or glow. */
+/* board #822 owner-jetsons-theme */
 @font-face{font-family:"Atkinson Hyperlegible";src:url(/vendor/fonts/atkinson-400.woff2) format("woff2");font-weight:400;font-display:swap}
 @font-face{font-family:"Atkinson Hyperlegible";src:url(/vendor/fonts/atkinson-700.woff2) format("woff2");font-weight:700 900;font-display:swap}
 html[data-theme="jetsons"]{--fg:#FFF6E5;--mute:#C9D4E8;--acc:#6FE3D8;--pur:#FFB454;--pink:#FFA8D2;--ok:#8CE99A;--warn:#FFD166;--bad:#FFB3A6;

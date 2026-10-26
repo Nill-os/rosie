@@ -1,4 +1,3 @@
-"""Rosie as Vector's brain (vector_pod.py): a stand-in Vector talks to the real server over TLS gRPC, the way vic-cloud does."""
 import base64
 import hashlib
 import hmac
@@ -22,8 +21,8 @@ from vector_pb import chipperpb_pb2 as cpb, chipperpb_pb2_grpc as cgrpc
 from vector_pb import jdocs_pb2 as jpb, jdocs_pb2_grpc as jgrpc
 from vector_pb import token_pb2 as tpb, token_pb2_grpc as tgrpc
 
-REAL_SLEEP = time.sleep                                          # the pod fixture turns time.sleep into a no-op
-CLIP = Path(__file__).parent / "fixtures" / "vector_sit.ogg"     # "Sit." as 16 kHz Ogg Opus, 20 ms frames (like Vector's mic stream)
+REAL_SLEEP = time.sleep
+CLIP = Path(__file__).parent / "fixtures" / "vector_sit.ogg"  # board #905 quirk-mic-opus-frames
 ESN = "0a1b2c3d"
 
 
@@ -44,7 +43,6 @@ def _free_port():
 
 @pytest.fixture
 def pod(monkeypatch):
-    """Rosie's Vector server on 127.0.0.1 with one known robot (this machine), speech-to-text replaced by a script."""
     cfg = config.load()
     cfg.update(vector_on=True, vector_host="127.0.0.1", vector_port=_free_port(), vector_check_port=_free_port(),
                vector_robots=[{"esn": ESN, "ip": "127.0.0.1"}])
@@ -56,7 +54,7 @@ def pod(monkeypatch):
                                      release=lambda: actions.append("release"), held=False, close=lambda: None, ip="127.0.0.1")
     monkeypatch.setattr(vector_pod, "robot", lambda: fake_bot)
     monkeypatch.setattr(vector_pod, "brain", lambda text: f"You asked: {text}")
-    monkeypatch.setattr(vector_pod, "tts", None)                   # his own voice unless a test turns Rosie's on
+    monkeypatch.setattr(vector_pod, "tts", None)
     monkeypatch.setattr(vector_pod.time, "sleep", lambda s: None)
     assert vector_pod.start()
     ch = grpc.secure_channel(f"127.0.0.1:{cfg['vector_port']}", grpc.ssl_channel_credentials(vector_pod.CERT.read_bytes()))
@@ -80,19 +78,18 @@ def _wait(cond, secs=8):
     return cond()
 
 
-# --- hearing ----------------------------------------------------------------------------------------------
 def test_vectors_ogg_opus_stream_decodes_to_16k_pcm_in_any_chunk_size():
     _opus_or_skip()
     data = CLIP.read_bytes()
     whole = vector_audio.MicStream(data[:4])
     whole.add(data)
     bits = vector_audio.MicStream(data[:4])
-    for i in range(0, len(data), 37):                        # pages split at odd places, like network chunks
+    for i in range(0, len(data), 37):
         bits.add(data[i:i + 37])
     assert whole.opus and len(whole.pcm) == len(bits.pcm) and 2.0 < len(whole.pcm) / 32000 < 3.5
     ep = vector_audio.Endpointer()
     ep.add(bytes(whole.pcm))
-    assert ep.heard and ep.done                               # speech, then the clip's quiet tail ends it
+    assert ep.heard and ep.done
 
 
 def test_endpointer_gives_up_on_silence_and_raw_pcm_passes_through():
@@ -108,7 +105,6 @@ def test_timer_lengths(said, secs):
     assert vector_audio.duration_seconds(said) == secs
 
 
-# --- what he does with it -----------------------------------------------------------------------------------
 @pytest.mark.parametrize("said,intent,params", [
     ("What time is it?", "intent_clock_time", {}),
     ("Set a timer for two minutes.", "intent_clock_settimer_extend", {"timer_duration": "120"}),
@@ -139,7 +135,6 @@ def test_sit_and_release_with_own_phrases_too():
     assert vector_intents.match_command("Vector, plant it!", cmds)["reply"] == "Planted."
 
 
-# --- the server, end to end ---------------------------------------------------------------------------------
 def test_sit_over_grpc_answers_out_loud_and_holds_him_still(pod):
     _opus_or_skip()
     pod.heard["text"] = "Sit."
@@ -177,7 +172,7 @@ def test_a_slow_answer_is_spoken_later_through_his_sdk_port(pod, monkeypatch):
     [r] = _ask(pod.ch)
     assert r.spoken_text == "Let me think about that." and pod.said == []
     gate.set()
-    assert _wait(lambda: pod.said == ["Done thinking . See a link"])   # markdown, emoji and links are not read out
+    assert _wait(lambda: pod.said == ["Done thinking . See a link"])
 
 
 def test_nothing_heard_is_noaudio(pod):
@@ -228,7 +223,7 @@ def test_settings_documents_are_kept_and_app_tokens_carry_rosies_token(pod):
     assert any(vector_pod.token_matches(vector_pod.client_token(), h) for h in hashes)
     stub.ReadDocs(jpb.ReadDocsReq(thing=f"vic:{ESN}", items=[jpb.ReadDocsReq.Item(doc_name="vic.AppTokens")]), timeout=5)
     again = json.loads(vector_pod._load_docs()[f"vic:{ESN}"]["vic.AppTokens"]["json_doc"])["client_tokens"]
-    assert len(again) == 1                                    # added once, not on every read
+    assert len(again) == 1
 
 
 def test_token_refresh_gives_a_session_token_for_his_esn(pod):
@@ -251,7 +246,6 @@ def test_connection_check_and_its_url_answer_on_http_and_https(pod):
         assert s.recv(200).startswith(b"HTTP/1.1 200 OK")
 
 
-# --- tokens, certificate, wire-pod hand-over -------------------------------------------------------------------
 def test_token_hash_is_vic_gateways_format():
     guid = base64.b64encode(b"0123456789abcdef").decode()
     salt = b"S" * 16
@@ -271,7 +265,7 @@ def test_certificate_names_the_address_vector_uses_and_is_remade_when_it_changes
 
 
 def test_no_network_at_start_keeps_the_certificate_vector_trusts():
-    """Audit pass 3: Rosie started before the Wi-Fi made a new certificate for 127.0.0.1, and Vector stopped trusting her."""
+    # board #905 fix-cert-after-start
     pem = vector_pod.ensure_cert("10.0.7.20")
     key = vector_pod.KEY.read_bytes()
     assert vector_pod.ensure_cert("127.0.0.1") == pem and vector_pod.KEY.read_bytes() == key
@@ -296,7 +290,6 @@ def test_wire_pods_documents_and_token_are_taken_over(tmp_path):
     assert config.load()["vector_robots"] == [{"esn": ESN, "ip": "10.0.1.15"}]
 
 
-# --- the page's API ---------------------------------------------------------------------------------------------
 def _client(tmp_path, monkeypatch):
     import server
     from fastapi.testclient import TestClient
@@ -338,7 +331,6 @@ def test_rosies_vector_turn_goes_into_its_own_voice_chat_with_the_personality(tm
     assert seen["text"].endswith("\nhow are you") and server._vector_chat_id() == seen["cid"]
 
 
-# --- sit mode: Rosie keeps timers and draws on his face ------------------------------------------------------------
 def test_while_sitting_rosie_keeps_the_timer_and_refuses_to_move(pod, monkeypatch):
     _opus_or_skip()
     monkeypatch.setattr(vector_pod, "_robot_obj", types.SimpleNamespace(held=True, close=lambda: None))
@@ -363,7 +355,7 @@ def test_face_screens_are_his_size_in_rgb565_and_a_timer_wins():
     t.add(90)
     img, wait = next(frames)
     assert wait == 1.0 and len(vector_face.to_rgb565(img)) == 184 * 96 * 2
-    assert vector_face.to_rgb565(vector_face.Image.new("RGB", (1, 1), (255, 0, 0))) == b"\xf8\x00"   # red, high byte first
+    assert vector_face.to_rgb565(vector_face.Image.new("RGB", (1, 1), (255, 0, 0))) == b"\xf8\x00"
 
 
 def test_a_finished_timer_is_said_out_loud_sitting_or_not(pod):
@@ -428,7 +420,6 @@ def test_the_vector_page_renders_hostile_text_as_text(tmp_path, monkeypatch):
     assert saved and saved[-1]["commands"][0] == {"phrases": ["park it", "stay put"], "action": "hold", "reply": ""}
 
 
-# --- Rosie changes her own Vector code: Claude plans, she edits, Claude checks ---------------------------------------
 def test_selfdev_plan_and_review_send_only_code_and_return_claudes_verdict(tmp_path, monkeypatch):
     import subprocess
     import claude_plan
@@ -461,7 +452,6 @@ def test_selfdev_plan_and_review_send_only_code_and_return_claudes_verdict(tmp_p
     assert {"selfdev_plan", "selfdev_review"} <= set(agent.TOOLS)
 
 
-# --- his eyes: Rosie looks through his camera with her own vision model ------------------------------------------------
 @pytest.mark.parametrize("said,look", [("What do you see?", True), ("Hey Vector, what's in front of you", True), ("Do you see my keys?", True),
                                        ("How many cups do you see?", True), ("Look at me", False), ("What time is it", False),
                                        ("What do you think about cats?", False)])
@@ -503,10 +493,9 @@ def test_what_he_saw_reaches_rosie_as_marked_data_and_only_while_fresh(monkeypat
     vector_pod.status.pop("scene")
 
 
-# --- escape pod firmware (2.0.1.6076ep): no SSH, Rosie answers as escapepod.local:443 ----------------------------------
 def test_escape_pod_mode_serves_the_escape_pod_certificate_and_announces_itself(monkeypatch):
     _opus_or_skip()
-    vector_pod.ensure_cert("escapepod.local")                       # stands in for DDL's escape pod certificate
+    vector_pod.ensure_cert("escapepod.local")
     vector_pod.DIR.mkdir(parents=True, exist_ok=True)
     vector_pod.EP_CERT.write_bytes(vector_pod.CERT.read_bytes())
     vector_pod.EP_KEY.write_bytes(vector_pod.KEY.read_bytes())
@@ -557,7 +546,6 @@ def test_connect_adopts_an_escape_pod_robot_that_takes_rosies_token(monkeypatch)
     assert (vector_pod.DIR / f"robot-{ESN}.pem").read_text(encoding="utf-8") == "PEM"
 
 
-# --- quiet when idle: muted except while he talks ---------------------------------------------------------------------
 def test_quiet_when_idle_gives_him_his_voice_for_the_answer_then_mutes_him(pod, monkeypatch):
     _opus_or_skip()
     calls = []
@@ -592,7 +580,6 @@ def test_a_review_of_a_cut_off_change_never_passes(monkeypatch):
     assert r["ok"] is False and "split it into smaller commits" in r["fixes"][-1]
 
 
-# --- Rosie's own voice through his speaker -------------------------------------------------------------------------------
 def test_answers_play_in_rosies_voice_with_control_taken_first(pod, monkeypatch):
     _opus_or_skip()
     import numpy as np
@@ -603,15 +590,15 @@ def test_answers_play_in_rosies_voice_with_control_taken_first(pod, monkeypatch)
     monkeypatch.setattr(vector_pod, "robot", lambda: bot)
     monkeypatch.setattr(vector_pod, "tts", lambda text: (np.zeros(24000, dtype=np.float32), 24000))
     monkeypatch.setattr(vector_pod.vector_dev, "listen", lambda ip: listened.append(ip) or True)
-    monkeypatch.setattr(vector_pod, "ONE_MOMENT_S", 60)   # a busy PC (staging, CI) can take over 3 s: no "One moment." in this test
+    monkeypatch.setattr(vector_pod, "ONE_MOMENT_S", 60)  # board #905 why-one-moment-busy
     pod.heard["text"] = "Tell me a joke"
     [r] = _ask(pod.ch)
     assert r.response_type == cpb.INTENT and r.intent_result.action == vector_pod.ROSIE_SPEAKS_INTENT and order[0] == "control"
     assert _wait(lambda: played == [(32000, None)] and order == ["control", "released"] and listened == ["127.0.0.1"])
-    assert vector_pod._followup_until > time.time()                  # a follow-up window is open
+    assert vector_pod._followup_until > time.time()
     pod.heard["text"] = ""
     [r] = _ask(pod.ch)
-    assert r.intent_result.action == "intent_system_noaudio"         # nothing said in it: the talk is over
+    assert r.intent_result.action == "intent_system_noaudio"
     vector_pod._followup_until = 0.0
 
 
@@ -629,7 +616,7 @@ def test_fast_talk_speaks_each_sentence_as_it_streams_and_tools_take_the_full_br
     spoken.clear()
     pod.heard["text"] = "What's on my calendar tomorrow"
     _ask(pod.ch)
-    assert _wait(lambda: spoken == ["You asked: What's on my calendar tomorrow"])   # the tool brain, not the fast one
+    assert _wait(lambda: spoken == ["You asked: What's on my calendar tomorrow"])
 
 
 def test_sentences_and_tool_cues():
@@ -654,9 +641,9 @@ def test_eyes_sweep_cyan_to_purple_free_or_held(monkeypatch):
     saved, swept, held = [], [], {"v": False}
     bot = types.SimpleNamespace(ip="192.0.2.1", has_control=lambda: held["v"], save_eye_color=lambda h, s: saved.append(h), eye_color=lambda h, s: swept.append(h))
     sweep = vector_dev.EyeSweep(bot, step_s=0.01, idle_step_s=0.05).start()
-    assert _wait(lambda: len(saved) >= 2) and not swept                # free: gentle steps through his saved colour
+    assert _wait(lambda: len(saved) >= 2) and not swept
     held["v"] = True
-    assert _wait(lambda: len(swept) > 5)                                 # held: smooth sweep, nothing saved
+    assert _wait(lambda: len(swept) > 5)
     sweep.stop()
     assert all(0.5 <= h <= 0.78 for h in saved + swept)
     sent = []
@@ -671,7 +658,7 @@ def test_rosies_voice_is_resampled_to_his_16k_speaker():
     a = np.frombuffer(pcm, dtype="<i2")
     assert len(a) == 16000 and 0.3 < np.abs(a).max() / 32767 < 0.6
     peak = np.abs(np.fft.rfft(a)).argmax()
-    assert abs(peak - 440) <= 2                                      # still a 440 Hz tone after resampling
+    assert abs(peak - 440) <= 2
 
 
 def test_after_a_voice_request_while_sitting_control_is_taken_again_a_few_times(monkeypatch):
@@ -683,7 +670,7 @@ def test_after_a_voice_request_while_sitting_control_is_taken_again_a_few_times(
     assert calls == [1, 1, 1] and redraws == [1, 1, 1]
     bot.held = False
     vector_pod._back_to_sitting((0.0, 0.01))
-    assert len(calls) == 3                                           # he stood up: nothing more
+    assert len(calls) == 3
 
 
 def test_the_phone_or_pc_stands_down_when_vector_heard_the_same_words(tmp_path, monkeypatch):
@@ -693,7 +680,7 @@ def test_the_phone_or_pc_stands_down_when_vector_heard_the_same_words(tmp_path, 
     c = _client(tmp_path, monkeypatch)
     r = c.post("/api/voice", json={"text": "Tell me a joke"}).json()
     assert r["reply"] == "" and r["skipped"]
-    monkeypatch.setattr(vector_pod.time, "time", lambda: 10 ** 10)   # long after: the phone answers again
+    monkeypatch.setattr(vector_pod.time, "time", lambda: 10 ** 10)
     assert not vector_pod.heard_same("tell me a joke")
     vector_pod._heard_log.clear()
 
@@ -739,7 +726,7 @@ def test_volume_goes_as_json_so_mute_is_not_dropped(monkeypatch):
 
 def test_pc_and_phone_listening_stays_quiet_while_vector_has_the_conversation(monkeypatch):
     vector_pod._heard_log.clear()
-    vector_pod._speaking_until = 0.0                                 # earlier tests spoke through the stand-in robot
+    vector_pod._speaking_until = 0.0
     vector_pod._listening.clear()
     assert not vector_pod.busy()
     vector_pod._speaking_for(5)
@@ -773,7 +760,7 @@ def test_backpack_patterns_become_cyan_and_purple_keeping_brightness_and_timing(
     streaming = {"onColors": [[0, 0.5, 0.5, 1], [0, 1, 1, 1], [0, 0.5, 0.5, 1]], "offColors": [[0, 0, 0, 1]] * 3,
                  "onPeriod_ms": [600, 600, 600], "offset": [0, 200, 400]}
     t = vector_pod.themed_lights(streaming, "streaming.json")
-    assert t["onColors"][1] == [0.62, 0.3, 1.0, 1] and t["onColors"][0] == [0.0, 0.45, 0.5, 1]       # middle purple, outer cyan at its level
+    assert t["onColors"][1] == [0.62, 0.3, 1.0, 1] and t["onColors"][0] == [0.0, 0.45, 0.5, 1]
     assert t["offColors"] == [[0.0, 0.0, 0.0, 1]] * 3 and t["onPeriod_ms"] == [600, 600, 600] and t["offset"] == [0, 200, 400]
     idle = vector_pod.themed_lights({"onColors": [[0, 0, 0, 1]] * 3, "offColors": [[0, 0, 0, 1]] * 3}, "idle_09.json")
-    assert idle["onColors"][0][1] > 0 and idle["onColors"][1][0] > 0                                   # idle gets a dim glow
+    assert idle["onColors"][0][1] > 0 and idle["onColors"][1][0] > 0

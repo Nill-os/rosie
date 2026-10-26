@@ -5,13 +5,11 @@ import android.media.AudioAttributes;
 import android.media.AudioFormat;
 import android.media.AudioTrack;
 
-/** Rosie's little sounds, made on the fly (nothing to download): video-game chiptune or a soft chime. */
 public class Sounds {
     static final int SR = 22050;
 
-    static double hz(int semis) { return 261.63 * Math.pow(2, semis / 12.0); }       // semitones above middle C (an octave lower than before)
+    static double hz(int semis) { return 261.63 * Math.pow(2, semis / 12.0); }
 
-    /** square/pulse wave */
     static double pulse(double phase, double duty) { return (phase % 1.0) < duty ? 1.0 : -1.0; }
 
     static float[] notes(int[] semis, int ms, double duty, boolean soft) {
@@ -43,13 +41,13 @@ public class Sounds {
         boolean soft = style.equals("soft");
         float[] w;
         switch (kind) {
-            case "wake":     w = soft ? notes(new int[]{-5, 2}, 110, 0.5, true) : notes(new int[]{0, 4, 7, 12}, 38, 0.5, false); break;          // I'm listening
-            case "thinking": w = soft ? notes(new int[]{2, -5}, 60, 0.5, true) : notes(new int[]{7, 2, -2}, 32, 0.5, false); break;            // stopped listening, working
-            case "done":     w = soft ? notes(new int[]{2, -5}, 110, 0.5, true) : notes(new int[]{12, 7, 4, 0}, 38, 0.5, false); break;        // finished
-            case "on":       w = soft ? notes(new int[]{-5, 2, 7}, 70, 0.5, true) : sweep(150, 520, 190, 0.5); break;                         // Hey Rosie switched on
-            default:         w = soft ? notes(new int[]{-12, -17}, 90, 0.5, true) : notes(new int[]{-10, -17, -22}, 60, 0.5, false);           // error
+            case "wake":     w = soft ? notes(new int[]{-5, 2}, 110, 0.5, true) : notes(new int[]{0, 4, 7, 12}, 38, 0.5, false); break;
+            case "thinking": w = soft ? notes(new int[]{2, -5}, 60, 0.5, true) : notes(new int[]{7, 2, -2}, 32, 0.5, false); break;
+            case "done":     w = soft ? notes(new int[]{2, -5}, 110, 0.5, true) : notes(new int[]{12, 7, 4, 0}, 38, 0.5, false); break;
+            case "on":       w = soft ? notes(new int[]{-5, 2, 7}, 70, 0.5, true) : sweep(150, 520, 190, 0.5); break;
+            default:         w = soft ? notes(new int[]{-12, -17}, 90, 0.5, true) : notes(new int[]{-10, -17, -22}, 60, 0.5, false);
         }
-        float y = 0;                                                      // take the sharp edge off the square wave so it is round, not shrill
+        float y = 0;  // board #691 why-soften-square-wave
         for (int i = 0; i < w.length; i++) { y += 0.28f * (w[i] - y); w[i] = Math.max(-1f, Math.min(1f, y * 1.5f)); }
         return w;
     }
@@ -64,10 +62,9 @@ public class Sounds {
 
     static String style(Context c) {
         String st = c.getSharedPreferences("assistant", Context.MODE_PRIVATE).getString("sound_style", "game");
-        return st.equals("glitch") ? "game" : st;                      // the glitchy style was removed
+        return st.equals("glitch") ? "game" : st;  // board #691 fix-glitch-style-removed
     }
 
-    /** Plays one of the sounds in the chosen style and volume (blocks until it has finished). */
     static void play(Context c, String kind) { play(c, kind, style(c)); }
 
     static void play(Context c, String kind, String style) {
@@ -76,16 +73,16 @@ public class Sounds {
         try {
             float[] f = render(style, kind);
             boolean wireless = wirelessOutput(c);
-            int lead = SR * (wireless ? 280 : 40) / 1000;                       // Bluetooth earbuds take a moment to wake: silence first, so the sound itself is not swallowed
-            int tail = SR * (wireless ? 260 : 100) / 1000;                      // and a quiet tail, so the end is not cut off by the headset's delay
+            int lead = SR * (wireless ? 280 : 40) / 1000;  // board #691 quirk-bluetooth-wake-lead
+            int tail = SR * (wireless ? 260 : 100) / 1000;  // board #691 quirk-headset-tail-delay
             short[] s = new short[lead + f.length + tail];
             float v = volume(c) * 32000f;
-            int fade = Math.min(f.length / 4, SR / 100);                         // 10 ms fade in/out: no click
+            int fade = Math.min(f.length / 4, SR / 100);
             for (int i = 0; i < f.length; i++) {
                 float e = Math.min(1f, Math.min(i, f.length - 1 - i) / (float) Math.max(1, fade));
                 s[lead + i] = (short) Math.max(-32768, Math.min(32767, f[i] * v * e));
             }
-            tr = new AudioTrack.Builder().setAudioAttributes(new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ASSISTANT).setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build())      // same volume as her voice (media volume)
+            tr = new AudioTrack.Builder().setAudioAttributes(new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ASSISTANT).setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build())  // board #691 why-same-volume-as-voice
                     .setAudioFormat(new AudioFormat.Builder().setEncoding(AudioFormat.ENCODING_PCM_16BIT).setSampleRate(SR).setChannelMask(AudioFormat.CHANNEL_OUT_MONO).build())
                     .setBufferSizeInBytes(Math.max(4096, s.length * 2)).setTransferMode(AudioTrack.MODE_STATIC).build();
             tr.write(s, 0, s.length);
@@ -97,7 +94,7 @@ public class Sounds {
             }, new android.os.Handler(android.os.Looper.getMainLooper()));
             tr.play();
             long total = s.length * 1000L / SR;
-            synchronized (done) { done.wait(total + 700); }                     // until the last sample has really been played (or a safe limit)
+            synchronized (done) { done.wait(total + 700); }
             android.util.Log.i("Rosie", "sound " + kind + " (" + style + ") played; wireless=" + wireless + " lead=" + lead * 1000 / SR + "ms head=" + tr.getPlaybackHeadPosition() + "/" + s.length);
             Thread.sleep(wireless ? 120 : 30);
         } catch (Throwable t) {

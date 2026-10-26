@@ -1,26 +1,5 @@
 #!/usr/bin/env python3
-"""Builds app/paper_quotes.tsv: the Morning Paper's quote of the day (owner 2026-10-14: "instead of the big your day header make it an
-inserational quote from a sientist or a mathmatition or a something like that").
-
-Source: English Wikiquote (https://en.wikiquote.org), one page per person below, read once through the MediaWiki API
-(action=parse, prop=wikitext, redirects=1), 3 s apart, waiting when asked to (HTTP 429). Wikiquote text is CC BY-SA (app/paper_quotes.LICENSE).
-
-    python3 -I tools/build_paper_quotes.py fetch <cache_dir>                 # download the pages once (3 s apart)
-    python3 -I tools/build_paper_quotes.py build <cache_dir> [--out app/paper_quotes.tsv]
-
-What is kept (never made up, never misattributed):
-- only quotes from a page's sourced sections: any section under a heading that says Disputed, Misattributed, Attributed,
-  Unsourced, Apocryphal, Dubious, "Quotes about ...", "About ...", See also, External links, References or Sources is skipped;
-- only a top-level quote ("* ...") that has its own citation line ("** ...") naming where it was said or written, with a year
-  (4 digits) in the citation or in the work's own section heading; a citation that itself says attributed, disputed, unsourced,
-  misattributed or "as quoted in" an unnamed source is skipped;
-- English text (the translation when the page gives one), 30 to 200 characters, one or two sentences' worth;
-- not a quote about war, killing, death, religion, politics or people groups, no insults and no lines of dialogue from fiction
-  (NEGATIVE), not from novels, stories or reviews (FICTION), and it must be about learning, discovery, work or wonder (UPLIFT),
-  so the line reads as encouragement; no formulas, no editorial [brackets]; never one whose only source is a quote book or a
-  self-help / inspiration book (COMPILATION), where misattributions live;
-- at most PER_PERSON quotes from one person, so the list stays broad.
-Each line: id, quote, person, role (written here, plain and short), citation (Wikiquote's own wording), section, page URL."""
+# board #913 owner-paper-quote-header
 import argparse
 import hashlib
 import html
@@ -38,7 +17,7 @@ UA = "Rosie morning paper quote list builder (personal, one-time; contact: owner
 PER_PERSON = 15
 MIN_LEN, MAX_LEN = 30, 200
 
-PEOPLE = [  # (Wikiquote page, name as printed, role)
+PEOPLE = [
     ("Marie Curie", "Marie Curie", "physicist and chemist"), ("Richard Feynman", "Richard Feynman", "physicist"),
     ("Emmy Noether", "Emmy Noether", "mathematician"), ("Srinivasa Ramanujan", "Srinivasa Ramanujan", "mathematician"),
     ("Ada Lovelace", "Ada Lovelace", "mathematician"), ("Grace Hopper", "Grace Hopper", "computer scientist"),
@@ -112,7 +91,7 @@ SKIP_HEAD = re.compile(r"disput|misattribut|attributed|unsourced|apocryph|dubiou
                        r"bibliograph|further reading|works about|quoted by|said of|tributes|obituar|wrongly", re.I)
 SKIP_CITE = re.compile(r"\battributed\b|\bdisputed\b|unsourced|misattribut|apocryph|\bunverified\b|\bdubious\b", re.I)
 COMPILATION = re.compile(r"reader's digest|speaker's|quotebook|quotations|quotable|treasury|dictionary of|book of quotes|"
-                         r"wit and wisdom|new words|redefine|inspir|success|leadership|motivat", re.I)   # a quote found only in a quote book
+                         r"wit and wisdom|new words|redefine|inspir|success|leadership|motivat", re.I)
 FICTION = re.compile(r"\bseries\b|\bnovel\b|\bshort story\b|\bstories\b|\bplay\b|\bpoem\b|religio|watchtower|apostle|bible|\breview of\b|"
                      r"\bfoundation\b|\bazazel\b|\bfiction\b", re.I)
 NEGATIVE = re.compile(r"\b(war|wars|kill\w*|murder\w*|bomb\w*|weapon\w*|dead|death|die|dies|dying|hate\w*|stupid\w*|idiot\w*|fool\w*|damn\w*|hell|"
@@ -123,7 +102,6 @@ NEGATIVE = re.compile(r"\b(war|wars|kill\w*|murder\w*|bomb\w*|weapon\w*|dead|dea
 
 
 def clean(t: str) -> str:
-    """Wikitext -> plain text: links, templates, refs, bold/italic marks, HTML and entities removed."""
     t = re.sub(r"(?s)<ref[^>]*/>|<ref[^>]*>.*?</ref>", "", t)
     t = re.sub(r"(?s)<!--.*?-->", "", t)
     for _ in range(3):
@@ -160,7 +138,6 @@ def english(t: str) -> bool:
 
 
 def parse(wikitext: str) -> list[dict]:
-    """[{quote, citation, section}] from a Wikiquote page: sourced sections only, each quote with its own citation line."""
     out, heads, cur = [], {}, None
     lines = wikitext.splitlines()
 
@@ -168,7 +145,7 @@ def parse(wikitext: str) -> list[dict]:
         return any(SKIP_HEAD.search(h) for h in heads.values())
 
     def flush():
-        if cur and (cur["cites"] or work_heading(cur["heads"])):    # its own citation line, or it sits under a work's heading
+        if cur and (cur["cites"] or work_heading(cur["heads"])):
             out.append(cur)
     for ln in lines:
         m = re.match(r"^(={2,6})\s*(.*?)\s*\1\s*$", ln)
@@ -191,8 +168,6 @@ def parse(wikitext: str) -> list[dict]:
 
 
 def work_heading(heads: dict) -> str:
-    """The nearest section heading that names a work or occasion with its year, e.g. "The Character of Physical Law (1965)"; not a
-    bare year or decade ("1930s")."""
     for k in sorted(heads, reverse=True):
         h = heads[k]
         if re.search(r"\b(1\d{3}|20\d{2})\b", h) and len(re.findall(r"[A-Za-z]{3,}", h)) >= 2 and not SKIP_HEAD.search(h):
@@ -201,7 +176,6 @@ def work_heading(heads: dict) -> str:
 
 
 def pick_cite(q: dict) -> str | None:
-    """The citation to print: its own citation line when that names a year; else the work's heading (with the line's page, if any)."""
     wh = work_heading(q["heads"])
     for c in q["cites"]:
         if not c or SKIP_CITE.search(c) or c.lower().startswith(("original", "variant", "translation", "see also", "note")):
@@ -218,12 +192,10 @@ def pick_cite(q: dict) -> str | None:
 
 
 def good_quote(t: str) -> bool:
-    """Short, English, encouraging: about learning, discovery, work and wonder (UPLIFT), with none of the NEGATIVE words, and not
-    a line of dialogue from a story (no quotation marks inside)."""
     return (MIN_LEN <= len(t) <= MAX_LEN and english(t) and not NEGATIVE.search(t) and bool(UPLIFT.search(t)) and t[0].isupper()
             and not SKIP_CITE.search(t) and not re.search(r'["“”]', t) and "http" not in t and not t.endswith((":", ",", ";"))
             and not re.search(r"[=^]|\b[a-z]\s*[+<>]\s*[a-z]\b", t)
-            and not re.search(r"(\.\.\.|…)\s*\S", t) and t.rstrip()[-1] in ".!?…"    # whole sentences, no cut-and-joined pieces
+            and not re.search(r"(\.\.\.|…)\s*\S", t) and t.rstrip()[-1] in ".!?…"  # board #913 why-whole-sentences-only
             and not re.search(r"[\[\]]|\(\d\)|\b(bums?|cranks?|pity|wretched|miser\w*)\b", t, re.I))
 
 
@@ -238,12 +210,12 @@ def fetch(cache: Path):
             try:
                 f.write_bytes(urllib.request.urlopen(req, timeout=30).read())
                 break
-            except urllib.error.HTTPError as e:                          # rate limited: wait as asked, then try again
+            except urllib.error.HTTPError as e:  # board #913 quirk-rate-limit-retry
                 if e.code != 429:
                     print("skip", page, e, file=sys.stderr)
                     break
                 time.sleep(float(e.headers.get("Retry-After") or 30) + 5)
-            except Exception as e:                                        # a page that can't be read is just left out
+            except Exception as e:
                 print("skip", page, e, file=sys.stderr)
                 break
         time.sleep(3.0)

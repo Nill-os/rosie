@@ -1,5 +1,4 @@
-"""The phone as one of the assistant's hands. The assistant (on this PC) puts a command in a queue; the Rosie app on the phone picks it up over the
-Tailscale link, does it with Android's own features, and sends back the result. Sending texts and making calls always wait for the user's OK."""
+# board #762 safety-texts-calls-need-ok
 import queue
 import threading
 import time
@@ -10,7 +9,7 @@ import actions
 _cmds: "queue.Queue[dict]" = queue.Queue()
 _results: dict = {}
 _lock = threading.Lock()
-last_seen = 0.0                                 # when the phone last asked for work
+last_seen = 0.0
 
 
 def online() -> bool:
@@ -18,7 +17,6 @@ def online() -> bool:
 
 
 def poll(wait=25):
-    """The phone asks: anything for me? Waits up to `wait` seconds. Returns a command or None."""
     global last_seen
     last_seen = time.time()
     try:
@@ -27,7 +25,7 @@ def poll(wait=25):
         last_seen = time.time()
         return None
     last_seen = time.time()
-    if c.get("deadline", 1e18) < time.time():                      # the caller already gave up and told the user it failed: never run it late
+    if c.get("deadline", 1e18) < time.time():  # board #762 why-never-run-late
         return None
     c.pop("deadline", None)
     return c
@@ -42,7 +40,6 @@ def result(cmd_id, ok, data):
 
 
 def run(action, args=None, timeout=40):
-    """Send a command to the phone and wait for what happened. Returns a dict the assistant can read."""
     if not online():
         return {"error": "The phone is not connected right now. Open the Rosie app on the phone (Settings > Phone control must be on), and make sure Tailscale is connected."}
     cid = uuid.uuid4().hex[:10]
@@ -58,7 +55,6 @@ def run(action, args=None, timeout=40):
     return ev["data"] if ev["ok"] else {"error": ev["data"] if isinstance(ev["data"], str) else (ev["data"] or {}).get("error", "The phone could not do that.")}
 
 
-# ---------- tools the assistant can use ----------
 def phone_status():
     return run("status")
 
@@ -110,12 +106,11 @@ def read_messages(count=5, from_who=""):
     return run("read_sms", {"count": int(count or 5), "from": from_who})
 
 
-user_text = ""                                   # what the user just said (set by the agent): a raw number is only accepted if they said it
-_names: dict = {}                                 # number -> the name you said, so read-backs say 'Mom', not a number
+user_text = ""  # board #762 safety-raw-number-said
+_names: dict = {}
 
 
 def _one_contact(to):
-    """Resolve a name to ONE number the way Siri/Gemini do: same person with several numbers -> the mobile one; different people -> ask which."""
     if any(ch.isdigit() for ch in to):
         digits = "".join(ch for ch in to if ch.isdigit())
         said = "".join(ch for ch in user_text if ch.isdigit())
@@ -137,9 +132,9 @@ def _one_contact(to):
     return mobile[0], None
 
 
-force_ask = False          # set by the agent while it works from outside content: nothing is sent or dialled without the user's own OK
+force_ask = False  # board #762 safety-outside-content-ask
 import threading as _threading
-_here = _threading.local()   # a0_mcp holds texts and calls for its own worker thread only (a shared flag raced with Rosie's loop: audit)
+_here = _threading.local()  # board #762 fix-thread-local-flag
 
 
 def forced() -> bool:
@@ -160,7 +155,6 @@ def _auto_text() -> bool:
 
 
 def send_sms(to, text, _confirmed=False):
-    """Text someone. The user hears what will be sent and who it is going to first (a card, or 'say yes'); depending on Settings it auto-sends after a 3 second cancel window."""
     if _confirmed:
         return run("sms", {"to": to, "text": text})
     c, err = _one_contact(to)
@@ -172,7 +166,6 @@ def send_sms(to, text, _confirmed=False):
 
 
 def call(to, _confirmed=False):
-    """Phone someone: announced ('Calling Mom') and dialled after a 3 second cancel window, or asked first, or right away, depending on Settings."""
     if _confirmed:
         return run("call", {"to": to})
     import config
@@ -188,13 +181,11 @@ def call(to, _confirmed=False):
     return q
 
 
-# ---------- notifications ----------
 def notifications(count=8, app=""):
     return run("notifications", {"count": int(count or 8), "app": app or ""})
 
 
 def reply_notification(nid, text, _confirmed=False):
-    """Answer a message notification (WhatsApp, Messages, Slack...) with its own reply box. Read back first, like a text."""
     if _confirmed:
         return run("notif_reply", {"id": nid, "text": text})
     lst = run("notifications", {"count": 20})
@@ -210,13 +201,11 @@ def reply_notification(nid, text, _confirmed=False):
     return q
 
 
-# ---------- the screen (accessibility) ----------
 def screen_read():
     return run("screen_read")
 
 
 def screen_tap(target, _confirmed=False):
-    """Tap something on screen. Buttons like Send / Pay / Delete / Buy ask the user first."""
     r = run("screen_tap", {"target": str(target), "force": bool(_confirmed)})
     if isinstance(r, dict) and r.get("needs_confirm") and not _confirmed:
         q = actions.queue_tool("phone_screen_tap", {"target": str(target), "_confirmed": True}, f"Tap '{r.get('label', '')}' in {r.get('app', 'the app')}")

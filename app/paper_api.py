@@ -1,5 +1,4 @@
-"""Morning Paper API (the #/paper page). All logic lives in paper.py / paper_render.py; this file only checks input and maps errors.
-Everything here sits behind the normal login (server.py's middleware covers /api/)."""
+# board #752 safety-behind-login
 import re
 
 from fastapi import APIRouter
@@ -12,7 +11,7 @@ import paper_render
 router = APIRouter()
 DAY_RE = re.compile(r"^\d{4}-\d\d-\d\d$")
 IMG_RE = re.compile(r"^(img\d{1,2}|cartoon\d?)\.(jpg|png|webp|gif)$")
-# the paper frame: no scripts at all, styles inline, pictures and the masthead font only from Rosie herself
+# board #752 safety-paper-frame-no-scripts
 FRAME_CSP = "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; font-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'"
 
 
@@ -54,7 +53,6 @@ def paper_home(day: str | None = None):
 
 @router.get("/api/paper/view")
 def paper_view(day: str | None = None, look: str = "cyberdeck"):
-    """The paper itself, for the page's frame (same look as the print copy, responsive, no scripts)."""
     d = _day(day)
     p = paper.for_day(d) if d else None
     if not p:
@@ -85,7 +83,6 @@ def paper_pdf(day: str | None = None):
 
 @router.post("/api/paper/make")
 def paper_make():
-    """Make today's paper now (no printing or emailing: those are the morning run's, or the buttons')."""
     try:
         return paper.build_async()
     except paper.FakeDataError as e:

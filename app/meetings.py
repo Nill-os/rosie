@@ -1,5 +1,4 @@
-"""Meeting recorder. CONSENT FIRST: it will not start without an explicit confirmation each time, and the confirmation is written into the transcript.
-Two separate tracks (your microphone = 'Me', the call's sound = 'Them'), transcribed locally after the meeting, audio deleted by default."""
+# board #744 safety-consent-first
 import datetime as dt
 import difflib
 import json
@@ -27,8 +26,8 @@ CONSENT_KINDS = {
     "all_parties_agreed": "Everyone on this call was told it is being recorded and agreed (recording everyone).",
     "own_voice_only": "Only my own microphone is recorded (no one else's audio).",
 }
-_status: dict = {}          # id -> processing status text (in memory)
-_titles: dict = {}          # id -> (title, started) while processing
+_status: dict = {}
+_titles: dict = {}
 
 
 def _env():
@@ -64,7 +63,7 @@ def _recorder(target, path, capture_sink):
     if capture_sink:
         cmd += ["-P", "stream.capture.sink=true"]
     cmd.append(str(path))
-    # run in its own user scope so a restart of the assistant cannot cut a recording short
+    # board #744 why-own-user-scope
     try:
         p = subprocess.Popen(["systemd-run", "--user", "--scope", "--quiet", *cmd], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=_env(), start_new_session=True)
     except FileNotFoundError:
@@ -165,7 +164,7 @@ def _load(path):
 
 
 def merge(me, them):
-    """Label by track. Drop 'Me' lines that are just the call's sound leaking into the mic (speakers instead of a headset)."""
+    # board #744 why-drop-mic-echo-lines
     out = [{"who": "Them", **s} for s in them]
     for s in me:
         echo = any(abs(s["start"] - t["start"]) < 3 and difflib.SequenceMatcher(None, s["text"].lower(), t["text"].lower()).ratio() > 0.75 for t in them)
@@ -175,7 +174,6 @@ def merge(me, them):
 
 
 def process(st):
-    """Transcribe both tracks locally, write the transcript, run the meeting pipeline, delete the audio."""
     mid, folder = st["id"], DIR / st["id"]
     try:
         extra = st.get("participants", "")
@@ -199,7 +197,7 @@ def process(st):
         f.write_text("\n".join(body) + "\n")
         report: list[str] = []
         try:
-            workflows._sync_meetings(report, via_proposals=True)       # summary, rename, tasks as APPROVALS
+            workflows._sync_meetings(report, via_proposals=True)
         except Exception as e:
             report.append(f"summary step failed: {type(e).__name__}: {e}")
         st["transcript"] = ""
@@ -233,7 +231,6 @@ def recent(limit=12):
 
 
 def watchdog(now=None):
-    """Called by the automation engine: reminders while recording, and a hard stop at the maximum length."""
     st = active()
     if not st:
         return

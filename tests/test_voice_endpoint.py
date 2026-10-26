@@ -47,8 +47,8 @@ def test_cancel_and_stale_yes(client, fake_phone, monkeypatch):
     say(client, "text Mom saying hi")
     assert "cancelled" in say(client, "cancel")["reply"].lower()
     assert not fake_phone.did("sms")
-    monkeypatch.setattr(server, "_run_turn", lambda *x, **k: {"reply": "ok", "pending": []})      # "yes" with nothing waiting reaches the assistant: never call the real model in a test
-    say(client, "yes")                                       # nothing waiting: must not send anything
+    monkeypatch.setattr(server, "_run_turn", lambda *x, **k: {"reply": "ok", "pending": []})  # board #910 why-no-real-model-in-tests
+    say(client, "yes")
     assert not fake_phone.did("sms")
 
 

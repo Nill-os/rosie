@@ -1,4 +1,3 @@
-"""Saved conversations (local SQLite). Each message is stored as the model saw it, plus what to show in the UI."""
 import datetime as dt
 import json
 import sqlite3
@@ -58,7 +57,6 @@ def title_of(chat_id) -> str:
 
 
 def add_msgs(chat_id: int, msgs: list[dict], first_user_shown: str | None = None):
-    """Store new messages. Only the first user message and visible assistant replies show in the UI."""
     with _db() as c:
         seen_user = False
         for m in msgs:
@@ -80,7 +78,6 @@ def add_msgs(chat_id: int, msgs: list[dict], first_user_shown: str | None = None
 
 
 def history(chat_id: int, limit=30) -> list[dict]:
-    """Recent messages in model format (no orphan tool result at the start)."""
     with _db() as c:
         rows = c.execute("SELECT body FROM msgs WHERE chat_id=? ORDER BY id DESC LIMIT ?", (chat_id, limit)).fetchall()
     out = [json.loads(r["body"]) for r in reversed(rows)]
@@ -107,7 +104,6 @@ def delete(chat_id: int):
 
 
 def search(query: str, limit=8, exclude_chat=None) -> list[dict]:
-    """Find past messages by words (all words must appear)."""
     sql = ("SELECT c.id chat_id, c.title, m.role, m.shown, m.created FROM msgs m JOIN chats c ON c.id=m.chat_id "
            "WHERE m.shown IS NOT NULL")
     args: list = []

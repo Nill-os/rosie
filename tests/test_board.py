@@ -1,5 +1,3 @@
-"""The agent board (app/agentboard.py): Rosie, Agent Zero and the owner's Claude sessions see what the others do and claim shared
-things (owner 2026-10-20: "have my local claude and ai know what the others are doing so they can coordinate together")."""
 import json
 import subprocess
 import sys
@@ -14,7 +12,7 @@ from conftest import needs_symlinks
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "ops"))
 import slots  # noqa: E402
 
-DEAD = "claude-999999999"                                      # no such process: a Claude session that has exited
+DEAD = "claude-999999999"
 
 
 def test_notes_reach_the_agent_they_are_for_and_only_once():
@@ -23,10 +21,10 @@ def test_notes_reach_the_agent_they_are_for_and_only_once():
     board.post("Rosie: the slot is free again", "note", "rosie", agent="claude-1")
     assert [p["text"] for p in board.notes_for("claude-1")] == ["please review the mind change", "for one session only"]
     assert [p["text"] for p in board.notes_for("claude-2")] == ["please review the mind change"]
-    assert [p["text"] for p in board.notes_for("agent-zero")] == ["Rosie: the slot is free again"]   # Rosie and Agent Zero are one reader
+    assert [p["text"] for p in board.notes_for("agent-zero")] == ["Rosie: the slot is free again"]
     shown = board.for_turn("what's on my calendar", "agent-zero")
     assert "the slot is free again" in shown and board.HEADER in shown
-    assert board.for_turn("and tomorrow?", "rosie") == ""                                             # read once, by either brain
+    assert board.for_turn("and tomorrow?", "rosie") == ""
 
 
 def test_a_turn_about_the_others_gets_the_whole_board():
@@ -41,11 +39,11 @@ def test_a_claim_keeps_other_agents_out_until_it_ends():
     r = board.claim("Slot-B", agent="autopilot")
     assert r["ok"] is False and r["held_by"] == "rosie" and r["why"] == "mind deploy"
     assert "claimed by rosie" in board.blocked_by("slot-b", agent="claude-1") and board.blocked_by("slot-b", agent="rosie") == ""
-    assert board.release("slot-B", agent="claude-1")["ok"] is False                                  # only the holder releases
-    assert board.claim("slot-B", agent="rosie", hours=3)["ok"]                                       # the holder may refresh it
+    assert board.release("slot-B", agent="claude-1")["ok"] is False
+    assert board.claim("slot-B", agent="rosie", hours=3)["ok"]
     assert board.release("slot-B", agent="rosie")["ok"] and board.holder("slot-B") is None
     board.claim("slot-B", agent="rosie")
-    assert board.blocked_by("slot-b", agent="agent-zero") == "" and board.release("slot-B", agent="agent-zero")["ok"]   # Rosie's two brains: one holder
+    assert board.blocked_by("slot-b", agent="agent-zero") == "" and board.release("slot-B", agent="agent-zero")["ok"]
 
 
 def test_claims_end_when_they_expire_or_their_claude_session_exits():
@@ -63,7 +61,7 @@ def test_leaving_ends_a_sessions_claims_and_hides_it():
     assert any(s["agent"] == "agent-zero" for s in board.around())
     board.leave("agent-zero")
     assert board.claims() == [] and not any(s["agent"] == "agent-zero" for s in board.around())
-    assert not any(s["agent"] == DEAD for s in (board.checkin(DEAD) and board.around()))             # an exited Claude session is never "around"
+    assert not any(s["agent"] == DEAD for s in (board.checkin(DEAD) and board.around()))  # board #850 quirk-exited-session-not-around
 
 
 def test_changes_only_says_something_when_there_is_something_new():
@@ -120,7 +118,7 @@ def test_the_claude_hook_adds_only_news(monkeypatch):
     board.post("switched Rosie to slot B", "done", agent="claude-2")
     ctx = board_hook.main("UserPromptSubmit", {"cwd": "/tmp/x", "prompt": "next"})["hookSpecificOutput"]["additionalContext"]
     assert "switched Rosie to slot B" in ctx
-    with board._db() as c:                                     # (claude-1 is no real process, so it is never "around")
+    with board._db() as c:
         assert c.execute("SELECT task FROM sessions WHERE agent='claude-1'").fetchone()[0] == "next"
     board.claim("slot-b", agent="claude-1")
     board_hook.main("SessionEnd", {})
@@ -136,7 +134,6 @@ def test_owner_can_leave_a_note_and_end_a_stuck_claim():
     assert "posts" in a0_api.board()
 
 
-# ---------------------------------------------------------------- slots.py: the idle slot belongs to whoever prepared it
 def _sh(*cmd, cwd=None):
     subprocess.run(cmd, cwd=cwd, check=True, capture_output=True)
 
@@ -199,12 +196,12 @@ def test_a_busy_session_gets_only_its_own_notes_mid_task_and_keeps_working(monke
     import board_hook
     monkeypatch.setenv("ROSIE_AGENT", "claude-1")
     assert board_hook.main("PostToolUse", {"tool_name": "Bash"}) is None
-    board.post("Rosie is live on slot A", "done", "all", agent="claude-2")                   # a broadcast: never mid-task
+    board.post("Rosie is live on slot A", "done", "all", agent="claude-2")
     board.post("I hold slot-B for the mind fix; use a dev copy", "note", "claude-1", agent="claude-2")
     ctx = board_hook.main("PostToolUse", {"tool_name": "Bash"})["hookSpecificOutput"]["additionalContext"]
     assert "use a dev copy" in ctx and "live on slot A" not in ctx
     assert "Keep doing what you were doing" in ctx and "never post just to acknowledge" in ctx
-    assert board_hook.main("PostToolUse", {}) is None                                       # handed over once
+    assert board_hook.main("PostToolUse", {}) is None
     nxt = board_hook.main("UserPromptSubmit", {"prompt": "go on"})["hookSpecificOutput"]["additionalContext"]
     assert "live on slot A" in nxt and "use a dev copy" not in nxt and "Keep doing what you were doing" in nxt
 
@@ -214,12 +211,12 @@ def test_stopping_is_held_only_for_a_direct_question(monkeypatch):
     monkeypatch.setenv("ROSIE_AGENT", "claude-1")
     board.post("FYI: tests are slow tonight", "note", "claude", agent="claude-2")
     board.post("deployed the fix", "note", "claude-1", agent="claude-2")
-    assert board_hook.main("Stop", {"stop_hook_active": False}) is None                      # no question: it stops normally
+    assert board_hook.main("Stop", {"stop_hook_active": False}) is None
     board.post("are you done with slot-B?", "note", "claude-1", agent="claude-2")
     stop = board_hook.main("Stop", {"stop_hook_active": False})
     assert stop["decision"] == "block" and "slot-B?" in stop["reason"] and "one short post" in stop["reason"]
     board.post("and what about slot A?", "note", "claude-1", agent="claude-2")
-    assert board_hook.main("Stop", {"stop_hook_active": True}) is None                     # never keeps it going twice in a row
+    assert board_hook.main("Stop", {"stop_hook_active": True}) is None
 
 
 def test_a_note_for_everyone_is_listed_once_at_session_start():
@@ -237,7 +234,7 @@ def test_the_board_shows_each_claude_sessions_message_name():
 
 
 def test_one_claude_session_can_give_another_a_task(monkeypatch):
-    # owner 2026-10-20: "allow one claude to dictate another"; only a Claude session gives a task, only to Claude sessions
+    # board #850 owner-task-rule-claude
     assert "error" in board.post("delete the repo", "task", "claude-1", agent="rosie")
     assert "error" in board.post("delete the repo", "task", "claude-1", agent="agent-zero")
     assert "error" in board.post("look at the mail", "task", "rosie", agent="claude-2")
@@ -252,7 +249,7 @@ def test_one_claude_session_can_give_another_a_task(monkeypatch):
     board.post("Run the board tests when you are free", "task", "claude-1", agent="claude-2")
     stop = board_hook.main("Stop", {"stop_hook_active": False})
     assert stop["decision"] == "block" and "Do that task now" in stop["reason"]
-    board.post("FYI: slot A is free", "note", "claude", agent="claude-2")              # a note never carries the task rule
+    board.post("FYI: slot A is free", "note", "claude", agent="claude-2")
     nxt = board_hook.main("UserPromptSubmit", {"prompt": "go on"})["hookSpecificOutput"]["additionalContext"]
     assert "slot A is free" in nxt and board.TASK_RULE not in nxt
 
@@ -266,7 +263,6 @@ def test_a_task_or_note_to_a_claude_session_says_how_to_wake_it():
     assert "wake" not in board.post("all done", "done", "all", agent="claude-2")
 
 
-# ---------------------------------------------------------------- the board's history in the shared memory graph
 class _FakeGraph:
     def __init__(self):
         self.added = []
@@ -312,9 +308,9 @@ def test_history_traces_every_fact_to_a_post_and_outlives_the_board(graph):
     board.post("deployed the mind fix to slot B", "done", agent="claude-2")
     ag.step()
     with board._db() as c:
-        c.execute("DELETE FROM posts")                                       # the board forgot it after 14 days
+        c.execute("DELETE FROM posts")  # board #850 quirk-board-forgets-14-days
     found = ag.search("mind fix")
-    assert [f["fact"] for f in found["facts"]] == ["claude-2 deployed the mind fix to slot B"]   # the untraceable fact is dropped
+    assert [f["fact"] for f in found["facts"]] == ["claude-2 deployed the mind fix to slot B"]
     assert found["facts"][0]["from_posts"][0]["agent"] == "claude-2"
     assert ag.history("mind fix")["posts"][0]["text"] == "deployed the mind fix to slot B"
 
@@ -341,17 +337,17 @@ def test_rosie_and_claude_can_search_the_history():
 
 
 def test_real_work_without_a_post_gets_one_reminder_then_the_turn_cannot_end_without_a_post(monkeypatch):
-    """Owner 2026-10-23: "my kicad agent missed posting to the board ... make sure my agents are cordinating"."""
+    # board #850 owner-agents-post-board
     import board_hook
     monkeypatch.setenv("ROSIE_AGENT", "claude-1")
     board_hook.main("UserPromptSubmit", {"cwd": "/tmp/pcb", "prompt": "reroute the flash lines"})
-    assert board_hook.main("PostToolUse", {"tool_name": "Read", "tool_input": {}}) is None          # reading is not yet work
+    assert board_hook.main("PostToolUse", {"tool_name": "Read", "tool_input": {}}) is None
     ctx = board_hook.main("PostToolUse", {"tool_name": "Edit", "tool_input": {}})["hookSpecificOutput"]["additionalContext"]
     assert "Post one `doing` line now" in ctx
-    assert board_hook.main("PostToolUse", {"tool_name": "Write", "tool_input": {}}) is None         # reminded once per task
+    assert board_hook.main("PostToolUse", {"tool_name": "Write", "tool_input": {}}) is None
     stop = board_hook.main("Stop", {"stop_hook_active": False})
     assert stop["decision"] == "block" and "posted nothing on the agent board" in stop["reason"]
-    assert board_hook.main("Stop", {"stop_hook_active": False}) is None                           # held once, never a loop
+    assert board_hook.main("Stop", {"stop_hook_active": False}) is None
 
 
 def test_a_session_that_posted_is_left_alone_and_a_new_task_counts_again(monkeypatch):
@@ -362,7 +358,7 @@ def test_a_session_that_posted_is_left_alone_and_a_new_task_counts_again(monkeyp
     assert board_hook.main("PostToolUse", {"tool_name": "mcp__rosie-board__post", "tool_input": {}}) is None
     assert board_hook.main("PostToolUse", {"tool_name": "Edit", "tool_input": {}}) is None
     assert board_hook.main("Stop", {"stop_hook_active": False}) is None
-    board_hook.main("UserPromptSubmit", {"prompt": "now the docs"})                                  # a new task: its own count
+    board_hook.main("UserPromptSubmit", {"prompt": "now the docs"})
     for _ in range(board.WORK_CALLS - 1):
         assert board_hook.main("PostToolUse", {"tool_name": "Bash", "tool_input": {"command": "ls"}}) is None
     assert "doing" in board_hook.main("PostToolUse", {"tool_name": "Grep", "tool_input": {}})["hookSpecificOutput"]["additionalContext"]
@@ -384,7 +380,7 @@ def test_commands_that_change_things_are_told_apart(cmd, changes):
 
 
 def test_a_background_notice_keeps_the_current_task_and_its_posts(monkeypatch):
-    """2026-10-24: after a background job finished, the next turn was told it had posted nothing, though it had posted minutes before."""
+    # board #850 fix-background-post-notice
     import board_hook
     monkeypatch.setenv("ROSIE_AGENT", "claude-1")
     board_hook.main("UserPromptSubmit", {"cwd": "/tmp/x", "prompt": "deploy the Canvas sync"})
@@ -392,11 +388,11 @@ def test_a_background_notice_keeps_the_current_task_and_its_posts(monkeypatch):
     for notice in ("<task-notification>\n<task-id>b1</task-id> completed</task-notification>",
                    "[SYSTEM NOTIFICATION - NOT USER INPUT] a background task finished",
                    "Stop hook feedback:\n[Agent board] ...", "<cross-session-message from=\"x\">hi</cross-session-message>",
-                   "Another Claude session sent a message:\n<agent-message from=\"a1\">report</agent-message>"):   # a subagent's report (2026-10-25)
+                   "Another Claude session sent a message:\n<agent-message from=\"a1\">report</agent-message>"):
         board_hook.main("UserPromptSubmit", {"cwd": "/tmp/x", "prompt": notice})
         for _ in range(4):
             board_hook.main("PostToolUse", {"tool_name": "Edit"})
-        assert board_hook.main("Stop", {}) is None, notice                  # the earlier post still counts for this task
+        assert board_hook.main("Stop", {}) is None, notice
     with board._db() as c:
         task = c.execute("SELECT task FROM sessions WHERE agent='claude-1'").fetchone()[0]
-    assert "Canvas sync" in task and not any(w in task for w in ("notification", "Stop hook", "cross-session"))   # never the notice
+    assert "Canvas sync" in task and not any(w in task for w in ("notification", "Stop hook", "cross-session"))

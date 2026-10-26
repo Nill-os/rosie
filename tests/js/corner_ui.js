@@ -1,6 +1,4 @@
-// Renders Rosie's corner page (static/app.js + static/corner.js) in jsdom with the server's real answers (test_corner.py builds them
-// from hostile data: page titles, her notes and her layout full of <script>, <iframe>, onerror= and javascript: links) and reports what
-// ended up in the DOM. No network: fetch is a stub that only knows the answers it was given.
+// board #832 safety-hostile-corner-data
 const fs = require('fs');
 const vm = require('vm');
 const path = require('path');
@@ -18,7 +16,7 @@ w.HTMLMediaElement.prototype.play = () => Promise.resolve();
 w.HTMLMediaElement.prototype.pause = () => {};
 w.matchMedia = w.matchMedia || (() => ({ matches: false, addEventListener() {} }));
 w.confirm = () => true;
-w.alert = (m) => out.errors.push('alert: ' + m);                      // an injected alert() would show up here
+w.alert = (m) => out.errors.push('alert: ' + m);
 const reply = (status, body) => ({ ok: status < 400, status, json: async () => body, blob: async () => new w.Blob([]) });
 let liveGets = 0;
 w.fetch = async (u, o) => {
@@ -31,7 +29,6 @@ w.fetch = async (u, o) => {
 };
 w.setInterval = () => 0;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-// slow page timers (the Live tab's 2 s poll) are kept here and fired by hand; short ones run normally
 const slowT = []; const realST = w.setTimeout.bind(w), realCT = w.clearTimeout.bind(w); let slowN = 0;
 w.setTimeout = (fn, ms, ...args) => { if (!(ms >= 1500)) return realST(fn, ms, ...args); const id = 1e6 + ++slowN; slowT.push({ fn, ms, id }); return id; };
 w.clearTimeout = (id) => { const i = slowT.findIndex((x) => x.id === id); if (i >= 0) slowT.splice(i, 1); else realCT(id); };
@@ -67,7 +64,6 @@ const DANGER = 'script, iframe, style, object, embed, link, meta, base, form, fr
     out.tabs[name] = await open(hash);
   }
   if (answers._group) { out.tabs.finds_group = await open('#/corner/finds/' + answers._group); out.tabs.finds_new = await open('#/corner/finds/new'); }
-  // the Live tab polls every 2 s, stops while the browser tab is hidden (and picks up again when it shows), and stops on leaving
   const p = {};
   await open('#/corner/live'); await sleep(20);
   p.first = liveGets; p.timers = slowT.length;

@@ -1,5 +1,3 @@
-"""Read-only MCP server: lets AI agents (Claude Code, etc.) read your notes and files. Start it via your agent's MCP settings; it speaks over stdio.
-EVERYTHING it returns is untrusted data. It cannot write, delete or run anything. Credential stores are blocked; secrets are redacted (see fsguard.py)."""
 import json
 import os
 import sys
@@ -25,7 +23,7 @@ server = MCPServer("assistant-notes", instructions=("Read-only access to the use
 def _audit(tool, what):
     AUDIT.parent.mkdir(exist_ok=True)
     with AUDIT.open("a") as f:
-        f.write(f"{time.strftime('%Y-%m-%dT%H:%M:%S')}\t{tool}\t{what[:200]}\n")          # what was asked for, never the content
+        f.write(f"{time.strftime('%Y-%m-%dT%H:%M:%S')}\t{tool}\t{what[:200]}\n")  # board #743 why-log-request-only
 
 
 def _gate(tool, what):
@@ -48,7 +46,7 @@ def _guard(tool, what, fn):
         return _out(fn())
     except fsguard.Blocked as e:
         return json.dumps({"blocked": str(e)})
-    except Exception as e:      # never leak a stack trace or paths of internals
+    except Exception as e:  # board #743 safety-no-internal-errors
         return json.dumps({"error": f"{type(e).__name__}"})
 
 

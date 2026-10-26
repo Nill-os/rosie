@@ -1,8 +1,5 @@
 'use strict';
-/* Rosie's corner (owner 2026-10-14). The fixed renderer for the part Rosie arranges herself, plus the owner's view of everything she did.
-   Every word from the server (page titles, her notes, her layout) is put on the page as text (h() text children = textContent).
-   Nothing here ever uses innerHTML or the h() 'html' option, links are only http(s) and always show where they go, and pictures only
-   come from her own checked gallery (/api/corner/img/<32 hex>.png|jpg). Colours are fixed class names from the app's palette. */
+// board #821 safety-no-innerhtml-links
 
 const CN_COLORS = { cyan: 'cn-c-cyan', purple: 'cn-c-purple', green: 'cn-c-green', lilac: 'cn-c-lilac', red: 'cn-c-red', grey: 'cn-c-grey', white: 'cn-c-white', plain: 'cn-c-plain' };
 const CN_TABS = [['live', 'Live'], ['space', 'Her space'], ['finds', 'Finds'], ['pictures', 'Pictures'], ['notes', 'Her notes'], ['trail', 'Trail'], ['changes', 'What Rosie changed'], ['settings', 'Settings']];
@@ -48,7 +45,6 @@ function cnTabs(on) {
     h('button', { class: k === on ? 'on' : '', role: 'tab', 'aria-selected': k === on ? 'true' : 'false', onclick: () => go('#/corner/' + k) }, l)));
 }
 
-// ----- Live: what she is looking at right now (polled every 2 s while this tab is open and the browser tab is visible)
 function cnLiveBody(d) {
   const L = d.live || {}, p = L.page;
   const sec = (title, ...kids) => h('div', { class: 'card wide cn-live-sec' }, h('h3', {}, title), ...kids);
@@ -71,16 +67,15 @@ let cnLiveT = null, cnLiveWaiting = null;
 function cnLivePoll(box) {
   clearTimeout(cnLiveT);
   const tick = async () => {
-    if (!box.isConnected || !/^#\/corner(\/live)?$/.test(location.hash)) return;     // left the Live tab: polling ends
-    if (document.hidden) { cnLiveWaiting = box; return; }                          // hidden browser tab: wait for it to show again
-    try { box.replaceChildren(cnLiveBody(await J('/api/corner/live'))); } catch (e) { /* offline: try again */ }
+    if (!box.isConnected || !/^#\/corner(\/live)?$/.test(location.hash)) return;
+    if (document.hidden) { cnLiveWaiting = box; return; }
+    try { box.replaceChildren(cnLiveBody(await J('/api/corner/live'))); } catch (e) { }
     cnLiveT = setTimeout(tick, 2000);
   };
   tick();
 }
 document.addEventListener('visibilitychange', () => { if (!document.hidden && cnLiveWaiting) { const b = cnLiveWaiting; cnLiveWaiting = null; cnLivePoll(b); } });
 
-// ----- Finds in topic groups: a row of tabs (All, New since you looked, one per group, Other), easy-to-read cards
 function cnCard(c, targets, again) {
   const act = (kind, msg) => async () => { try { await post('/api/corner/find/' + c.id + '/' + kind); toast(msg); again(); } catch (e) { toast(e.message, 1); } };
   const moveBtn = btn('Move to…', 'sm dim', (e) => popMenu(e.currentTarget, targets.filter((t) => t.id !== c.group).map((t) => ({ label: String(t.title),
@@ -115,7 +110,6 @@ function cnGroups(g, sub, again) {
   return [row, head, list.length ? list.map((c) => cnCard(c, g.targets, again)) : h('div', { class: 'empty' }, 'Nothing here yet.')];
 }
 
-// ----- one find, the same everywhere
 function cnFind(f, again, compact) {
   const buttons = compact ? null : h('div', { class: 'form cn-btns' },
     btn('Show me more like this', 'sm' + (f.more ? ' ok' : ''), async () => { try { await post('/api/corner/find/' + f.id + '/more'); toast('Rosie will look for more like this'); again(); } catch (e) { toast(e.message, 1); } }),
@@ -139,7 +133,6 @@ function cnPic(p, again, compact) {
         btn('Remove', 'sm bad', async () => { if (!confirm('Remove this picture?')) return; try { await del('/api/corner/picture/' + p.id); again(); } catch (e) { toast(e.message, 1); } }))));
 }
 
-// ----- Her space: the part Rosie arranges, drawn by this fixed renderer
 function cnSpace(L, again) {
   const sec = (s) => {
     let body;
@@ -225,7 +218,7 @@ VIEWS.corner = async (arg) => {
   const d = await J('/api/corner');
   const st = d.status;
   const [a0, sub] = String(arg || '').split('/');
-  const tab = CN_TABS.some(([k]) => k === a0) ? a0 : (st.running || st.nonstop ? 'live' : 'space');   // while she runs: Live first
+  const tab = CN_TABS.some(([k]) => k === a0) ? a0 : (st.running || st.nonstop ? 'live' : 'space');
   const again = () => keepScroll(() => VIEWS.corner(tab + (sub ? '/' + sub : '')));
   const line = st.nonstop ? `Running nonstop since ${st.nonstop_since || '—'}. ${st.pages_today} page${st.pages_today === 1 ? '' : 's'} today.`
     : st.running ? 'Rosie is browsing: ' + (st.doing || 'starting') : !st.on ? 'Browsing is off.' : 'Rosie is not browsing right now. ' + (st.waiting || 'She starts when you have been away for a while.');

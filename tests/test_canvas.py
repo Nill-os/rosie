@@ -1,5 +1,4 @@
-"""Canvas due dates in the calendar (owner 2026-10-24: the partner's daily Canvas task moved into Rosie). Google and Canvas are fakes:
-nothing here can touch a real calendar or feed."""
+# board #853 owner-canvas-task-into-rosie
 import datetime as dt
 import hashlib
 import hmac
@@ -45,7 +44,6 @@ class Req:
 
 
 class FakeCal:
-    """events().list / insert / patch over a dict, keyed by the private school_uid."""
     def __init__(self):
         self.items, self.calls = {}, []
 
@@ -72,7 +70,7 @@ class FakeCal:
 def test_the_feed_parses_to_local_dates_courses_and_unescaped_titles():
     items = canvas.parse(FEED, tz=dt.timezone(dt.timedelta(hours=-7)))
     first = items[0]
-    assert first["start"] == "2026-10-25" and first["course"] == "BIOL&100 Survey of Biology" and first["title"] == "Mid Term exam"   # 06:59 UTC is the evening before
+    assert first["start"] == "2026-10-25" and first["course"] == "BIOL&100 Survey of Biology" and first["title"] == "Mid Term exam"  # board #853 quirk-utc-evening-before
     second = items[1]
     assert second["start"] == "2026-10-30" and second["title"] == "Annotated Bibliography, draft" and second["course"].startswith("ENGL&235")
 
@@ -83,9 +81,9 @@ def test_a_sync_adds_upcoming_dates_once_and_updates_a_changed_one(tmp_path):
     assert (r["added"], r["updated"], r["upcoming"]) == (2, 0, 2) and not r["error"]
     body = cal.items["event-assignment-101"]
     assert body["summary"] == "BIOL&100: Mid Term exam" and body["start"]["date"] and body["reminders"]["overrides"][0]["minutes"] == 15 * 60
-    assert "event-old" not in cal.items                                    # the past is left alone
+    assert "event-old" not in cal.items
     again = canvas.sync(svc=cal, calendar_id="primary", today=dt.date(2026, 10, 20), ics=FEED)
-    assert (again["added"], again["updated"]) == (0, 0)                     # a rerun adds no copies
+    assert (again["added"], again["updated"]) == (0, 0)
     moved = FEED.replace("DTSTART;VALUE=DATE:20261030", "DTSTART;VALUE=DATE:20261031")
     assert canvas.sync(svc=cal, calendar_id="primary", today=dt.date(2026, 10, 20), ics=moved)["updated"] == 1
 
@@ -103,7 +101,7 @@ def test_the_link_must_be_https_and_is_never_shown_in_full():
         canvas.set_url("http://school.instructure.com/feeds/calendars/user_secret.ics")
     st = canvas.set_url("https://school.instructure.com/feeds/calendars/user_SECRET123.ics")
     assert st["on"] and st["feed"] == "school.instructure.com/…" and "SECRET" not in json.dumps(st)
-    if os.name != "nt":                                                 # Windows has no owner-only mode bits (always 0o666)
+    if os.name != "nt":  # board #853 quirk-windows-no-owner-mode
         assert oct(canvas.SECRET.stat().st_mode & 0o777) == "0o600"
     assert not canvas.set_url("")["on"]
 
@@ -114,8 +112,8 @@ def test_a_failure_is_kept_for_the_page_and_the_daily_run_happens_once(monkeypat
     r = canvas.sync(svc=FakeCal(), calendar_id="primary", today=dt.date(2026, 10, 24))
     assert "offline" in r["error"] and canvas.status()["error"]
     morning = dt.datetime(2026, 10, 24, 6, 30)
-    assert not canvas.due_today_run(morning, "07:00")                       # before the time
-    assert not canvas.due_today_run(dt.datetime(2026, 10, 24, 8, 0), "07:00")    # today's run (even a failed one) already happened
+    assert not canvas.due_today_run(morning, "07:00")
+    assert not canvas.due_today_run(dt.datetime(2026, 10, 24, 8, 0), "07:00")  # board #853 why-failed-run-counts
     assert canvas.due_today_run(dt.datetime(2026, 10, 25, 8, 0), "07:00")
     assert "job_canvas" in [j.__name__ for j in automations.JOBS]
 
@@ -136,4 +134,4 @@ def test_the_api_saves_the_link_and_syncs(monkeypatch, tmp_path):
     monkeypatch.setattr(gcal, "write_calendar_id", lambda: "test-cal")
     monkeypatch.setattr(canvas.dt, "date", type("D", (dt.date,), {"today": classmethod(lambda cls: dt.date(2026, 10, 20))}))
     r = c.post("/api/canvas/sync").json()
-    assert r["result"]["added"] == 2 and all(call[1] == "test-cal" for call in cal.calls)   # it writes where Rosie's calendar writes go
+    assert r["result"]["added"] == 2 and all(call[1] == "test-cal" for call in cal.calls)

@@ -7,7 +7,7 @@ def test_seed_lessons_exist_once_and_stay_deleted():
     assert len(first) >= 5
     for r in first:
         lessons.delete(r["id"])
-    assert lessons.list_all() == []                      # deleting them all stays deleted
+    assert lessons.list_all() == []
 
 
 def test_relevant_lessons_are_few_and_on_topic():

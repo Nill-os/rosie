@@ -1,5 +1,4 @@
-"""Gmail cleanup: archive, move to Trash, or mark read, in bulk, with a preview first, your OK every time, and an undo.
-Never permanently deletes (Trash keeps mail 30 days), never sends, and never touches starred mail."""
+# board #739 safety-never-permanent-delete
 import json
 import time
 from pathlib import Path
@@ -9,8 +8,8 @@ import plat
 
 ROOT = Path(__file__).resolve().parent.parent
 UNDO = ROOT / "data" / "mail_undo.json"
-CAP = 500                                   # most messages one cleanup may touch
-ACTIONS = {"archive": ([], ["INBOX"]), "trash": (["TRASH"], ["INBOX"]), "mark_read": ([], ["UNREAD"])}      # (labels to add, labels to remove)
+CAP = 500
+ACTIONS = {"archive": ([], ["INBOX"]), "trash": (["TRASH"], ["INBOX"]), "mark_read": ([], ["UNREAD"])}
 NEED_LOGIN = "Mail cleanup needs a one-time re-login that allows changing mail (the old login can only read). " + plat.google_login("main", cap=True) + " and approve it."
 
 
@@ -42,12 +41,11 @@ def _ids(name, query):
     return ids
 
 
-ONLY_CHANGED = {"archive": " in:inbox", "mark_read": " is:unread", "trash": " -in:sent -in:drafts"}   # only mail the action really changes (trash: all of it; undo knows which were in the Inbox)
+ONLY_CHANGED = {"archive": " in:inbox", "mark_read": " is:unread", "trash": " -in:sent -in:drafts"}
 
 
 def _query(query, action=""):
-    """Only messages the action would change, so undo puts back exactly those (audit 2026-10-20: archiving promotions also matched
-    long-archived mail, and undo dumped it all into the Inbox)."""
+    # board #739 why-target-changed-only
     q = (query or "").strip()
     if len(q) < 3:
         raise ValueError("Tell me what to clean up, e.g. 'category:promotions older_than:90d' or 'from:newsletter@x.com'.")
@@ -55,7 +53,6 @@ def _query(query, action=""):
 
 
 def preview(query, account="", action=""):
-    """What WOULD be affected: how many and who from. Changes nothing."""
     name = _acct(account)
     if not name:
         return {"error": "No Gmail account is connected yet. " + plat.google_login("main", cap=True)}
@@ -79,7 +76,6 @@ def preview(query, account="", action=""):
 
 
 def cleanup(action, query, account="", _confirmed=False):
-    """archive / trash / mark_read everything matching the search. Always waits for the user's OK (the Confirm card shows how many)."""
     import actions
     if action not in ACTIONS:
         return {"error": "action must be archive, trash or mark_read"}
@@ -102,10 +98,10 @@ def cleanup(action, query, account="", _confirmed=False):
                                       f"{what}: {n} emails matching '{query}' in {name}. Starred mail is skipped. I can undo this right after.")
         add, remove = ACTIONS[action]
         svc = gmail.service(name)
-        inbox_ids = sorted(set(ids) & set(_ids(name, _query(query, action) + " in:inbox"))) if action == "trash" else ids   # before the move
+        inbox_ids = sorted(set(ids) & set(_ids(name, _query(query, action) + " in:inbox"))) if action == "trash" else ids
         UNDO.parent.mkdir(exist_ok=True)
         UNDO.write_text(json.dumps({"account": name, "action": action, "ids": ids, "inbox_ids": inbox_ids, "query": query, "ts": time.time()}))
-        UNDO.chmod(0o600)                                     # written first: a failure part way through can still be undone
+        UNDO.chmod(0o600)  # board #739 safety-undo-written-first
         for i in range(0, len(ids), 1000):
             svc.users().messages().batchModify(userId="me", body={"ids": ids[i:i + 1000], "addLabelIds": add, "removeLabelIds": remove}).execute()
         return {"status": "done", "changed": len(ids), "action": action, "note": "Say 'undo that' to reverse it."}
@@ -114,7 +110,6 @@ def cleanup(action, query, account="", _confirmed=False):
 
 
 def undo():
-    """Reverse the most recent cleanup."""
     try:
         u = json.loads(UNDO.read_text())
     except (OSError, ValueError):
@@ -124,7 +119,7 @@ def undo():
     add, remove = ACTIONS[u["action"]]
     try:
         svc = gmail.service(u["account"])
-        if u["action"] == "trash":                             # out of Trash for all; back into the Inbox only those that were there
+        if u["action"] == "trash":
             for i in range(0, len(u["ids"]), 1000):
                 svc.users().messages().batchModify(userId="me", body={"ids": u["ids"][i:i + 1000], "addLabelIds": [], "removeLabelIds": ["TRASH"]}).execute()
             back = u.get("inbox_ids", u["ids"])

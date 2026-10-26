@@ -1,8 +1,4 @@
 #!/bin/bash
-# Set up Rosie on this PC. Linux (Ubuntu or Debian), ideally an NVIDIA graphics card with 8 GB or more.
-#   git clone https://github.com/Nill-os/rosie ~/assistant && cd ~/assistant && ./setup.sh
-# Safe to run again: every step checks what is already there. It asks for your password (sudo) for system packages, Ollama and
-# Rosie's service. Choose a different model with:  ROSIE_MODEL=qwen3.5:9b ./setup.sh
 set -euo pipefail
 D="$(cd "$(dirname "$0")" && pwd)"
 MODEL="${ROSIE_MODEL:-qwen3.5:9b}"

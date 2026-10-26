@@ -1,7 +1,6 @@
 'use strict';
-/* Assistant hub. Plain JS, no libraries. All user/AI text is inserted with textContent or escaped first. */
+// board #820 safety-text-escaped
 
-// ---------- sign-in: one prompt even if several requests fail at once ----------
 const _f = window.fetch.bind(window);
 let loginP = null;
 async function doLogin() {
@@ -23,7 +22,6 @@ window.fetch = async (u, o) => {
   return r;
 };
 
-// ---------- helpers ----------
 const $ = (s, r = document) => r.querySelector(s);
 function h(tag, attrs, ...kids) {
   const e = document.createElement(tag);
@@ -40,7 +38,7 @@ function h(tag, attrs, ...kids) {
 }
 async function J(url, opts) {
   const r = await fetch(url, opts);
-  let d = null; try { d = await r.json(); } catch (e) { /* no body */ }
+  let d = null; try { d = await r.json(); } catch (e) { }
   if (!r.ok) throw new Error((d && d.error) || ('HTTP ' + r.status));
   return d;
 }
@@ -51,8 +49,8 @@ const patch = (u, b) => J(u, jopt('PATCH', b));
 const del = (u) => J(u, { method: 'DELETE' });
 const store = {
   get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
-  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* private mode */ } },
-  del(k) { try { localStorage.removeItem(k); } catch (e) { /* ignore */ } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { } },
+  del(k) { try { localStorage.removeItem(k); } catch (e) { } },
 };
 function fmt(x) { return String(x).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>').replace(/`([^`\n]+)`/g, '<code>$1</code>'); }
 const mdNode = (t) => h('div', { class: 'md', html: fmt(t) });
@@ -82,39 +80,27 @@ function popMenu(anchor, items) {
 const keepScroll = async (f) => { const y = $('#view').scrollTop; await f(); $('#view').scrollTop = y; };
 const DOWN = 'Can\'t reach the assistant. Is the PC on?';
 
-// ---------- state ----------
 let chatId = store.get('chat_id', null), chatSpace = null, chatTitle = 'New chat';
 let meetTimer = null;
 let dirty = false, prevHash = location.hash, sideData = { chats: [], spaces: [] }, overdueCount = 0, unreadCount = 0, studyDue = 0, pagesOff = [], pagesHidden = [], loginHint = 'run ~/assistant/login.sh', gmailHint = 'run ~/assistant/login-gmail.sh main';
 const log = $('#log'), t = $('#t');
-// the message box grows as you write (up to ~45% of the screen, then scrolls), so everything you typed stays visible
 const fit = () => { if (!t.value) { t.style.height = ''; return; } t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight + 2, innerHeight * 0.45) + 'px'; };
 { const d = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value');
   Object.defineProperty(t, 'value', { get() { return d.get.call(t); }, set(v) { d.set.call(t, v); fit(); } }); }
 t.addEventListener('input', fit); addEventListener('resize', fit);
 t.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); $('#bar').requestSubmit(); } });
 
-// ---------- header + routing ----------
 function setHeader(title, actions) { $('#ttl').textContent = title; $('#actions').replaceChildren(...(actions || [])); }
 function show(...nodes) { $('#view').replaceChildren(h('div', { class: 'page' }, ...nodes)); $('#view').scrollTop = 0; }
-// In the order of a day (owner 2026-10-20: "reorder rosies side tab to make more sense for daily use"): what needs you and today's plan
-// first, then the work you come back to, then Rosie's own pages. ['-', label] starts a group.
-// The menu (owner 2026-10-24: "reorganize the tabs and rosie so everything is much more user friendly"): groups by what she is doing,
-// Settings on its own at the end. A group folds away when its name is tapped (each device remembers; Advanced starts folded).
 const NAV = [['-', 'My day'], ['home', '⌂', 'Home'], ['inbox', '🔔', 'Inbox'], ['calendar', '▦', 'Calendar'], ['tasks', '✓', 'Tasks'], ['mail', '📧', 'Mail'],
   ['-', 'Learn and grow'], ['study', '📚', 'Study'], ['lifequest', '★', 'Life Quest'], ['brief', '☀', 'Morning'],
   ['-', 'Work'], ['projects', '🧭', 'Projects'], ['meetings', '🎙', 'Meetings'], ['notes', '✎', 'Notes'],
   ['-', 'Rosie and helpers'], ['agentzero', '🧠', 'Agent Zero'], ['corner', '❀', "Rosie's corner"], ['memory', '◈', 'Memory'], ['skills', '✦', 'Skills'], ['vector', '🤖', 'Vector'],
   ['-', 'System'], ['deck', '◫', 'System'],
   ['-', ''], ['settings', '⚙', 'Settings']];
-// Pages that share one menu entry show a small tab bar at the top (owner 2026-10-24: "reorganize and combine anything"). Old links such as
-// #/paper or #/graph still open their page and light up the group's entry.
 const TABS = { brief: [['brief', 'Daily Brief'], ['paper', 'Morning Paper']], memory: [['memory', 'Memory'], ['graph', 'Memory graph']],
   deck: [['deck', 'Agent Deck'], ['servers', 'Servers'], ['tokens', 'Tokens'], ['terminal', 'Terminal']] };
 const TAB_GROUP = {}; for (const [g, list] of Object.entries(TABS)) for (const [k] of list) TAB_GROUP[k] = g;
-// Own menu order (owner 2026-10-25: "allow me to reorganize the menu of rosie how i want"). menuLayout comes from the server (Settings > Menu):
-// [{label, pages: [keys]}], empty = the built-in NAV. A page with a tab bar moves as ONE entry. Pages the layout doesn't know (new features, the
-// private-line page) join the group they are in by default, or the last group when that group is gone; pages that no longer exist are dropped.
 let menuLayout = [];
 function menuGroups(nav, layout) {
   const def = [], known = new Set(), home = {};
@@ -133,7 +119,6 @@ function menuFlat(groups, nav) {
   return groups.flatMap((g) => [['-', g.label], ...g.pages.map((k) => info[k])]);
 }
 const navEff = () => menuFlat(menuGroups(NAV, menuLayout), NAV);
-// Moves a page to the group at index gi, in front of page `before` (null = at the end). Works on a copy of the groups.
 function menuMove(groups, key, gi, before) {
   const out = groups.map((g) => ({ label: g.label, pages: g.pages.filter((k) => k !== key) }));
   const to = out[gi].pages, at = before ? to.indexOf(before) : -1;
@@ -146,16 +131,13 @@ function renderTabs(name) {
     onclick: () => go('#/' + k) }, label)) : []));
   box.hidden = !g;
 }
-// Display (owner 2026-10-21: "add a setting for ui scale"; 2026-10-23: the Agent Deck's display settings "to the main settings and make it
-// control the whole ui"): zoom, text size, spacing and background light for every page, the Agent Deck frame included (it reads the same
-// rosie.look). This device only, so the phone and the PC each keep their own.
 const GLOW = { off: 0, low: 0.45, medium: 1, high: 1.6 };
 const THEMES = [['aurora', 'Aurora (modern)'], ['cyberdeck', 'Cyberdeck'], ['jetsons', 'Jetsons (easy to read)']];
-let installTheme = store.get('rosie.theme.default', 'aurora');   // this Rosie's default (Settings > Display > Use on every device)
+let installTheme = store.get('rosie.theme.default', 'aurora');
 function look() {
   const v = store.get('rosie.look', null);
   if (v && typeof v === 'object') return { zoom: 1, text: 100, density: 'normal', glow: 'medium', ...v };
-  const d = store.get('deck.settings', {});                  // first visit: carry over the old UI scale and the Deck's own choices
+  const d = store.get('deck.settings', {});
   return { zoom: Number(store.get('rosie.uiScale', 1)) || 1, text: d.text ? Math.round(d.text / 13 * 20) * 5 : 100,
     density: ['compact', 'normal', 'big'].includes(d.density) ? d.density : 'normal', glow: d.glow in GLOW ? d.glow : 'medium' };
 }
@@ -168,16 +150,16 @@ function applyLook(v, save) {
   r.style.setProperty('--glow', String(GLOW[v.glow] ?? 1));
   document.body.classList.toggle('look-compact', v.density === 'compact');
   document.body.classList.toggle('look-roomy', v.density === 'big');
-  const theme = THEMES.some(([k]) => k === v.theme) ? v.theme : installTheme;      // no choice on this device: the install's default
+  const theme = THEMES.some(([k]) => k === v.theme) ? v.theme : installTheme;
   r.dataset.theme = theme;
-  r.style.setProperty('--ts', String(v.text / 100 * (theme === 'jetsons' ? 1.12 : 1)));   // Jetsons reads bigger, small notes included
+  r.style.setProperty('--ts', String(v.text / 100 * (theme === 'jetsons' ? 1.12 : 1)));
   document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'jetsons' ? '#10203E' : '#000000');
   if (save) store.set('rosie.look', v);
   return v;
 }
 const setLook = (patch) => applyLook({ ...look(), ...patch }, true);
 applyLook(look(), true);
-window.addEventListener('storage', (e) => { if (e.key === 'rosie.look') applyLook(look(), false); });   // changed in the Agent Deck frame
+window.addEventListener('storage', (e) => { if (e.key === 'rosie.look') applyLook(look(), false); });
 document.addEventListener('keydown', (e) => {
   if (!e.ctrlKey || e.altKey || e.shiftKey && e.key !== '+') return;
   const z = look().zoom;
@@ -185,15 +167,11 @@ document.addEventListener('keydown', (e) => {
   else if (e.key === '-') { e.preventDefault(); setLook({ zoom: z - 0.05 }); }
   else if (e.key === '0') { e.preventDefault(); setLook({ zoom: 1 }); }
 });
-// Settings > Menu: leave pages you don't use out of the menu (owner 2026-10-23: the partner's copy without Vector). Pages this PC can't
-// run are not offered.
 function menuBox(again) {
   const save = async (k, on) => {
     const hidden = on ? pagesHidden.filter((x) => x !== k) : [...pagesHidden, k];
     try { const r = await post('/api/settings', { hidden_pages: hidden }); if (r.error) throw new Error(r.error); pagesHidden = r.hidden_pages || hidden; renderNav('settings'); } catch (e) { toast(e.message, 1); }
   };
-  // The editor (owner 2026-10-25: "allow me to reorganize the menu of rosie how i want"): a card per group, a row per page. Drag a row's
-  // handle, or use the buttons (Up, Down, Move to), which also work on a phone. Changes save by themselves after a short pause.
   let groups = menuGroups(NAV, menuLayout), timer = null, drag = null;
   const status = h('span', { class: 'muted mg-status', role: 'status', 'aria-live': 'polite' }, '');
   const list = h('div', { class: 'mg-list' });
@@ -213,7 +191,7 @@ function menuBox(again) {
     const sel = h('select', { 'aria-label': 'Move ' + n[2] + ' to', 'data-f': f('to'), onchange: (e) => edit(menuMove(groups, k, Number(e.target.value), null), f('to')) },
       h('option', { value: '' }, 'Move to…'), ...groups.map((x, j) => h('option', { value: String(j), disabled: j === gi }, label(x))));
     const row = h('div', { class: 'mg-row', draggable: 'true', 'data-key': k,
-      ondragstart: (e) => { drag = k; row.classList.add('mg-drag'); if (e.dataTransfer) { e.dataTransfer.effectAllowed = 'move'; try { e.dataTransfer.setData('text/plain', k); } catch (x) { /* some browsers refuse */ } } },
+      ondragstart: (e) => { drag = k; row.classList.add('mg-drag'); if (e.dataTransfer) { e.dataTransfer.effectAllowed = 'move'; try { e.dataTransfer.setData('text/plain', k); } catch (x) { } } },
       ondragend: () => { drag = null; list.querySelectorAll('.mg-over,.mg-drag').forEach((x) => x.classList.remove('mg-over', 'mg-drag')); },
       ondragover: (e) => { if (drag && drag !== k) { e.preventDefault(); e.stopPropagation(); row.classList.add('mg-over'); } },
       ondragleave: () => row.classList.remove('mg-over'),
@@ -278,9 +256,8 @@ function lookBox(again) {
         catch (e) { toast(e.message, 1); } }), h('span', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1))' }, 'Jetsons: larger, plainer text with stronger colors.')))),
     h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1));margin-top:4px' }, 'For every page, the Agent Deck too. Each device keeps its own (your phone and this PC can differ). Shortcuts: Ctrl and + or − zoom, Ctrl and 0 resets.'));
 }
-// pages this PC can't run and pages the owner left out (Settings > Menu) stay out of the menu; a section head with nothing under it goes too
 let navFolded = store.get('nav.folded', ['Advanced']);
-const navRail = () => matchMedia('(min-width:600px) and (max-width:899px)').matches && !document.body.classList.contains('side-open');   // icons only: nothing folds
+const navRail = () => matchMedia('(min-width:600px) and (max-width:899px)').matches && !document.body.classList.contains('side-open');
 function navShown(active) {
   const out = new Set([...pagesOff, ...pagesHidden]);
   const items = navEff().filter(([k]) => k === '-' || !out.has(k));
@@ -330,13 +307,12 @@ async function route() {
   drawChats();
 }
 
-// ---------- sidebar: spaces + chats ----------
 async function refreshSide() {
   try { sideData = await J('/api/chats'); } catch (e) { $('#dot').className = 'off'; return; }
   $('#dot').className = '';
-  try { const b = await J('/api/badges'); overdueCount = b.overdue; unreadCount = b.inbox; studyDue = b.study_due || 0; if (b.ui_theme && b.ui_theme !== installTheme) { installTheme = b.ui_theme; store.set('rosie.theme.default', installTheme); applyLook(look()); } pagesOff = b.pages_off || []; loginHint = b.google_login || loginHint; gmailHint = b.gmail_login || gmailHint; pagesHidden = b.pages_hidden || []; menuLayout = b.menu_layout || []; } catch (e) { /* badges only */ }
+  try { const b = await J('/api/badges'); overdueCount = b.overdue; unreadCount = b.inbox; studyDue = b.study_due || 0; if (b.ui_theme && b.ui_theme !== installTheme) { installTheme = b.ui_theme; store.set('rosie.theme.default', installTheme); applyLook(look()); } pagesOff = b.pages_off || []; loginHint = b.google_login || loginHint; gmailHint = b.gmail_login || gmailHint; pagesHidden = b.pages_hidden || []; menuLayout = b.menu_layout || []; } catch (e) { }
   renderNav(navActive());
-  renderTabs((location.hash.replace(/^#\/?/, '') || 'home').split('/')[0]);   // hidden pages are known only now
+  renderTabs((location.hash.replace(/^#\/?/, '') || 'home').split('/')[0]);
   drawChats();
 }
 function drawChats() {
@@ -373,13 +349,9 @@ function chatMenu(c, anchor) {
   ]);
 }
 
-// =====================================================================
-// VIEWS
-// =====================================================================
 const selfRow = (r) => h('div', { class: 'item' },
   h('span', { class: 'chip ' + (r.ok ? 'ok' : 'bad') }, r.ok ? 'ok' : 'fix'),
   h('span', { class: 'tx' }, h('b', {}, r.name + '  '), h('span', { class: 'muted' }, r.detail)));
-// Self-test, then a step-by-step walk through everything that is missing: each one pops up its Android prompt, waits for you to come back, checks again, then moves on.
 const wiz = { active: false, tried: new Set(), total: 0, done: 0, waiting: false };
 const wizText = (r) => ({ phonectl: 'Turn on phone control', perm_mic: 'Allow the microphone', wake: 'Turn on "Hey Rosie"', battery: 'Let Rosie run in the background', overlay: 'Allow the popup over other apps', perm_notif: 'Allow notifications',
   perm_phone: 'Allow contacts, texts and calls', notif_access: 'Allow notification access (switch Rosie on)', accessibility: 'Turn on screen control (switch "Rosie screen control" on)', assistant: 'Make Rosie your assistant (headphone button)' }[r.fix] || r.name);
@@ -394,7 +366,6 @@ function wizNext() {
   AndroidBridge.log('wizard: step ' + r.fix);
   setTimeout(() => {
     AndroidBridge.fix(r.fix);
-    // wait until you have left for the Android prompt and come back, then check again (also gives up after 2 minutes)
     let left = false, ticks = 0;
     const t = setInterval(() => {
       ticks++; const v = AndroidBridge.appVisible();
@@ -407,7 +378,7 @@ function wizNext() {
 window.onAppResumeWizard = () => { };
 window.runSelfTest = (tries = 0) => {
   const out = document.getElementById('selftest-out');
-  if (!out) { if (tries < 20) setTimeout(() => window.runSelfTest(tries + 1), 800); return; }                 // the Settings page may still be loading
+  if (!out) { if (tries < 20) setTimeout(() => window.runSelfTest(tries + 1), 800); return; }
   out.replaceChildren(h('div', { class: 'muted' }, 'Running… (about 20 seconds)'));
   wiz.tried = new Set(); wiz.active = false;
   window.onSelfTest = (rows, quick) => {
@@ -449,8 +420,6 @@ function taskRow(tk, onChange) {
       try { await post(`/api/tasks/${tk.id}/move`, { due: v }); onChange(); } catch (e) { toast(e.message, 1); } } }, tk.due === todayISO() ? 'today' : tk.due),
     h('button', { class: 'x', 'aria-label': 'Delete task', onclick: async () => { if (!confirm('Delete this task?')) return; await del(`/api/tasks/${tk.id}`); onChange(); } }, '✕'));
 }
-// A task's details (owner 2026-10-24: one only said "Accept or decline invitation" with nothing about it): notes, dates, project, and
-// the suggestion or email it came from. The title, due date and notes can be changed here.
 async function taskDetails(tk, onChange) {
   let d;
   try { d = await J(`/api/tasks/${tk.id}`); } catch (e) { toast(e.message, 1); return; }
@@ -489,7 +458,6 @@ async function runRoutine(name, label) {
   try { const r = await post('/api/routine/' + name); await modal(label, r.text); await refreshSide(); VIEWS.home(); } catch (e) { toast(e.message, 1); }
 }
 
-// ----- Home -----
 VIEWS.home = async () => {
   setHeader('Home', [btn('＋ New chat', 'sm pur', () => newChat())]);
   show(h('div', { class: 'muted' }, 'Loading…'));
@@ -546,7 +514,6 @@ VIEWS.home = async () => {
       h('span', { class: 'chip' }, 'Calendar writes → ' + (s.write_target === 'test' ? 'TEST calendar' : 'REAL calendar')))); c.querySelector('.muted')?.remove(); }).catch(() => {});
 };
 
-// ----- Inbox + reminders -----
 function ago(iso) {
   const m = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
   if (m < 1) return 'just now'; if (m < 60) return m + ' min ago'; if (m < 1440) return Math.round(m / 60) + ' h ago';
@@ -581,7 +548,6 @@ VIEWS.inbox = async () => {
       h('button', { class: 'x', 'aria-label': 'Delete', onclick: async (e) => { e.stopPropagation(); await del('/api/inbox/' + i.id); again(); } }, '✕')))) : h('div', { class: 'empty' }, 'Nothing here yet. I\'ll post your daily brief, meeting reminders and nudges here.')));
 };
 
-// ----- Mail (read-only monitoring) -----
 function draftFlow(m) {
   const ins = prompt('What should the reply say? (leave empty for a neutral draft)', ''); if (ins === null) return;
   toast('Writing a draft…');
@@ -654,7 +620,6 @@ VIEWS.mail = async () => {
     sec('Needs you', need, 'today'), sec('FYI', fyi), sec('Possible phishing (ignored)', sus), sec('Low priority', low));
 };
 
-// ----- Meetings (consent-first recorder) -----
 VIEWS.meetings = async () => {
   clearInterval(meetTimer);
   setHeader('Meetings', []);
@@ -667,7 +632,7 @@ VIEWS.meetings = async () => {
       m.transcript ? h('a', { class: 'btn sm dim', href: '#/notes/' + encodeURIComponent(m.transcript), style: 'text-decoration:none;display:inline-flex;align-items:center' }, 'Open') : null))) : h('div', { class: 'empty' }, 'No recordings yet.'));
   if (d.active) {
     const a = d.active, el = h('span', {}, a.elapsed_min + ' min');
-    meetTimer = setInterval(async () => { try { const x = await J('/api/meetings'); if (!x.active) { clearInterval(meetTimer); again(); } else el.textContent = x.active.elapsed_min + ' min'; } catch (e) { /* offline */ } }, 10000);
+    meetTimer = setInterval(async () => { try { const x = await J('/api/meetings'); if (!x.active) { clearInterval(meetTimer); again(); } else el.textContent = x.active.elapsed_min + ' min'; } catch (e) { } }, 10000);
     show(h('div', { class: 'pagehead' }, h('h2', {}, 'Meetings')),
       h('div', { class: 'card', style: 'border:2px solid var(--bad)' }, h('h3', { style: 'color:var(--bad)' }, '● Recording now'),
         h('div', { style: 'font-size:calc(18px*var(--ts,1));color:#fff' }, a.title), h('div', { class: 'muted', style: 'margin:6px 0' }, 'Running for ', el, ' · ' + (a.tracks.includes('them') ? 'your microphone + the call audio' : 'your microphone only')),
@@ -693,7 +658,6 @@ VIEWS.meetings = async () => {
   refresh();
 };
 
-// ----- Projects -----
 let projFilter = store.get('proj_filter', 'active');
 function gitChip(g) {
   if (!g) return null;
@@ -773,7 +737,6 @@ async function projectDetail(pid) {
         h('div', { style: 'margin-top:14px' }, btn('Delete project', 'sm bad', async () => { if (!confirm('Delete "' + p.name + '"? Its tasks stay in your task list; the notes file and folder are not touched.')) return; await del('/api/projects/' + pid); go('#/projects'); })))));
 }
 
-// ----- Terminal + AI agents -----
 let xtermReady = null, term = null, termWs = null, termFit = null, termRO = null;
 function loadXterm() {
   if (window.Terminal && window.FitAddon) return Promise.resolve();
@@ -786,7 +749,7 @@ function loadXterm() {
   });
   return xtermReady;
 }
-function closeTerm() { try { termRO && termRO.disconnect(); } catch (e) { /* gone */ } try { termWs && termWs.close(); } catch (e) { /* gone */ } try { term && term.dispose(); } catch (e) { /* gone */ } term = termWs = termFit = termRO = null; }
+function closeTerm() { try { termRO && termRO.disconnect(); } catch (e) { } try { termWs && termWs.close(); } catch (e) { } try { term && term.dispose(); } catch (e) { } term = termWs = termFit = termRO = null; }
 const QUICK = [['Esc', '\x1b'], ['Tab', '\t'], ['↑', '\x1b[A'], ['↓', '\x1b[B'], ['←', '\x1b[D'], ['→', '\x1b[C'], ['Ctrl+C', '\x03'], ['Enter', '\r'], ['y', 'y'], ['n', 'n']];
 async function openTerminal(name, pane) {
   const status = h('span', { class: 'chip' }, 'connecting…'), host = h('div', { id: 'termhost' });
@@ -811,7 +774,7 @@ async function openTerminal(name, pane) {
   termWs.onmessage = (e) => term && term.write(new Uint8Array(e.data));
   termWs.onclose = (e) => { status.textContent = e.code === 4404 ? 'session ended' : 'disconnected'; status.className = 'chip bad'; if (term) term.write('\r\n\x1b[90m[' + status.textContent + ']\x1b[0m\r\n'); };
   term.onData((d) => send(d)); term.onResize(sendSize);
-  let t = null; termRO = new ResizeObserver(() => { clearTimeout(t); t = setTimeout(() => { try { termFit.fit(); } catch (e) { /* hidden */ } }, 120); }); termRO.observe(host);
+  let t = null; termRO = new ResizeObserver(() => { clearTimeout(t); t = setTimeout(() => { try { termFit.fit(); } catch (e) { } }, 120); }); termRO.observe(host);
 }
 VIEWS.terminal = async (arg) => {
   closeTerm();
@@ -838,7 +801,6 @@ VIEWS.terminal = async (arg) => {
   if (arg) { if (!d.sessions.some((s) => s.name === arg)) { pane.replaceChildren(h('div', { class: 'err' }, 'That session has ended.')); return; } await openTerminal(arg, pane); }
 };
 
-// ----- Daily brief -----
 VIEWS.brief = async () => {
   setHeader('Daily Brief', []);
   show(h('div', { class: 'muted' }, 'Loading…'));
@@ -850,7 +812,6 @@ VIEWS.brief = async () => {
     d.briefs.length ? d.briefs.map((b) => h('div', { class: 'card', style: 'margin-bottom:14px' }, mdNode(b.text), h('div', { class: 'form', style: 'margin-top:10px' }, btn('Discuss in chat', 'sm', () => go('#/chat/' + b.chat_id))))) : h('div', { class: 'empty' }, 'No briefs yet.'));
 };
 
-// ----- Tasks -----
 VIEWS.tasks = async () => {
   setHeader('Tasks', []);
   show(h('div', { class: 'muted' }, 'Loading…'));
@@ -863,13 +824,11 @@ VIEWS.tasks = async () => {
     !(d.overdue.length + d.due_today.length + d.upcoming.length) ? h('div', { class: 'empty', style: 'margin-top:16px' }, 'Nothing open. Add one above, or just tell the assistant.') : null);
 };
 
-// ----- Study (owner 2026-10-24: a study helper for the partner): courses, decks of flash cards with spaced review (FSRS), a read-aloud
-// walk mode, cards drafted from her notes (each checked against a quote from them) and a print page. Rules and storage in app/study.py.
 const STUDY_RATE = [[1, 'Again', 'bad'], [2, 'Hard', 'dim'], [3, 'Good', 'ok'], [4, 'Easy', 'pur']];
 let walk = null;
 const studyScope = (arg) => { const m = /^(?:review|walk)\/([cd])\/(\d+)/.exec(arg || ''); return m ? (m[1] === 'c' ? 'course=' : 'deck=') + m[2] : ''; };
 async function studyXp() {
-  try { const r = await post('/api/study/xp'); if (r.award) toast('+' + r.award.xp + ' XP to ' + r.award.stat + (r.award.level_up ? ' · level up!' : '')); } catch (e) { /* XP is a bonus */ }
+  try { const r = await post('/api/study/xp'); if (r.award) toast('+' + r.award.xp + ' XP to ' + r.award.stat + (r.award.level_up ? ' · level up!' : '')); } catch (e) { }
 }
 VIEWS.study = async (arg) => {
   if (/^review/.test(arg || '')) return studyReview(arg);
@@ -914,7 +873,6 @@ VIEWS.study = async (arg) => {
         return h('div', { class: 'form', style: 'margin-top:6px' }, sel, btn('Make cards from these ideas', 'sm pur', async (e) => { e.target.disabled = true; toast('Rosie is reading your ideas…');
           try { const r = await post(`/api/study/decks/${sel.value}/from-ideas`); toast(`${r.drafted} drafts ready` + (r.dropped ? `, ${r.dropped} dropped by the check` : '')); again(); } catch (er) { toast(er.message, 1); e.target.disabled = false; } })); })() : null) : null,
     c.notes ? h('details', { style: 'margin-top:8px' }, h('summary', { class: 'muted' }, 'Study tips'), h('div', { class: 'muted', style: 'white-space:pre-wrap;margin-top:6px' }, c.notes)) : null);
-  // make cards from notes
   const deckSel = h('select', { 'aria-label': 'Deck' }, decks.map((k) => h('option', { value: k.id }, `${k.course}: ${k.name}`)));
   const notes = h('textarea', { rows: 6, placeholder: 'Paste your class notes or a chapter section here (or pick a .txt or .md file).', 'aria-label': 'Notes', style: 'width:100%;resize:vertical' });
   const file = h('input', { type: 'file', accept: '.txt,.md,text/plain,text/markdown', 'aria-label': 'Notes file', onchange: async () => { if (file.files[0]) notes.value = (await file.files[0].text()).slice(0, 12000); } });
@@ -931,7 +889,6 @@ VIEWS.study = async (arg) => {
       x.quote ? h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1));margin-top:4px' }, 'From your notes: “' + x.quote + '”') : null, h('span', { class: 'chip' }, x.deck)),
       btn('Keep', 'sm ok', () => act(() => post(`/api/study/cards/${x.id}/keep`), 'Kept')), btn('Edit', 'sm dim', () => studyEdit(x, again)),
       btn('Drop', 'sm dim', () => act(() => del('/api/study/cards/' + x.id))))))) : null;
-  // add a course, a deck, or import
   const cname = h('input', { placeholder: 'New course, like BIOL 100', 'aria-label': 'Course name' });
   const dcourse = h('select', { 'aria-label': 'Course' }, d.courses.map((c) => h('option', { value: c.id }, c.name)));
   const dname = h('input', { placeholder: 'New deck, like Ecology', 'aria-label': 'Deck name' }), dch = h('input', { placeholder: 'chapters (optional)', 'aria-label': 'Chapters', style: 'max-width:160px' });
@@ -1015,7 +972,7 @@ async function studyReview(arg) {
     const c = cards[i];
     try { await post('/api/study/review', { card_id: c.id, rating: n }); } catch (e) { toast(e.message, 1); return; }
     done += 1; if (n > 1) right += 1;
-    if (n === 1 && (again[c.id] = (again[c.id] || 0) + 1) <= 2) cards.push(c);   // a missed card comes round again (twice at most)
+    if (n === 1 && (again[c.id] = (again[c.id] || 0) + 1) <= 2) cards.push(c);  // board #820 why-missed-card-twice
     i += 1; shown = false; draw();
     if (done % 20 === 0) studyXp();
   };
@@ -1027,8 +984,6 @@ async function studyReview(arg) {
   show(bar, box, h('div', { class: 'muted', style: 'margin-top:10px;font-size:calc(12px*var(--ts,1))' }, 'Again = forgot, Hard = barely, Good = got it, Easy = instant. Keys: space shows the answer, 1 to 4 rate it.'));
   draw();
 }
-// Practice test: interleaved questions from her own cards (multiple choice uses her other cards' answers as wrong options). Grading
-// happens on the server against the card, and every result goes into the card's review schedule.
 async function studyTest(courseId) {
   setHeader('Practice test', [btn('← Study', 'sm dim', () => go('#/study'))]);
   show(h('div', { class: 'muted' }, 'Making your test…'));
@@ -1058,7 +1013,6 @@ async function studyTest(courseId) {
     ...t.questions.map((q, i) => h('div', { class: 'card', style: 'margin-top:12px' }, h('div', { style: 'color:#fff;margin-bottom:8px' }, `${i + 1}. ${q.q}`), inputs[i])),
     h('div', { style: 'margin-top:14px' }, submit));
 }
-// Tutor: answers only from her cards and notes, asks before it tells, and checks an explanation she gives back.
 async function studyTutor(courseId) {
   const o = await J('/api/study');
   const course = o.courses.find((c) => c.id === courseId);
@@ -1090,9 +1044,7 @@ async function studyTutor(courseId) {
   show(h('div', { class: 'pagehead' }, h('h2', {}, `Tutor · ${course.name}`), h('span', { class: 'muted' }, 'I only use your own cards and notes, and I ask before I tell. Say "just tell me" when you want the answer.')),
     h('div', { class: 'card' }, log, h('div', { style: 'margin-top:10px' }, box), h('div', { class: 'form', style: 'margin-top:8px' }, btn('Send', 'pur', () => send()), explain)));
 }
-// Walk mode: Rosie reads each question, waits, reads the answer and clue. Tap Got it or Missed (or use the headphone buttons: next = got it,
-// previous = missed). A card you don't rate is just read, not scheduled.
-function walkStop() { if (walk) { walk.stop = true; try { walk.audio.pause(); } catch (e) { /* none */ } walk = null; document.onkeydown = null; } }
+function walkStop() { if (walk) { walk.stop = true; try { walk.audio.pause(); } catch (e) { } walk = null; document.onkeydown = null; } }
 async function walkSay(text) {
   const r = await fetch('/api/speak', jopt('POST', { text }));
   if (!r.ok) throw new Error('Rosie\'s voice is not available');
@@ -1136,7 +1088,7 @@ async function studyWalk(arg) {
         await walkSay('Answer. ' + c.a + (clue.checked && c.clue ? '. Clue. ' + c.clue : '')); if (!walk || walk.stop) break;
         if (pick == null) await walkWait(5000);
         if (pick != null) {
-          try { await post('/api/study/review', { card_id: c.id, rating: pick }); done += 1; if (pick > 1) right += 1; else if ((again[c.id] = (again[c.id] || 0) + 1) <= 2) cards.push(c); } catch (e) { /* keep walking */ }
+          try { await post('/api/study/review', { card_id: c.id, rating: pick }); done += 1; if (pick > 1) right += 1; else if ((again[c.id] = (again[c.id] || 0) + 1) <= 2) cards.push(c); } catch (e) { }
         }
       }
     } catch (e) { toast(e.message, 1); }
@@ -1150,12 +1102,11 @@ async function studyWalk(arg) {
       h('div', { style: 'display:flex;gap:10px' }, big('✗ Missed', 'bad', 1), big('✓ Got it', 'ok', 3))));
 }
 
-// Phase 3: Anki files in and out, the deck read aloud as one audio file, and a map of a course drawn from her own decks, tags and cards.
 async function studyDownload(url, fallback, wait) {
   if (wait) toast(wait);
   try {
     const r = await fetch(url);
-    if (!r.ok) { let d = null; try { d = await r.json(); } catch (e) { /* no body */ } throw new Error((d && d.error) || ('HTTP ' + r.status)); }
+    if (!r.ok) { let d = null; try { d = await r.json(); } catch (e) { } throw new Error((d && d.error) || ('HTTP ' + r.status)); }
     const name = /filename="([^"]+)"/.exec(r.headers.get('Content-Disposition') || '');
     const a = h('a', { href: URL.createObjectURL(await r.blob()), download: name ? name[1] : fallback });
     a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 4000);
@@ -1184,7 +1135,6 @@ async function studyMap(courseId) {
     let at = a0; (kids[id] || []).forEach((k) => { const w = (a1 - a0) * leaves(k) / leaves(id); place(k, depth + 1, at, at + w); at += w; });
   };
   place(m.nodes[0].id, 0, -Math.PI / 2, Math.PI * 1.5);
-  // a card hanging straight from its deck sits on the outer ring, so the rings stay readable
   m.nodes.forEach((n) => { if (n.type === 'card' && pos[n.id].depth === 2) { const p = pos[n.id]; p.x = size / 2 + R[3] * Math.cos(p.a); p.y = size / 2 + R[3] * Math.sin(p.a); } });
   const S = (t, a, kids2) => { const e = document.createElementNS('http://www.w3.org/2000/svg', t); for (const k in a) e.setAttribute(k, a[k]); (kids2 || []).forEach((c) => e.append(c)); return e; };
   const fill = { course: 'var(--acc)', deck: 'var(--pur)', tag: 'var(--warn)', card: 'var(--ok)' }, rad = { course: 22, deck: 14, tag: 10, card: 5 };
@@ -1206,7 +1156,6 @@ async function studyMap(courseId) {
     m.nodes.length > 1 ? h('div', { class: 'card', style: 'overflow:auto;max-height:80vh;padding:6px' }, svg) : h('div', { class: 'empty' }, 'Add decks and cards to see a map.'));
 }
 
-// ----- Life Quest (a gamified life: stats, quests, evidence-gated XP, a Sunday review; rules and storage in app/lifequest.py) -----
 const LQ_COLORS = ['var(--acc)', 'var(--pur)', 'var(--ok)', '#FFD23F', 'var(--pink)', 'var(--warn)', '#FF9F43', '#5EEAD4', '#FDA4AF', '#A3E635'];
 let lqEdit = false, lqReview = false;
 VIEWS.lifequest = async () => {
@@ -1216,7 +1165,6 @@ VIEWS.lifequest = async () => {
   const color = (id) => LQ_COLORS[Math.max(0, d.stats.findIndex((s) => s.id === id)) % LQ_COLORS.length];
   const sname = (id) => (d.stats.find((s) => s.id === id) || { name: id }).name;
   const live = () => d.stats.filter((s) => !s.archived);
-  // every write returns the whole state; draw it again (a level-up gets a toast)
   const act = async (fn, ok) => {
     try {
       const r = await fn();
@@ -1274,7 +1222,6 @@ VIEWS.lifequest = async () => {
         h('div', { class: 'tx' }, w.note, h('div', { class: 'muted lq-sub' }, w.day + ' · ' + w.stats.map((x) => sname(x.stat)).join(', ') + (w.source === 'chat' ? ' · via chat' : ''))),
         h('span', { class: 'lq-xp' }, '+' + w.xp),
         h('button', { class: 'x', 'aria-label': 'Remove this entry', title: 'Remove a mistake', onclick: async () => { if (!confirm('Remove this entry and its XP?')) return; await act(() => del('/api/lifequest/log/' + w.win), 'Removed'); } }, '✕')))) : h('div', { class: 'empty' }, 'Nothing logged yet. Your first win is one tick away.'));
-    // weekly review: offered on Sunday, open any day from the button
     const rv = d.review, saved = rv.saved || {};
     const fld = (label, v) => { const t = h('textarea', { rows: 2, maxlength: 1000, 'aria-label': label, placeholder: label }); t.value = v || ''; return t; };
     const rWins = fld('What went well this week?', saved.wins), rLess = fld('What did you learn?', saved.lessons), rNext = fld('One thing for next week', saved.next);
@@ -1286,7 +1233,6 @@ VIEWS.lifequest = async () => {
         btn(lqReview ? 'Hide review' : 'Weekly review', 'sm pur', () => { lqReview = !lqReview; draw(); }), btn(lqEdit ? 'Done editing' : 'Edit', 'sm', () => { lqEdit = !lqEdit; draw(); })),
       h('div', { class: 'grid lq-grid' }, hero, logCard, questCard, statCard, rewardCard, winCard, reviewCard, lqEdit ? lqManage() : null), lastR);
   };
-  // Edit: stats (add, rename, hide), quests (add, edit, hide) and rewards. Each row saves on its own.
   const lqManage = () => {
     const statRow = (s) => {
       const nm = h('input', { value: s.name, maxlength: 30, 'aria-label': 'Stat name' }), nt = h('input', { value: s.note, maxlength: 80, placeholder: 'What it covers (optional)', 'aria-label': 'Stat note' });
@@ -1316,7 +1262,6 @@ VIEWS.lifequest = async () => {
   draw();
 };
 
-// ----- Calendar -----
 VIEWS.calendar = async () => {
   setHeader('Calendar', []);
   show(h('div', { class: 'muted' }, 'Loading…'));
@@ -1333,7 +1278,6 @@ VIEWS.calendar = async () => {
       day.events.length ? h('div', { class: 'list' }, day.events.map((e) => h('div', { class: 'item' }, h('span', { class: 'time' }, e.all_day ? 'all day' : e.start), h('span', { class: 'tx' }, e.title, e.location ? h('span', { class: 'muted' }, '  @ ' + e.location) : null), e.end ? h('span', { class: 'muted' }, '→ ' + e.end) : null))) : h('div', { class: 'empty' }, 'Nothing.'))));
 };
 
-// ----- Notes (vault editor) -----
 let noteCur = null;
 VIEWS.notes = async (arg) => {
   setHeader('Notes', []);
@@ -1365,7 +1309,6 @@ VIEWS.notes = async (arg) => {
     f.path.startsWith('skills/') ? h('div', { class: 'muted' }, 'First line = when to use this skill. The assistant reads the rest as step-by-step instructions. Changes apply right away.') : null);
 };
 
-// ----- Memory -----
 VIEWS.memory = async () => {
   setHeader('Memory', []);
   show(h('div', { class: 'muted' }, 'Loading…'));
@@ -1384,7 +1327,6 @@ VIEWS.memory = async () => {
         h('div', { class: 'grid' }, W.map(([k, label]) => h('div', {}, h('div', { class: 'muted' }, label.toUpperCase()), d.working[k].length ? d.working[k].map((x) => h('div', {}, '• ' + x)) : h('div', { class: 'empty' }, '—')))))));
 };
 
-// ----- Skills -----
 VIEWS.skills = async () => {
   setHeader('Skills', []);
   show(h('div', { class: 'muted' }, 'Loading…'));
@@ -1395,7 +1337,6 @@ VIEWS.skills = async () => {
       h('div', { class: 'form' }, btn('Edit', 'sm', () => go('#/notes/' + encodeURIComponent(s.path))))))));
 };
 
-// ----- Settings -----
 function labelPicker() {
   const box = h('div', { class: 'muted' }, 'Loading your Gmail labels…');
   J('/api/mail/labels').then((d) => {
@@ -1416,7 +1357,6 @@ const autoRow = (label, a, b, hint) => [h('dt', {}, label), h('dd', {}, h('div',
 const healthRow = (r) => h('div', { class: 'item' },
   h('span', { class: 'chip ' + (r.level === 'ok' ? 'ok' : r.level === 'off' ? '' : 'bad') }, r.level === 'ok' ? 'ok' : r.level === 'off' ? 'off' : r.level === 'warn' ? 'soon' : 'fix'),
   h('span', { class: 'tx' }, h('b', {}, r.name + '  '), h('span', { class: 'muted' }, r.detail + (r.fix ? '  →  ' + r.fix : ''))));
-// Pick the local model Rosie thinks with. The server tests it with one answer before switching, so a bad pick never breaks her.
 function modelPicker(md, live, again) {
   const where = live.model ? (live.loaded ? `loaded: ${live.model} · ${live.where}` : live.where) : (live.error || '');
   if (!md || md.error || !md.models) return h('div', {}, h('div', {}, live.model || 'unknown'), h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1))' }, (md && md.error) || 'Model list unavailable.'));
@@ -1436,7 +1376,6 @@ function modelPicker(md, live, again) {
     md.problem ? h('div', { style: 'font-size:calc(12px*var(--ts,1));color:var(--bad)' }, md.problem) : null,
     md.scout ? scoutLine(md.scout) : null);
 }
-// The model scout (model_scout.py): new abliterated models, the best tested at night, a better one flagged in the Inbox.
 function scoutLine(sc) {
   const t = sc.last_test;
   const last = !t ? 'nothing tested yet' : `last tested ${t.id} (${t.tested.slice(0, 10)}): ` + (t.status === 'flagged' ? `better, ${t.score} vs ${t.current_score}; see the Inbox`
@@ -1446,7 +1385,6 @@ function scoutLine(sc) {
       `Looks for new abliterated models twice a day and tests the best one at night (0:30 to 1:45, while you're away) on her own everyday tasks. A better one is flagged in the Inbox; she never switches by herself. ` +
       `Looked at ${sc.looked_at} models, ${sc.candidates} waiting to be tested; ${last}.` + (sc.last_error ? ' Last problem: ' + sc.last_error : '')));
 }
-// Settings > Security (security_watch.py): the nightly check for known and exploited holes, what she patched, and the owner's patch buttons.
 function secBox(sw, again) {
   if (!sw || sw.error) return h('div', { class: 'muted' }, (sw && sw.error) || 'unknown');
   const small = (t, st) => h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1));margin-top:4px' + (st || '') }, t);
@@ -1475,9 +1413,8 @@ function secBox(sw, again) {
     small('Every night (3:00 to 6:00, while you\'re away) she checks her own packages, this PC, your home server and the apps she finds there against OSV, GitHub advisories, new CVEs and CISA\'s list of holes being exploited now. ' +
       'With Patch by herself on, she installs the containers\' security updates and fixes her own packages (tested, put back if anything fails). The server itself, app updates and this PC wait for you.'));
 }
-// Settings > Context window: how much text the model can hold at once, measured per model so it stays fully on the graphics card.
-let a0Draft = { text: '', to: 'all' };                         // the Agent Zero page's half-written board note
-let ctxPollT = null;                                           // the context-window tune poll (Settings)
+let a0Draft = { text: '', to: 'all' };
+let ctxPollT = null;
 function ctxBox(cx, again) {
   if (!cx || cx.error) return h('div', { class: 'muted' }, (cx && cx.error) || 'unknown');
   const c = cx.current || {}, st = cx.status || {};
@@ -1489,8 +1426,8 @@ function ctxBox(cx, again) {
     try { await post('/api/ctx/tune', {}); toast('Tuning the context window. This takes a few minutes…'); b.disabled = true; clearTimeout(ctxPollT); poll(); } catch (e) { toast(e.message, 1); }
   });
   b.disabled = !!st.running;
-  const here = () => /^#\/settings\/?$/.test(location.hash);   // the General tab only (not Settings > Newspaper)
-  const poll = async () => {                                    // one chain at a time, and only while Settings is open (audit 2026-10-20)
+  const here = () => /^#\/settings\/?$/.test(location.hash);
+  const poll = async () => {
     if (!here()) return;
     const r = await J('/api/ctx').catch(() => null);
     if (!here()) return;
@@ -1502,7 +1439,6 @@ function ctxBox(cx, again) {
   if (st.running) ctxPollT = setTimeout(poll, 2000);
   return h('div', {}, line, h('div', { class: 'form', style: 'margin-top:6px' }, b), note);
 }
-// Settings tabs: General, plus Newspaper when the Morning Paper is installed (paper.js); #/settings/paper opens it directly.
 function settingsTabs(cur) {
   const tabs = [['general', 'General']].concat(typeof ppSettings === 'function' ? [['paper', 'Newspaper']] : []);
   return tabs.length < 2 ? null : h('div', { class: 'seg', style: 'margin-bottom:14px' }, tabs.map(([k, l]) =>
@@ -1518,8 +1454,7 @@ async function settingsPaper() {
       h('a', { href: '#/paper' }, 'Morning Paper'), ' page.'),
     ppSettings(d, again));
 }
-// Canvas due dates into the calendar (owner 2026-10-24: the partner's daily Canvas task moved into Rosie; app/canvas.py). The feed link is
-// private, so the page only ever shows its site name.
+// board #820 safety-canvas-link-private
 function canvasCard() {
   const box = h('div', { class: 'card' }, h('h3', {}, 'Canvas'), h('div', { class: 'muted' }, 'Loading…'));
   const draw = async () => {
@@ -1729,15 +1664,12 @@ VIEWS.settings = async (arg) => {
       h('div', { class: 'card' }, h('h3', {}, 'Security'), h('div', { class: 'muted', style: 'margin-bottom:10px' }, 'Your access code is in ~/assistant/secrets/access_code. Lost a phone? Sign out everywhere; every device must enter the code again.'),
         btn('Sign out all devices', 'bad', async () => { if (!confirm('Sign out every device, including this one?')) return; await post('/api/signout-all'); location.reload(); })),
       h('div', { class: 'card' }, h('h3', {}, 'Help'), h('div', {}, 'Start, stop and update steps are in ', h('code', {}, '~/assistant/README.md'), '. Type ', h('code', {}, '/help'), ' in any chat for commands.'))));
-  if (window.AndroidBridge) {            // the phone app shows phone settings only: PC features (dictation, desktop voice key, meeting recorder, notes-sharing, the app download) are not on this device
+  if (window.AndroidBridge) {
     const pcOnly = ['Dictation (hold to talk)', 'Talk to the AI anywhere', 'Android app', 'Meetings and names', 'Connect AI agents to your notes (MCP)'];
     document.querySelectorAll('.card').forEach((c) => { const t = c.querySelector('h3'); if (t && pcOnly.includes(t.textContent.trim())) c.remove(); });
   }
 };
 
-// =====================================================================
-// CHAT (conversation, voice, slash commands)
-// =====================================================================
 const BIG = [['⏱ What now?', () => whatnow()], ['🏃 Running late', () => send("I'm running late. Ask me how many minutes behind I am, then fix my afternoon.")], ['➕ Add task', () => addTask()]];
 $('#btns').replaceChildren(...BIG.map(([l, f]) => h('button', { type: 'button', onclick: f }, l)));
 const GREETING = "Hi, I'm Rosie. Tell me what you need: type, or tap TALK and speak. Type / for commands. I'll tell you straight if something won't work.";
@@ -1763,7 +1695,6 @@ async function loadChat(id) {
   d.messages.forEach((m) => add(m.text, m.role === 'user' ? 'me' : 'bot'));
   log.scrollTop = log.scrollHeight; return true;
 }
-// Agent Zero's own page as the Chat (a0_proxy.py): used when the brain is Agent Zero, it answers, and this device hasn't chosen classic chat
 let a0Chat = null, a0ChatAt = 0, classicOnce = false;
 const a0Classic = () => store.get('a0_classic', false) === true;
 async function a0ChatInfo() {
@@ -1779,9 +1710,9 @@ async function showA0Chat(m) {
   setHeader('Agent Zero', [btn('⟳', 'sm dim', () => { const f = $('#a0frame'); if (f) f.src = f.src; }), classic]);
   let box = $('#a0box');
   if (!box) { box = h('div', { id: 'a0box' }); $('#chatview').appendChild(box); }
-  if (box.dataset.url === url && $('#a0frame')) return;           // the page stays loaded while you visit other pages
+  if (box.dataset.url === url && $('#a0frame')) return;
   box.dataset.url = url; box.replaceChildren();
-  const ok = await new Promise((res) => {                           // can this device reach the port? (the phone needs the Tailscale step)
+  const ok = await new Promise((res) => {
     const c = new AbortController(); const tm = setTimeout(() => c.abort(), 4000);
     fetch(url, { mode: 'no-cors', credentials: 'omit', cache: 'no-store', signal: c.signal }).then(() => { clearTimeout(tm); res(true); }, () => { clearTimeout(tm); res(false); });
   });
@@ -1808,7 +1739,7 @@ async function showChat(arg) {
 function newChat(space) {
   if (talking) stopTalk();
   chatId = null; chatSpace = space || null; chatTitle = 'New chat'; store.del('chat_id'); pendingConf = null;
-  classicOnce = !!space;                                           // a space's chat is Rosie's own (spaces live in classic chat)
+  classicOnce = !!space;
   resetLog(); setChatHeader(); go('#/chat'); setTimeout(() => t.focus(), 50);
 }
 function confirmBox(p) {
@@ -1832,7 +1763,6 @@ async function runCmd(name) {
 function addTask() { const x = prompt('New task?'); if (x) send('Add a task: ' + x); }
 $('#bar').addEventListener('submit', (e) => { e.preventDefault(); const v = t.value.trim(); $('#slash').style.display = 'none'; if (v) { t.value = ''; send(v); } });
 
-// ---- slash commands ----
 const CMDS = [['/new', 'Start a fresh chat', 0], ['/home', 'Open the home dashboard', 0], ['/brief', "Open today's daily brief", 0], ['/search', 'Search past chats: /search words', 1], ['/start', 'Morning standup', 0],
   ['/sync', 'Sort scratch pad + meetings', 0], ['/wrap-up', 'End-of-day routine', 0], ['/tasks', "Today's + overdue tasks", 0], ['/memory', 'What I remember about you', 0],
   ['/remember', 'Save a fact: /remember text', 1], ['/skills', 'My playbooks', 0], ['/notes', 'Open notes', 0], ['/settings', 'Open settings', 0], ['/help', 'All commands', 0]];
@@ -1854,7 +1784,6 @@ t.addEventListener('input', () => {
   } else m.style.display = 'none';
 });
 
-// ---- one-shot voice: tap mic, speak, tap again ----
 const mic = $('#mic'); let rec;
 async function startRec() {
   try {
@@ -1871,7 +1800,6 @@ async function startRec() {
 mic.addEventListener('click', () => { rec && rec.state === 'recording' ? rec.stop() : startRec(); });
 
 
-// ---- glitchy pixel-octopus overlay: shows while listening, thinking and speaking (same look as on the PC) ----
 const octo = (() => {
   const PAL = { listening: ['#00e5ff', '#9d4dff'], thinking: ['#9d4dff', '#00e5ff'], speaking: ['#bf4dff', '#1ae6cc'] };
   const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -1917,7 +1845,6 @@ const octo = (() => {
   return o;
 })();
 
-// ---- conversation mode: listen -> think -> speak -> listen ----
 const talkBtn = $('#talk');
 let talking = false, tstream, tctx, analyser, player = new Audio(), curRec = null, curIv = null, pendingConf = null, wake = null, skipSpeech = false;
 const setTalk = (txt, cls) => { talkBtn.textContent = txt; talkBtn.className = cls || ''; octo.set(!talking && !cls ? 'idle' : cls === 'on' ? 'listening' : /Thinking/.test(txt) ? 'thinking' : cls === 'speak' ? 'speaking' : 'idle'); };
@@ -1929,7 +1856,7 @@ async function toggleTalk() {
   catch (e) { add('Microphone blocked. Allow it in the browser site settings.', 'bot'); return; }
   tctx = new AudioContext(); analyser = tctx.createAnalyser(); analyser.fftSize = 1024; tctx.createMediaStreamSource(tstream).connect(analyser);
   player.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA='; player.play().catch(() => {});
-  try { wake = await navigator.wakeLock.request('screen'); } catch (e) { /* optional */ }
+  try { wake = await navigator.wakeLock.request('screen'); } catch (e) { }
   window.AndroidBridge && AndroidBridge.keepAwake(true);
   talking = true; add('Conversation on. I answer out loud and keep listening. Say "Start new chat" for a fresh chat, or "stop" to end.', 'bot dim'); listenTurn();
 }
@@ -1978,7 +1905,7 @@ async function handleSpeech(text) {
 }
 function clean(x) { return x.replace(/[*_#`>]/g, '').replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}✨]/gu, '').replace(/\s+/g, ' ').trim(); }
 async function say(text) {
-  if (!text || !talking) return;                                   // Stop was pressed while the answer was being worked out: stay quiet setTalk('🔊 Speaking… (tap to interrupt)', 'speak'); skipSpeech = false;
+  if (!text || !talking) return;
   const parts = clean(text).match(/[^.!?]+[.!?]*/g) || [clean(text)];
   const fetches = parts.map((p) => fetch('/api/speak', jopt('POST', { text: p })).then((r) => r.blob()));
   for (const f of fetches) { if (skipSpeech || !talking) break; const url = URL.createObjectURL(await f);
@@ -1986,9 +1913,6 @@ async function say(text) {
 }
 talkBtn.addEventListener('click', toggleTalk);
 
-// =====================================================================
-// start
-// =====================================================================
 async function refreshBadges() {
   try {
     const b = await J('/api/badges'); const changed = b.overdue !== overdueCount || b.inbox !== unreadCount;
@@ -2003,13 +1927,12 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden) refr
   $('#scrim').onclick = () => document.body.classList.remove('side-open');
   $('#newchat').onclick = () => newChat();
   renderNav('home');
-  await refreshSide();           // first request: asks for the access code once if needed
+  await refreshSide();
   if (!location.hash || location.hash === '#') { history.replaceState(null, '', '#/home'); }
   prevHash = location.hash; route();
 })();
 
 
-// ---------- Shut down all (sidebar footer): stops Agent Zero, the memory graph, push-to-talk, the overlay, the models, then Rosie ----------
 async function shutdownAll() {
   if (!confirm('Shut down everything?\n\nThis stops Agent Zero, Rosie\'s memory graph, push-to-talk, the talking overlay and the AI models, then Rosie herself. Nothing is lost.\n\nTo start it all again, open Rosie from the desktop.')) return;
   try {
@@ -2021,10 +1944,7 @@ async function shutdownAll() {
 }
 $('#foot').append(h('button', { class: 'btn sm bad shut', type: 'button', title: 'Stop Rosie, Agent Zero and the AI models', onclick: shutdownAll }, '⏻ Shut down all'));
 
-// ---------- the Agent Zero page: is it running, what is it doing now, which of Rosie's tools it used, its recent activity ----------
 let a0Timer = null;
-// ---------- Agent Deck (owner 2026-10-21: "add the agent deck into rosie"): the same page as the desktop window, in a frame ----------
-// Servers (servers.py): every machine and service on the home network, live up/down, one click to open; added ones and renames kept.
 let serversPollT = null;
 VIEWS.servers = async () => {
   setHeader('Servers', []);
@@ -2067,7 +1987,6 @@ VIEWS.servers = async () => {
   show(h('div', { class: 'muted' }, 'Checking your servers…'));
   draw(true);
 };
-// Tokens: Claude's own token use (app/tokens.py), so the owner and Claude can see whether the token-saving setup is working.
 let tokensPollT = null;
 const tkFmt = (n) => n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e4 ? Math.round(n / 1e3) + 'k' : n >= 1e3 ? (n / 1e3).toFixed(1) + 'k' : String(Math.round(n));
 VIEWS.tokens = async () => {
@@ -2132,13 +2051,13 @@ VIEWS.agentzero = async () => {
   };
   const setChatUi = async (v) => { try { await post('/api/settings', { a0_chat_ui: v }); a0Chat = null; toast(v ? 'Chat shows Agent Zero\'s page' : 'Chat is Rosie\'s own again'); } catch (e) { toast(e.message, 1); } draw(); };
   let busy = false;
-  const typingNote = () => {                                   // only a half-written note holds the redraw (an empty, focused box must not freeze the page)
+  const typingNote = () => {
     const el = document.activeElement;
-    return !!(el && el.tagName === 'INPUT' && el.closest && el.closest('.a0-board-form') && (el.value || '').trim());   // keeps the caret where it is
+    return !!(el && el.tagName === 'INPUT' && el.closest && el.closest('.a0-board-form') && (el.value || '').trim());
   };
   const draw = async () => {
     if (!a0Here()) { clearInterval(a0Timer); return; }
-    if (busy || document.hidden) return;                       // one request at a time, and none from a hidden tab
+    if (busy || document.hidden) return;
     busy = true;
     let d;
     try { d = await J('/api/a0/status'); } catch (e) { busy = false; if (a0Here() && !typingNote()) show(h('div', { class: 'err' }, 'Could not read Agent Zero\'s status: ' + e.message)); return; }
@@ -2184,7 +2103,7 @@ VIEWS.agentzero = async () => {
     const b = d.board || {}, tm = (t) => new Date(t * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
     const noteTo = h('select', { 'aria-label': 'Note to', onchange: (e) => { a0Draft.to = e.target.value; } },
       ['all', 'claude', 'rosie'].map((v) => h('option', { value: v }, v === 'all' ? 'Everyone' : v === 'claude' ? 'Claude sessions' : 'Rosie / Agent Zero')));
-    noteTo.value = a0Draft.to;                                  // the draft and its recipient survive every redraw (audit 2026-10-20)
+    noteTo.value = a0Draft.to;  // board #820 safety-draft-survives-redraw
     const noteText = h('input', { type: 'text', placeholder: 'Leave a note for the agents', 'aria-label': 'Note text', maxlength: 600,
       oninput: (e) => { a0Draft.text = e.target.value; }, onkeydown: (e) => { if (e.key === 'Enter') sendNote(); } });
     noteText.value = a0Draft.text;
@@ -2213,13 +2132,13 @@ VIEWS.agentzero = async () => {
           h('span', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1))' }, `${tm(x.t)} ${x.agent}${x.to_agent ? ' → ' + x.to_agent : ''} · ${x.kind}  `), x.text))))
           : h('div', { class: 'muted' }, 'No posts yet.'),
         h('div', { class: 'form a0-board-form', style: 'margin-top:10px' }, noteTo, noteText, btn('Post', 'sm pur', sendNote))));
-    if (typingNote()) return;                                        // never redraw under the owner's half-written note
+    if (typingNote()) return;
     const y = $('#view').scrollTop;
     show(h('div', { class: 'pagehead' }, h('h2', {}, 'Agent Zero'), h('span', { class: 'muted' }, 'Rosie\'s brain for chat, voice and the phone app. Updates every few seconds.')),
       h('div', { class: 'grid' }, status, chatCard, now, board, calls, log));
     $('#view').scrollTop = y;
   };
   clearInterval(a0Timer);
-  a0Timer = setInterval(draw, 4000);                            // set before the first draw: entering twice never leaves two chains
+  a0Timer = setInterval(draw, 4000);
   await draw();
 };

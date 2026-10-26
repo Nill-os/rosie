@@ -1,5 +1,3 @@
-"""Driving Vector with a game controller (vector_pad.py): finding the controller, reading its events, and turning
-sticks and buttons into his motor commands and Rosie's actions."""
 import os
 
 import config
@@ -32,7 +30,6 @@ def test_only_a_real_gamepad_is_found_not_its_touchpad_or_motion_sensors(tmp_pat
 
 
 def _pad():
-    """A Pad fed through a pipe, with a PS4 controller's axis ranges (sticks and triggers 0..255, d-pad -1..1)."""
     r, w = os.pipe()
     pad = vector_pad.Pad.__new__(vector_pad.Pad)
     pad.fd, pad.buttons = r, set()
@@ -50,10 +47,10 @@ def test_events_become_sticks_triggers_and_button_presses():
     _send(w, (vector_pad.EV_ABS, vector_pad.ABS_Y, 0), (vector_pad.EV_ABS, vector_pad.ABS_RZ, 255),
           (vector_pad.EV_KEY, vector_pad.BTN_MODE, 1), (0, 0, 0))
     assert pad.read(0.5) == [(vector_pad.BTN_MODE, 1)]
-    assert pad.axis(vector_pad.ABS_Y) == -1.0 and pad.axis(vector_pad.ABS_X) == 0.0     # centred stick: inside the dead zone
+    assert pad.axis(vector_pad.ABS_Y) == -1.0 and pad.axis(vector_pad.ABS_X) == 0.0
     assert pad.trigger(vector_pad.ABS_RZ) == 1.0 and pad.trigger(vector_pad.ABS_Z) == 0.0
     assert pad.buttons == {vector_pad.BTN_MODE}
-    assert pad.read(0.01) == []                                                          # nothing new: no presses
+    assert pad.read(0.01) == []
     os.close(w)
     try:
         pad.read(0.5)
@@ -67,9 +64,9 @@ def test_arcade_drive_forward_spin_and_clamp():
     assert vector_pad.wheels(0, -1) == (220, 220)
     assert vector_pad.wheels(0, 1) == (-220, -220)
     left, right = vector_pad.wheels(1, 0)
-    assert left > 0 > right and left == -right                                           # turns on the spot
+    assert left > 0 > right and left == -right
     left, right = vector_pad.wheels(1, -1)
-    assert left == 220 and 0 <= right < left                                             # never faster than his top speed
+    assert left == 220 and 0 <= right < left  # board #908 why-top-speed-cap
     assert vector_pad.wheels(0, 0) == (0, 0)
 
 
@@ -119,16 +116,16 @@ def test_ps_starts_driving_the_sticks_drive_him_and_ps_again_lets_him_go(monkeyp
     d = vector_pad.Driver(pad)
     d.press(vector_pad.BTN_MODE)
     assert d.driving and bot.calls == ["hold"] and said == ["Driving mode."]
-    pad.axes_raw.update({1: 0, 4: 0, 5: 255})                                            # full forward, head up, lift up
+    pad.axes_raw.update({1: 0, 4: 0, 5: 255})
     d.motors(vector_pad.targets(pad))
-    assert bot.calls == ["hold"]                                                         # the reading loop never waits on him
+    assert bot.calls == ["hold"]  # board #908 why-reading-never-waits
     d.send()
     assert ("drive", 220, 220) in bot.calls and ("head", 1.5) in bot.calls and ("lift", 2.5) in bot.calls
     n = len(bot.calls)
-    pad.axes_raw.update({1: 1})                                                          # stick noise: same rounded target
+    pad.axes_raw.update({1: 1})  # board #908 why-stick-noise-rounds
     d.motors(vector_pad.targets(pad))
     d.send()
-    assert len(bot.calls) == n                                                           # unchanged: nothing re-sent
+    assert len(bot.calls) == n
     d.press(vector_pad.BTN_MODE)
     assert not d.driving and bot.calls[-2:] == ["stop", "release"]
     os.close(w)
@@ -143,7 +140,7 @@ def test_circle_while_driving_sits_him_under_the_same_hold(monkeypatch):
     d = vector_pad.Driver(pad)
     d.press(vector_pad.BTN_MODE)
     d.press(vector_pad.BTN_EAST)
-    assert not d.driving and sat == ["Sitting."] and "release" not in bot.calls          # no let-go between driving and sitting
+    assert not d.driving and sat == ["Sitting."] and "release" not in bot.calls
     os.close(w)
     pad.close()
 
@@ -179,24 +176,24 @@ def test_driving_ramps_the_wheels_and_keeps_his_wake_word(monkeypatch):
     accels, priorities = [], []
     bot.drive = lambda l, r, accel=0.0: accels.append(accel)
     bot._priority = vector_bot.SIT_PRIORITY
-    bot.held = True                                                                      # he was sitting
+    bot.held = True
     bot.rehold = lambda priority=None, **k: priorities.append(priority) or True
     pad, w = _pad()
     d = vector_pad.Driver(pad)
     d.set_driving(True)
-    assert priorities == [] and vector_bot.DRIVE_PRIORITY == vector_bot.SIT_PRIORITY      # DEFAULT: "Hey Rosie" still works
+    assert priorities == [] and vector_bot.DRIVE_PRIORITY == vector_bot.SIT_PRIORITY
     d.motors((100.0, 100.0, 0.0, 0.0))
     d.send()
     d.motors((0.0, 0.0, 0.0, 0.0))
     d.send()
-    assert accels == [vector_pad.DRIVE_ACCEL, 0.0]                                      # ramp up, stop at once
+    assert accels == [vector_pad.DRIVE_ACCEL, 0.0]
     os.close(w)
     pad.close()
 
 
 def test_targets_are_rounded_so_noise_is_not_a_command():
     pad, w = _pad()
-    pad.axes_raw.update({1: 3})                                                          # nearly full forward
+    pad.axes_raw.update({1: 3})
     left, right, head, lift = vector_pad.targets(pad)
     assert left % vector_pad.WHEEL_STEP == 0 and left == right and head == 0.0 and str(head) == "0.0"
     os.close(w)

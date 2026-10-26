@@ -19,7 +19,6 @@ import org.vosk.Recognizer;
 import java.net.HttpURLConnection;
 import java.net.URL;
 
-/** One tap checks everything Rosie needs on this phone, silently (no sound is played, nothing is sent), and says what is wrong and how to fix it. Results also go to the log for debugging. */
 public class SelfTest {
     interface Step { String run() throws Exception; }
 

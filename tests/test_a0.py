@@ -1,4 +1,3 @@
-"""Agent Zero as Rosie's brain (a0.py) and Rosie's tools for it over MCP (a0_mcp.py)."""
 import asyncio
 import datetime
 import hashlib
@@ -29,7 +28,6 @@ class R:
 
 @pytest.fixture
 def a0z(monkeypatch):
-    """Brain set to Agent Zero, with a fake Agent Zero API. Returns (calls, scripted replies)."""
     cfg = config.load()
     cfg["brain"] = "agent_zero"
     config.save(cfg)
@@ -61,7 +59,6 @@ def fake_tool(monkeypatch, name, fn):
     monkeypatch.setitem(agent.TOOLS, name, (fn, desc, params))
 
 
-# --- the brain -----------------------------------------------------------------------------------
 def test_the_owners_own_notes_go_into_both_prompts_only_when_set(tmp_path, monkeypatch):
     import server
     assert "ABOUT THE USER" not in agent.system_prompt() and "About the owner" not in a0.include_text()
@@ -91,7 +88,7 @@ def test_a_turn_goes_to_agent_zero_with_one_agent_zero_chat_per_rosie_chat(a0z):
     path, body, key = calls[0]
     assert path == "/api/api_message" and key == "k" and "context_id" not in body and body["message"].endswith("hi")
     agent.chat(new, "again", chat_id=7)
-    assert calls[1][1]["context_id"] == "c1" and calls[1][1]["message"].split("\n\n", 1)[1] == "again"   # same chat, no recap
+    assert calls[1][1]["context_id"] == "c1" and calls[1][1]["message"].split("\n\n", 1)[1] == "again"
 
 
 def test_a_forgotten_agent_zero_chat_restarts_with_a_recap(a0z):
@@ -134,24 +131,24 @@ def test_while_agent_zero_works_on_a_big_task_rosie_answers_new_questions_hersel
 def test_a_slow_big_task_is_not_answered_twice(a0z):
     _, replies = a0z
     replies.append(httpx.ReadTimeout("slow"))
-    reply, _, _ = agent.chat([], "research and write the report", chat_id=3)     # Rosie's own model must not start the same job
+    reply, _, _ = agent.chat([], "research and write the report", chat_id=3)  # board #838 why-no-duplicate-job
     assert reply.startswith("Agent Zero is still working")
 
 
 def test_a_reprompt_after_a_slow_task_continues_the_same_agent_zero_chat(a0z):
-    calls, replies = a0z                                      # owner 2026-10-22: "why does it start a new chat ... i want it in the same chat"
+    calls, replies = a0z  # board #838 owner-same-chat
 
     def slow():
         token = calls[-1][1]["message"].split("[Rosie turn ", 1)[1].split("]", 1)[0]
         a0.TURNS.mkdir(parents=True, exist_ok=True)
-        (a0.TURNS / token).write_text("ctxA\n")              # what Agent Zero's hook writes while it works
+        (a0.TURNS / token).write_text("ctxA\n")
         raise httpx.ReadTimeout("slow")
     replies.append(slow)
     agent.chat([], "move my photos to immich", chat_id=11)
     agent.chat([], "how is it going?", chat_id=11)
     assert "context_id" not in calls[0][1] and calls[1][1]["context_id"] == "ctxA"
     assert calls[1][1]["message"].startswith("[Rosie turn ") and calls[1][1]["message"].endswith("how is it going?")
-    assert calls[0][1]["message"].split("\n\n", 1)[1].endswith("move my photos to immich")   # the marker is its own paragraph
+    assert calls[0][1]["message"].split("\n\n", 1)[1].endswith("move my photos to immich")
 
 
 def test_a_one_off_spoken_turn_is_not_marked(a0z):
@@ -173,7 +170,7 @@ def test_a_failed_turn_leaves_no_card_behind(a0z, monkeypatch):
     fake_tool(monkeypatch, "run_command", lambda **k: pytest.fail("ran without the owner's Yes"))
     before = set(actions._pending)
     replies.append(lambda: (a0_mcp.run("run_command", {"command": "ls"}), R(500, {"error": "boom"}))[1])
-    reply, pending, _ = a0.chat([], "list files", chat_id=5)              # it had already called a tool: Rosie must not redo the job
+    reply, pending, _ = a0.chat([], "list files", chat_id=5)  # board #838 why-no-redo-job
     assert "stopped partway" in reply and "run_command" in reply and pending == []
     assert set(actions._pending) == before
 
@@ -185,11 +182,10 @@ def test_a_failed_turn_with_no_tools_falls_back(a0z):
         a0.chat([], "list files", chat_id=5)
 
 
-# --- Rosie's tools for Agent Zero ----------------------------------------------------------------
 def test_lookups_run_at_once(monkeypatch):
     fake_tool(monkeypatch, "list_tasks", lambda **k: [{"title": "Laundry"}])
     assert json.loads(a0_mcp.run("list_tasks", {})) == [{"title": "Laundry"}]
-    assert json.loads(a0_mcp.run("list_tasks", "{}")) == [{"title": "Laundry"}]      # arguments sent as a JSON string
+    assert json.loads(a0_mcp.run("list_tasks", "{}")) == [{"title": "Laundry"}]
 
 
 def test_date_words_become_the_dates_rosies_tools_expect(monkeypatch):
@@ -256,7 +252,7 @@ def test_agent_zero_is_offered_two_tools_not_a_hundred():
 
 def test_rosies_notes_for_agent_zero_fit_its_prompt_budget_and_are_rewritten_only_on_change():
     text = a0.include_text()
-    assert len(text) < 7000 and "rosie.call" in text and "waiting_for_owner" in text      # under Agent Zero's 2,000-token cap per file
+    assert len(text) < 7000 and "rosie.call" in text and "waiting_for_owner" in text  # board #838 why-file-token-cap
     detail = a0.tools_text()
     assert len(detail) < 7000 and "add_event(" in detail and "list_tasks(" in detail and "phone_call(" not in detail
     a0.write_include()
@@ -305,10 +301,10 @@ def test_corner_reading_comes_along_and_the_turn_counts_as_outside_text(a0z, mon
     msg = calls[0][1]["message"]
     assert "[From your corner reading: ...]" in msg and a0.UNTRUSTED_NOTE in msg and msg.endswith("what antenna should I use for meshtastic")
     agent.chat([], "thanks", chat_id=4)
-    assert seen == ["what antenna should I use for meshtastic"]                          # small talk isn't looked up
+    assert seen == ["what antenna should I use for meshtastic"]
     monkeypatch.setattr(corner_graph, "recall", lambda text: "")
     agent.chat([], "what is on my calendar", chat_id=5)
-    assert a0.UNTRUSTED_NOTE not in calls[-1][1]["message"]                                # nothing read: an ordinary turn
+    assert a0.UNTRUSTED_NOTE not in calls[-1][1]["message"]
 
 
 def test_rosies_own_model_gets_the_corner_reading_too(monkeypatch):
@@ -324,4 +320,4 @@ def test_rosies_own_model_gets_the_corner_reading_too(monkeypatch):
     reply, _, new = agent.chat([], "what antenna should I use for meshtastic", chat_id=1)
     assert sent[0]["messages"][0]["content"].endswith("[From your corner reading: ...]\n- a page\n")
     assert "corner_memory" in {t["function"]["name"] for t in sent[0]["tools"]}
-    assert not any("corner reading" in str(m.get("content")) for m in new)                    # never saved into the chat
+    assert not any("corner reading" in str(m.get("content")) for m in new)

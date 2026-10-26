@@ -1,5 +1,4 @@
-"""Safe write actions. Deletes and bulk changes become pending actions that only
-the UI's Confirm button (confirm()) can execute. The model has no way to call confirm()."""
+# board #700 safety-confirm-by-user-only
 import datetime as dt
 import re
 import secrets
@@ -8,7 +7,7 @@ import time
 import gcal
 from config import load
 
-_pending: dict[str, dict] = {}   # token -> action; lost on restart (by design)
+_pending: dict[str, dict] = {}  # board #700 why-pending-lost-on-restart
 NOT_DONE = ("error", "conflict", "refused", "not_done", "needs_confirmation", "nothing", "nothing_to_move")
 
 
@@ -17,10 +16,9 @@ def _parse(s):
     return d if d.tzinfo else d.replace(tzinfo=gcal.TZ)
 
 
-# The owner's rule: school classes and appointments never move (only flexible work blocks and tasks do). Saved settings keep their own
-# fixed_keywords list, so classes and appointments are recognized here as well, whatever the settings say.
+# board #700 owner-school-events-fixed
 ALWAYS_FIXED = re.compile(r"\b(class(?:es)?|lecture|lab|exam|midterm|quiz|course|school|appt|appointment|doctor|dentist|dr\.|dr(?=\s+[A-Z]))(?![a-z])", re.I)
-SCHOOL = None                                                     # words that mark the owner's own school's events
+SCHOOL = None
 
 
 def _is_fixed(title, cfg):
@@ -28,7 +26,7 @@ def _is_fixed(title, cfg):
     return any(k in t for k in cfg["fixed_keywords"]) or bool(ALWAYS_FIXED.search(title)) or bool(SCHOOL and SCHOOL.search(title))
 
 
-PENDING_SECONDS = 600                                             # a card nobody answered for 10 minutes can no longer be confirmed
+PENDING_SECONDS = 600  # board #700 safety-card-expires
 
 
 def _queue(kind, summary, payload):
@@ -45,7 +43,6 @@ def register_executor(kind, fn):
 
 
 def queue_tool(name, args, summary):
-    """Hold a tool call until the USER confirms it in the UI (the model cannot confirm)."""
     return _queue("tool", summary, {"name": name, "args": args})
 
 
@@ -57,7 +54,7 @@ def add_event(title, start, end, location="", double_book=False, _confirmed=Fals
     s, e = _parse(start), _parse(end)
     if e <= s:
         return {"status": "error", "message": "The end must be after the start."}
-    for ex in gcal.list_events(s - dt.timedelta(minutes=5), s + dt.timedelta(minutes=5), gcal.write_calendar_id()):         # already there? do not add it twice
+    for ex in gcal.list_events(s - dt.timedelta(minutes=5), s + dt.timedelta(minutes=5), gcal.write_calendar_id()):
         if not ex["all_day"] and ex["title"].strip().lower() == title.strip().lower():
             return {"status": "done", "event": ex, "note": "That event was already on the calendar, so I did not add it again."}
     clash = gcal.conflicts(s, e)
@@ -71,7 +68,6 @@ def add_event(title, start, end, location="", double_book=False, _confirmed=Fals
 
 
 def add_all_day_event(title, day):
-    """An all-day event from an email that named a day but no time. Adds only: never moves or changes an existing event."""
     d = dt.date.fromisoformat(day)
     for ex in gcal.list_events(dt.datetime.combine(d, dt.time(0, 0), tzinfo=gcal.TZ), dt.datetime.combine(d, dt.time(23, 59), tzinfo=gcal.TZ), gcal.write_calendar_id()):
         if ex["all_day"] and ex["title"].strip().lower() == title.strip().lower():
@@ -80,7 +76,6 @@ def add_all_day_event(title, day):
 
 
 def resolve_event(ref):
-    """Turn what the model gave (a real id, or a title/description) into a real event on the calendar we write to. Returns (event, error)."""
     cal = gcal.write_calendar_id()
     try:
         return gcal.get_event(ref, cal), None
@@ -100,14 +95,14 @@ def move_event(event_id, new_start, new_end, double_book=False, _confirmed=False
     ev, err = resolve_event(event_id)
     if err:
         return err
-    if _is_fixed(ev["title"], load()):                        # all-day ones too (an exam day)
+    if _is_fixed(ev["title"], load()):
         return {"status": "refused", "message": f"NOT moved: '{ev['title']}' is a class or an appointment, and those never move (the owner's rule). "
                                                 "Move flexible work blocks or tasks around it instead; if the owner wants it changed, they do that in Google Calendar."}
     s, e = _parse(new_start), _parse(new_end)
     if e <= s:
         return {"status": "error", "message": "The end must be after the start."}
     clash = gcal.conflicts(s, e, exclude_id=ev["id"])
-    if ask_first and not _confirmed:                          # Agent Zero: the owner sees the real title, the time and any overlap
+    if ask_first and not _confirmed:
         return queue_tool("move_event", {"event_id": ev["id"], "new_start": new_start, "new_end": new_end, "double_book": True, "_confirmed": True},
                           f"Move '{ev['title']}' to {_when(s, e)}" + (" even though it overlaps: " + "; ".join(c["title"] for c in clash) if clash else ""))
     if clash and not double_book:
@@ -121,15 +116,13 @@ def move_event(event_id, new_start, new_end, double_book=False, _confirmed=False
 
 
 def delete_event(event_id, title="this event"):
-    ev, err = resolve_event(event_id)                              # the card must name the REAL event, never a title the model made up
+    ev, err = resolve_event(event_id)
     if err or not ev:
         return err or {"status": "error", "message": "I could not find that event."}
     return _queue("delete", f"Delete event: {ev['title']} ({ev['start'][:16].replace('T', ' ')})", {"event_id": ev["id"]})
 
 
 def shift_day(minutes_late: int, from_time=None, day=None, ask_first=False):
-    """Push every flexible event at/after from_time (default: now) later by N minutes.
-    Fixed events (appointments etc.) are left alone and reported."""
     cfg = load()
     cal = gcal.write_calendar_id()
     now = dt.datetime.now(gcal.TZ)
@@ -148,9 +141,9 @@ def shift_day(minutes_late: int, from_time=None, day=None, ask_first=False):
                       "end": (_parse(e["end"]) + delta).isoformat()})
     if not moves:
         return {"status": "nothing_to_move", "kept_fixed": skipped}
-    if any(_parse(m["start"]).astimezone(gcal.TZ).date() != day for m in moves):   # skill audit 2026-10-23: "push everything back a day";
-        return {"status": "error", "message": "That would push events into another day. shift_day only moves events later on the "   # a block
-                "same day; offer to move specific items with move_event."}                       # may still END after midnight
+    if any(_parse(m["start"]).astimezone(gcal.TZ).date() != day for m in moves):  # board #700 fix-skill-audit-push-back-day
+        return {"status": "error", "message": "That would push events into another day. shift_day only moves events later on the "
+                "same day; offer to move specific items with move_event."}
     clashes = []
     for ev in gcal.events_on(day, cal):
         if ev["all_day"] or not _is_fixed(ev["title"], cfg):
@@ -158,13 +151,13 @@ def shift_day(minutes_late: int, from_time=None, day=None, ask_first=False):
         fs, fe = _parse(ev["start"]), _parse(ev["end"])
         clashes += [f"{m['title']} overlaps {ev['title']}" for m in moves
                     if _parse(m["start"]) < fe and _parse(m["end"]) > fs]
-    lines = [f"{m['title']} -> {_parse(m['start']).astimezone(gcal.TZ):%H:%M}" for m in moves]   # local time, whatever the event's offset
+    lines = [f"{m['title']} -> {_parse(m['start']).astimezone(gcal.TZ):%H:%M}" for m in moves]
     summary = f"Shift {len(moves)} event(s) by {minutes_late} min: " + "; ".join(lines)
     if skipped:
         summary += f" (not moved, fixed: {', '.join(skipped)})"
     if clashes:
         summary += f" WARNING: {'; '.join(clashes)}"
-    if ask_first or len(moves) > cfg["max_changes_without_confirm"] or clashes:   # Agent Zero always gets this full card
+    if ask_first or len(moves) > cfg["max_changes_without_confirm"] or clashes:
         return _queue("shift", summary, {"moves": moves, "calendar": cal})
     for m in moves:
         gcal.move_event(m["id"], _parse(m["start"]), _parse(m["end"]), cal)
@@ -183,14 +176,14 @@ def confirm(token):
         elif a["kind"] == "tool":
             res = _executors["tool"](p["name"], p["args"])
             msg = res.get("error") if isinstance(res, dict) and res.get("error") else None
-            if msg is None and isinstance(res, dict) and res.get("status") in NOT_DONE:   # a clash, a refusal or a second card: not done
+            if msg is None and isinstance(res, dict) and res.get("status") in NOT_DONE:
                 msg = str(res.get("message") or res.get("summary") or f"Not done ({res['status']}).")
             return {"status": "error" if msg else "done", "message": msg, "summary": a["summary"], "result": str(res)[:400]}
         elif a["kind"] == "shift":
             for m in p["moves"]:
                 gcal.move_event(m["id"], _parse(m["start"]), _parse(m["end"]), p["calendar"])
                 done += 1
-    except Exception as e:                                         # report it plainly instead of a 500 and a vanished card
+    except Exception as e:
         extra = f" ({done} of {len(p['moves'])} moves were made before it stopped)" if a["kind"] == "shift" and done else ""
         return {"status": "error", "message": f"{type(e).__name__}: {str(e)[:160]}{extra}", "summary": a["summary"]}
     return {"status": "done", "summary": a["summary"]}

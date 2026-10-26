@@ -76,7 +76,7 @@ def test_move_by_title_and_clash_on_move(cal):
 def test_classes_and_appointments_never_move_even_with_old_saved_keywords(cal):
     import config
     cfg = config.load()
-    cfg["fixed_keywords"] = ["dentist"]                                     # an older saved list without class words
+    cfg["fixed_keywords"] = ["dentist"]  # board #852 why-older-saved-list
     config.save(cfg)
     titles = ["Technical Writing lecture bldg 16", "Sams Tuesday Night Advanced Routing class *Online*", "Doctor appointment", "Dentist"]
     for title in titles:
@@ -84,7 +84,7 @@ def test_classes_and_appointments_never_move_even_with_old_saved_keywords(cal):
         r = actions.move_event(title.split()[0].lower(), at(cal, 17), at(cal, 18))
         assert r["status"] == "refused" and "never move" in r["message"], title
         r = actions.move_event(title.split()[0].lower(), at(cal, 17), at(cal, 18), double_book=True, _confirmed=True)
-        assert r["status"] == "refused", title                              # not even through a confirmed card
+        assert r["status"] == "refused", title  # board #852 safety-refused-even-confirmed
 
 
 def test_a_refused_or_clashing_card_is_never_reported_done(cal, monkeypatch):

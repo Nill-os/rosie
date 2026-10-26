@@ -1,4 +1,3 @@
-"""Fixes from the runtime audit of 2026-10-23 (jobs and time): each test is one finding that used to fail."""
 import datetime as dt
 import time
 
@@ -25,7 +24,7 @@ def test_a_failed_auto_sort_is_tried_once_per_version_of_the_pad_and_says_it_fai
     for m in range(5):
         automations.job_scratch(NOW + dt.timedelta(minutes=m), cfg)
     assert len(calls) == 1 and notes == ["Couldn't sort your scratch pad"]
-    workflows.SCRATCH.write_text("buy milk\ncall mom\nfix bike\nnew line\n")      # the owner changed it: one new try
+    workflows.SCRATCH.write_text("buy milk\ncall mom\nfix bike\nnew line\n")
     os.utime(workflows.SCRATCH, (old, old + 1))
     automations.job_scratch(NOW + dt.timedelta(minutes=9), cfg)
     assert len(calls) == 2
@@ -49,7 +48,7 @@ def test_a_late_tick_still_reminds_of_an_event_that_just_started(monkeypatch):
     added.clear()
     monkeypatch.setattr(automations, "_events_today", lambda now: [{"id": "e1", "title": "Dentist", "start": (NOW - dt.timedelta(minutes=6)).isoformat()}])
     automations.job_events(NOW, {"remind_events": True, "remind_lead_min": 15})
-    assert added == []                                                       # long past: no reminder
+    assert added == []
 
 
 def test_mail_triage_runs_off_the_tick(monkeypatch):
@@ -62,9 +61,9 @@ def test_mail_triage_runs_off_the_tick(monkeypatch):
     monkeypatch.setattr(automations, "_mail", {"t": 0.0})
     t0 = time.time()
     automations.job_mail(NOW, {"mail_on": True, "mail_check_min": 60})
-    assert time.time() - t0 < 1 and automations._mail["running"]           # the tick goes on at once
+    assert time.time() - t0 < 1 and automations._mail["running"]
     automations._mail["t"] = 0.0
-    automations.job_mail(NOW, {"mail_on": True, "mail_check_min": 60})    # never two at once
+    automations.job_mail(NOW, {"mail_on": True, "mail_check_min": 60})
     gate.set()
     assert done.wait(5)
     for _ in range(50):
@@ -79,7 +78,7 @@ def test_tomorrow_in_an_email_means_the_day_after_it_was_sent():
     sent = dt.datetime(2026, 10, 23, 9, 0, tzinfo=gcal.TZ)
     msg = {"id": "m1", "from": "Sam <sam@example.com>", "subject": "Report", "ts": int(sent.timestamp())}
     mailwatch._propose("me", msg, {"tasks": [{"title": "Send the report", "when": "tomorrow"}], "events": []}, {})
-    assert mailwatch.todos()[0]["due"] == "2026-10-24"          # on the Mail page's action list now, not in Tasks
+    assert mailwatch.todos()[0]["due"] == "2026-10-24"
 
 
 def test_llm_json_answers_have_a_length_cap(monkeypatch):
@@ -99,18 +98,17 @@ def test_a_helper_process_asks_for_the_owners_model_not_the_default(monkeypatch)
     import corner_browse
     import mind
     import paper
-    monkeypatch.setattr(corner_browse, "LIVE", {"set": False})             # a fresh helper process: models.load_saved never ran
+    monkeypatch.setattr(corner_browse, "LIVE", {"set": False})  # board #848 quirk-helper-no-load-saved
     cfg = config.load()
     cfg["chat_model"] = "huihui_ai/qwen3.5-abliterated:9b"
     config.save(cfg)
     assert mind._model() == "huihui_ai/qwen3.5-abliterated:9b" and paper.Model().model == "huihui_ai/qwen3.5-abliterated:9b"
-    monkeypatch.setattr(corner_browse, "LIVE", {"set": True})              # the server: its own pick (even when the saved one was unusable)
+    monkeypatch.setattr(corner_browse, "LIVE", {"set": True})  # board #848 why-server-own-pick
     assert mind._model() == corner_browse.MODEL
 
 
 def test_agent_zeros_line_starts_on_a_later_try_when_its_address_was_busy():
-    """Pass 2 found the first retry fix could never work (the MCP session manager runs once per app). A taken port stands in for a
-    missing docker0: the first try fails, the second (with a fresh app) serves."""
+    # board #848 fix-retry-fresh-app
     import socket
     import threading
     import a0_mcp
@@ -125,7 +123,7 @@ def test_agent_zeros_line_starts_on_a_later_try_when_its_address_was_busy():
     def make_app():
         tries.append(1)
         if len(tries) == 2:
-            blocker.close()                                                  # the address is free from the second try on
+            blocker.close()
         return mcp_server.streamable_http_app(stateless_http=True, json_response=True)
 
     def on_server(srv):
@@ -156,7 +154,7 @@ def test_the_owners_model_is_loaded_once_ollama_answers(monkeypatch):
     monkeypatch.setattr(models, "load_saved", lambda: tried.append(1))
     monkeypatch.setattr(automations, "_model_retry", {"t": 0.0})
     automations.job_model(NOW, {})
-    automations.job_model(NOW, {})                                          # at most once a minute
+    automations.job_model(NOW, {})  # board #848 why-job-model-once-minute
     assert tried == [1]
     monkeypatch.setattr(models, "last_problem", "")
     monkeypatch.setattr(automations, "_model_retry", {"t": 0.0})
@@ -177,7 +175,7 @@ def test_an_embedding_outage_is_a_wait_for_her_mind(monkeypatch):
 
 
 def test_helpers_follow_the_model_the_server_really_runs(monkeypatch):
-    """Pass 3: when the saved pick can't be used the server stays on the default, and helper processes must too."""
+    # board #848 fix-saved-model-default
     import config
     import corner_browse
     import ctxsize
@@ -189,7 +187,7 @@ def test_helpers_follow_the_model_the_server_really_runs(monkeypatch):
     monkeypatch.setattr(models, "installed", lambda: [{"name": "some/unusable:9b", "usable": False, "why_not": "can't use tools (Rosie needs them)"}])
     monkeypatch.setattr(models, "last_problem", "")
     monkeypatch.setattr(models.agent, "MODEL", models.DEFAULT)
-    models.load_saved()                                                      # the server: stays on the default
+    models.load_saved()
     assert models.current() == models.DEFAULT and "can't use tools" in models.last_problem
-    monkeypatch.setattr(corner_browse, "LIVE", {"set": False})              # a helper process
+    monkeypatch.setattr(corner_browse, "LIVE", {"set": False})
     assert ctxsize.live_model() == models.DEFAULT

@@ -1,4 +1,3 @@
-/* Cyberdeck hub theme */
 :root{--bg:#000;--card:#080C10;--card2:#0d1620;--fg:#E8E8F0;--mute:#7A8CA5;--line:#23233a;--acc:#00F0FF;--pur:#9D00FF;--ok:#22C55E;--warn:#B57BFF;--bad:#FF3333;
  --mono:ui-monospace,"JetBrains Mono","DejaVu Sans Mono",Menlo,Consolas,monospace;--side:272px}
 *{box-sizing:border-box}html,body{height:100%;margin:0}
@@ -13,8 +12,7 @@ code{background:var(--card2);color:var(--acc);padding:1px 6px;border-radius:4px;
 .muted{color:var(--mute)}
 #app{display:grid;grid-template-columns:var(--side) 1fr;height:100%}
 
-/* ---------- sidebar ---------- */
-#side{background:#04070a;border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0;overflow-y:auto}   /* the whole column scrolls: on a phone nothing falls off the bottom */
+#side{background:#04070a;border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0;overflow-y:auto}
 #side .brand{padding:14px 16px 10px;display:flex;align-items:center;gap:10px}
 #side .brand b{color:var(--acc);text-transform:uppercase;letter-spacing:.14em;text-shadow:0 0 12px #00f0ff55}
 #side .brand b::before{content:"> ";color:var(--pur)}
@@ -44,7 +42,6 @@ button.navhead:hover{color:var(--fg)}button.navhead .fold{margin-left:auto;font-
 #side .foot{border-top:1px solid var(--line);padding:10px 14px;font-size:calc(11px*var(--ts,1));color:var(--mute);letter-spacing:.08em}
 #scrim{display:none}
 
-/* ---------- main ---------- */
 #main{display:flex;flex-direction:column;min-width:0;min-height:0;height:100%}
 #top{display:flex;align-items:center;gap:10px;padding:12px 16px 10px;border-bottom:1px solid var(--line)}
 #menu{display:none}
@@ -58,7 +55,6 @@ button.navhead:hover{color:var(--fg)}button.navhead .fold{margin-left:auto;font-
 #chatview>*{width:100%;max-width:880px;margin-left:auto;margin-right:auto}
 body.in-chat #view{display:none}body.in-chat #chatview{display:flex}
 
-/* ---------- buttons ---------- */
 .btn,#bar button,#btns button,.conf button,#slash button{--b:var(--acc);border:2px solid var(--b);background:var(--bg);color:var(--b);border-radius:6px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;transition:background .12s,color .12s;min-height:40px;padding:0 14px;font-size:calc(13px*var(--ts,1))}
 .btn:hover,#bar button:hover,#btns button:hover,.conf button:hover{background:var(--b);color:#000}
 .btn:disabled{opacity:.45;cursor:default}
@@ -66,7 +62,6 @@ body.in-chat #view{display:none}body.in-chat #chatview{display:flex}
 .btn.sm{min-height:32px;padding:0 10px;font-size:calc(12px*var(--ts,1))}
 .btn.block{width:calc(100% - 24px)}
 
-/* ---------- cards / forms ---------- */
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(310px,1fr));gap:14px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:6px;padding:14px;min-width:0}
 .card.wide{grid-column:1/-1}
@@ -99,7 +94,6 @@ button.chip:hover{border-color:var(--acc);color:var(--acc)}.chip.bad{color:var(-
 .md{white-space:pre-wrap;overflow-wrap:anywhere}
 .kv{display:grid;grid-template-columns:130px minmax(0,1fr);gap:6px 12px}.kv dt{color:var(--mute)}.kv dd{margin:0;min-width:0;overflow-wrap:anywhere}
 .kv dd select,.kv dd input:not([type=checkbox]):not([type=radio]),.kv dd textarea{max-width:100%}
-/* a narrow card stacks each label over its value, so long values (model names, hotkeys) never spill into the next card */
 .card{container-type:inline-size}
 @container (max-width:420px){.kv{grid-template-columns:minmax(0,1fr);gap:2px}.kv dt{margin-top:10px;font-size:calc(12px*var(--ts,1));letter-spacing:.04em}.kv dt:first-child{margin-top:0}}
 .bar{height:8px;border-radius:4px;background:var(--line);overflow:hidden;margin-top:4px}.bar i{display:block;height:100%;background:var(--acc)}
@@ -132,7 +126,6 @@ button.chip:hover{border-color:var(--acc);color:var(--acc)}.chip.bad{color:var(-
 #termhost .xterm{height:100%}.xterm-viewport{scrollbar-width:thin}
 .quick{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}.quick .btn{min-width:44px}
 .tpane{min-width:0}
-/* ---------- chat ---------- */
 #log{flex:1;overflow-y:auto;padding:16px 14px;display:flex;flex-direction:column;gap:12px;min-height:0}
 .m{max-width:94%;padding:10px 14px 11px;border-radius:6px;white-space:pre-wrap;overflow-wrap:anywhere;background:var(--card);border:1px solid var(--line)}
 .m::before{display:block;font-size:calc(10px*var(--ts,1));letter-spacing:.2em;margin-bottom:5px;font-weight:700}
@@ -156,7 +149,6 @@ button.chip:hover{border-color:var(--acc);color:var(--acc)}.chip.bad{color:var(-
 #bar button{font-size:calc(20px*var(--ts,1));padding:0 18px;min-height:48px}#bar button[type=submit]{--b:var(--pur)}#bar button[type=submit]:hover{color:#fff}
 #mic.rec{--b:var(--bad);animation:pulse 1s infinite;background:var(--bad);color:#000}
 
-/* ---------- phone / narrow ---------- */
 .mono{font-family:var(--mono);color:var(--acc)}
 .good{color:var(--ok)}.warnc{color:var(--warn)}
 @media(prefers-reduced-motion:reduce){.rs-dot.on,.rs-new{animation:none}}
@@ -172,7 +164,6 @@ button.chip:hover{border-color:var(--acc);color:var(--acc)}.chip.bad{color:var(-
  .termpage{grid-template-columns:1fr}.termpage.open .tl{display:none}#termhost{height:55vh}
 }
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
-/* Rosie's corner (static/corner.js): fixed classes only; her layout picks colours by name from this list */
 .cn-c-cyan{--cn:var(--acc)}.cn-c-purple{--cn:var(--pur)}.cn-c-green{--cn:var(--ok)}.cn-c-lilac{--cn:var(--warn)}.cn-c-red{--cn:var(--bad)}
 .cn-c-grey{--cn:var(--mute)}.cn-c-white{--cn:var(--fg)}.cn-c-plain{--cn:var(--fg)}
 .card.cn-sec,.card.cn-about{border-top:3px solid var(--cn,var(--acc))}.card.cn-sec h3,.card.cn-about h3{color:var(--cn,var(--acc))}
@@ -196,7 +187,6 @@ button.chip:hover{border-color:var(--acc);color:var(--acc)}.chip.bad{color:var(-
 .cn-subtabs{margin:4px 0 12px}.cn-subtabs button{padding:6px 10px;font-size:calc(12px*var(--ts,1))}.cn-one{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
 .cn-card .cn-sum{margin:6px 0;overflow-wrap:anywhere}.cn-ghead{margin-bottom:10px}.cn-also{overflow-wrap:anywhere}
 @media (max-width:420px){.cn-card .cn-btns .btn{flex:1 1 45%;min-width:0;padding:0 6px;font-size:calc(11px*var(--ts,1))}.cn-subtabs button{flex:1 1 auto}}
-/* Morning Paper page: the paper itself is a frame drawn by the server (newsprint / dark / plain) */
 .pp-wrap{margin-top:14px;border:1px solid var(--line);border-radius:6px;overflow:hidden;background:#000}
 .pp-wrap.look-newsprint{background:#efefef}.pp-wrap.look-plain{background:#fff}
 .pp-frame{display:block;width:100%;min-height:70vh;border:0;background:transparent}
@@ -204,14 +194,12 @@ button.chip:hover{border-color:var(--acc);color:var(--acc)}.chip.bad{color:var(-
 .pp-set .seg button{padding:6px 10px}
 .pp-narrow .pp-tools .form{gap:6px}
 
-/* Shut down all (sidebar footer) and its goodbye screen; the Agent Zero page's log */
 #foot{display:flex;align-items:center;justify-content:space-between;gap:8px}
 #foot .shut{min-height:28px;padding:2px 8px;font-size:calc(11px*var(--ts,1))}
 .goodbye{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:24px;text-align:center}
 .a0-log{white-space:pre-wrap;word-break:break-word;font-size:calc(12px*var(--ts,1));max-height:420px;overflow:auto;margin:0}
 
-/* ---------- Agent Deck palette (owner 2026-10-21: "add that color palette to rosie"): a still neon light behind everything, glass panels
-   on top. The light is one fixed layer of radial gradients (cheap to paint; an animated or blurred one costs CPU on every repaint). ---------- */
+/* board #819 owner-agent-deck-palette */
 :root{--bg:rgba(4,7,12,.78);--card:rgba(14,20,30,.84);--card2:rgba(255,255,255,.06);--line:rgba(255,255,255,.10);--ok:#22E58A;--bad:#FF3B5C;--pink:#FF2BD6}
 html{background:#04070c}
 body{background:transparent}
@@ -220,19 +208,17 @@ body::before{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;op
              radial-gradient(52vmax 52vmax at 104% 40%,rgba(157,0,255,.38),transparent 70%),
              radial-gradient(44vmax 44vmax at 50% 112%,rgba(255,43,214,.18),transparent 70%)}
 #side{background:rgba(4,7,10,.86)}
-body.side-open #side{background:rgba(5,8,13,.985)}   /* over the page (drawer): solid, so the page never shows through the menu */
+body.side-open #side{background:rgba(5,8,13,.985)}
 .card{background:linear-gradient(180deg,rgba(255,255,255,.06),transparent 40%),var(--card);border-color:var(--line);border-radius:12px;
   box-shadow:0 10px 30px rgba(0,0,0,.35),inset 0 1px 0 rgba(255,255,255,.08)}
 .modal{background:rgba(8,12,20,.96)}
 .menu,#toast div,#slash{background:rgba(10,16,26,.96)}
 .me{background:rgba(157,0,255,.10)}
 
-/* ---------- Agent Deck page: the deck fills the whole view ---------- */
 #view:has(.deckframe){padding:0;overflow:hidden}
 #view>.page:has(.deckframe){max-width:none;height:100%}
 .deckframe{display:block;width:100%;height:100%;border:0;background:#04070c}
 
-/* ---------- Memory graph page (static/graph.js): the map fills the view, the details slide in on the right (bottom on a phone) ---------- */
 #view:has(.gpage){padding:0;overflow:hidden}
 #view>.page:has(.gpage){max-width:none;height:100%}
 .gpage{display:flex;flex-direction:column;height:100%;gap:0}
@@ -268,8 +254,7 @@ body.side-open #side{background:rgba(5,8,13,.985)}   /* over the page (drawer): 
 .gsrc{display:block;font-size:calc(11px*var(--ts,1));color:var(--pur);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 @media (max-width:760px){.gside{top:auto;left:10px;width:auto;height:55%}.gzoom{margin-left:0}}
 
-/* ---------- half a screen (owner 2026-10-21: Rosie lives on the left half of a 1920x1080 screen, ~690 px): an icon rail instead of the
-   phone drawer. The rail shows the page icons (names on hover); the menu button still opens the full sidebar with your chats. ---------- */
+/* board #819 owner-half-screen-rail */
 @media (min-width:600px) and (max-width:899px){
  #app{grid-template-columns:60px 1fr}
  #side{position:relative;inset:auto;width:60px;transform:none;transition:none;box-shadow:none;overflow-x:hidden;z-index:auto}
@@ -291,7 +276,6 @@ body.side-open #side{background:rgba(5,8,13,.985)}   /* over the page (drawer): 
  body.side-open #side .scroll{display:block}body.side-open #side .foot{display:block}
 }
 
-/* Ctrl+click: how the picked things are connected */
 .gpick{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
 .gpick .chip{border-width:1px;border-style:solid}
 .gstep{border-top:1px solid var(--line);padding-top:8px;margin-top:8px}
@@ -299,14 +283,11 @@ body.side-open #side{background:rgba(5,8,13,.985)}   /* over the page (drawer): 
 .gchain .arrow{color:var(--mute);font-weight:400}
 .ghop{margin:6px 0 4px;display:flex;flex-direction:column;gap:4px}
 
-/* ---------- Display: spacing (owner 2026-10-23: the Agent Deck's display settings "to the main settings and make it control the whole ui").
-   Background light is --glow on body::before; text size is --ts in every font size. ---------- */
 body.look-compact #view{padding:10px}body.look-compact .grid{gap:8px}body.look-compact .card{padding:9px 10px}
 body.look-compact .kv{row-gap:2px}body.look-compact .btn{min-height:32px}
 body.look-roomy #view{padding:22px}body.look-roomy .grid{gap:20px}body.look-roomy .card{padding:20px}body.look-roomy .kv{row-gap:10px}
 .menu-pick{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:4px 12px}.menu-pick label{display:flex;align-items:center;gap:6px;cursor:pointer}
 
-/* ---------- Life Quest ---------- */
 .lq-grid{grid-template-columns:repeat(auto-fit,minmax(min(100%,310px),1fr))}
 .lq-hero{border-top:3px solid var(--pur);display:flex;flex-direction:column;gap:10px}
 .lq-lvl{display:flex;align-items:center;gap:14px}
@@ -325,7 +306,6 @@ body.look-roomy #view{padding:22px}body.look-roomy .grid{gap:20px}body.look-room
 .lq-stat{border-left:3px solid var(--c)}.lq-row{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}
 .lq-edit{margin-bottom:6px}.lq-edit select{flex:none;max-width:140px}.lq-edit.off{opacity:.55}
 
-/* ---------- Chat as Agent Zero's own page (a0_proxy.py): the frame fills the chat area, Rosie's composer steps aside ---------- */
 #a0box{display:none}
 body.in-chat.a0-chat #chatview>*{display:none}
 body.in-chat.a0-chat #chatview>#a0box{display:flex;flex:1;min-height:0;max-width:none;margin:0}
@@ -333,11 +313,7 @@ body.a0-chat #newchat{display:none}
 #a0frame{flex:1;width:100%;height:100%;border:0;background:#04070c}
 .a0note{margin:16px;align-self:flex-start;max-width:560px}
 
-/* ---------- Jetsons theme (owner 2026-10-24: "make her rosie easy to read she has issues reading things with the colors i picked. she is
-   wanting a rosie theme from the jetsons"). Space-age navy with cream text, Googie orange and turquoise, rounded shapes, atomic starbursts
-   in the background only. Easy to read first: every text color is at least 7:1 on its background, one plain font made for low vision
-   (Atkinson Hyperlegible, Braille Institute, SIL OFL: static/vendor/fonts/atkinson.LICENSE), larger text, no glow, no blinking, no all caps,
-   no letter-spaced labels, underlined links. Picked in Settings > Display, per device, with an install-wide default (config ui_theme). ---------- */
+/* board #819 owner-jetsons-readability */
 @font-face{font-family:"Atkinson Hyperlegible";src:url(/vendor/fonts/atkinson-400.woff2) format("woff2");font-weight:400;font-style:normal;font-display:swap}
 @font-face{font-family:"Atkinson Hyperlegible";src:url(/vendor/fonts/atkinson-700.woff2) format("woff2");font-weight:700 900;font-style:normal;font-display:swap}
 @font-face{font-family:"Atkinson Hyperlegible";src:url(/vendor/fonts/atkinson-400-italic.woff2) format("woff2");font-weight:400;font-style:italic;font-display:swap}
@@ -383,7 +359,6 @@ html[data-theme="jetsons"] .menu,html[data-theme="jetsons"] #toast div,html[data
 html[data-theme="jetsons"] .me{background:#24406E}
 html[data-theme="jetsons"] *{scrollbar-color:var(--line) transparent}
 
-/* ---------- Page tabs (a menu entry that holds several pages): a small segmented bar above the page ---------- */
 .tabs{display:flex;gap:4px;flex-wrap:wrap;padding:8px 16px 0}
 .tabs[hidden]{display:none}
 .tabs .tab{border:1px solid var(--line);background:var(--card);color:var(--mute);border-radius:999px;padding:0 14px;min-height:34px;font-size:calc(13px*var(--ts,1));font-weight:700;transition:background .12s,color .12s,border-color .12s}
@@ -391,9 +366,7 @@ html[data-theme="jetsons"] *{scrollbar-color:var(--line) transparent}
 .tabs .tab.on{background:var(--acc);color:#000;border-color:var(--acc)}
 @media (max-width:599px){.tabs{padding:8px 12px 0}}
 
-/* ---------- Aurora theme (owner 2026-10-24: "remake the rosie ui with the new ui skills and just keep the colors"): the same colors as
-   Cyberdeck in a modern shape. One family (Space Grotesk, bundled), type scale 1.25 from 13 px, sentence-case labels, one glass level,
-   no neon text glow, no blinking cursor. The aurora behind it stays still. Monospace stays for code and the terminal. ---------- */
+/* board #819 owner-aurora-keep-colors */
 @font-face{font-family:"Space Grotesk";src:url(/vendor/fonts/space-grotesk.ttf) format("truetype");font-weight:300 700;font-style:normal;font-display:swap}
 html[data-theme="aurora"]{--bg:#04070c;--card:rgba(12,18,28,.58);--card2:rgba(255,255,255,.06);--line:rgba(255,255,255,.08);--fg:#E8E8F0;--mute:#8696AE;
   --acc:#00F0FF;--pur:#C58AFF;--pur-fill:#9D00FF;--ok:#22E58A;--warn:#FFD23F;--bad:#FF6B84;--pink:#FF4FDA;--claude:#FF9A5A;
@@ -407,13 +380,11 @@ html[data-theme="aurora"] *{text-shadow:none!important;letter-spacing:normal!imp
 html[data-theme="aurora"] b,html[data-theme="aurora"] strong{color:var(--fg);font-weight:600}
 html[data-theme="aurora"] code{border-radius:6px}
 html[data-theme="aurora"] *{scrollbar-color:rgba(255,255,255,.18) transparent}
-/* every control: hover lift, press, focus ring */
 html[data-theme="aurora"] :focus-visible{outline:2px solid var(--acc);outline-offset:2px;border-radius:8px}
 html[data-theme="aurora"] .btn,html[data-theme="aurora"] .nav,html[data-theme="aurora"] .tabs .tab,html[data-theme="aurora"] .seg button,html[data-theme="aurora"] .item,
 html[data-theme="aurora"] .card,html[data-theme="aurora"] .chip{transition:transform 120ms ease,background-color 120ms ease,border-color 120ms ease,color 120ms ease}
 html[data-theme="aurora"] .btn:hover,html[data-theme="aurora"] .tabs .tab:hover{transform:translateY(-1px)}
 html[data-theme="aurora"] .btn:active,html[data-theme="aurora"] .nav:active,html[data-theme="aurora"] .tabs .tab:active,html[data-theme="aurora"] .seg button:active,html[data-theme="aurora"] #bar button:active{transform:scale(.97)}
-/* sidebar: calm, active = cyan text on a soft cyan pill */
 html[data-theme="aurora"] #side{background:rgba(6,10,16,.72);border-right:1px solid var(--line)}
 html[data-theme="aurora"] body.side-open #side{background:rgba(6,10,16,.98)}
 html[data-theme="aurora"] #side .brand{padding:16px 16px 12px}
@@ -433,11 +404,9 @@ html[data-theme="aurora"] .chat{border-left:0;border-radius:12px}
 html[data-theme="aurora"] .chat.on{background:rgba(0,240,255,.12)}
 html[data-theme="aurora"] .chat.on .t{color:var(--acc);font-weight:600}
 html[data-theme="aurora"] #side .foot{font-size:var(--t0);letter-spacing:normal}
-/* header */
 html[data-theme="aurora"] #top{border-bottom:1px solid var(--line);padding:14px 16px 12px}
 html[data-theme="aurora"] #ttl{color:var(--fg);font-size:var(--t3);font-weight:600;letter-spacing:-.01em!important}
 html[data-theme="aurora"] #ttl::before,html[data-theme="aurora"] #ttl::after{content:none;animation:none}
-/* cards: one glass level, concentric radii (card 16, control 12, pill 999) */
 html[data-theme="aurora"] .card{background:var(--card);border:1px solid var(--line);border-radius:16px;box-shadow:none;padding:16px}
 html[data-theme="aurora"] .card:hover{border-color:rgba(255,255,255,.14)}
 html[data-theme="aurora"] .card h3{font-size:var(--t0);font-weight:600;color:var(--mute);margin:0 0 12px}
@@ -453,7 +422,6 @@ html[data-theme="aurora"] .item.over{border-left:1px solid var(--line);box-shado
 html[data-theme="aurora"] .chip{background:rgba(255,255,255,.05);border-color:var(--line);color:var(--mute)}
 html[data-theme="aurora"] .pill{font-size:var(--t0)}
 html[data-theme="aurora"] .empty{color:var(--mute)}
-/* buttons: quiet outline, fills on hover */
 html[data-theme="aurora"] .btn,html[data-theme="aurora"] #bar button,html[data-theme="aurora"] #btns button,html[data-theme="aurora"] .conf button,html[data-theme="aurora"] #slash button{
   border:1px solid color-mix(in srgb,var(--b) 55%,transparent);background:rgba(255,255,255,.04);color:var(--b);border-radius:12px;font-weight:600;font-size:var(--t0);padding:0 16px}
 html[data-theme="aurora"] .btn:hover,html[data-theme="aurora"] #bar button:hover,html[data-theme="aurora"] #btns button:hover,html[data-theme="aurora"] .conf button:hover{background:var(--b);border-color:var(--b);color:#000}
@@ -463,14 +431,12 @@ html[data-theme="aurora"] .btn.sm{min-height:32px;padding:0 12px;border-radius:9
 html[data-theme="aurora"] #bar button[type=submit]{--b:var(--pur-fill);background:var(--pur-fill);border-color:var(--pur-fill);color:#fff}
 html[data-theme="aurora"] #bar button[type=submit]:hover{background:var(--pur);border-color:var(--pur);color:#000}
 html[data-theme="aurora"] #talk{border-radius:16px;font-size:var(--t2);font-weight:600;box-shadow:none}
-/* inputs */
 html[data-theme="aurora"] input[type=text],html[data-theme="aurora"] input[type=date],html[data-theme="aurora"] input[type=time],html[data-theme="aurora"] input[type=number],
 html[data-theme="aurora"] input[type=password],html[data-theme="aurora"] input[type=email],html[data-theme="aurora"] input[type=url],html[data-theme="aurora"] input[type=search],
 html[data-theme="aurora"] input[type=tel],html[data-theme="aurora"] input:not([type]),html[data-theme="aurora"] select,html[data-theme="aurora"] textarea{
   background:rgba(4,7,12,.55);border:1px solid rgba(255,255,255,.12);border-radius:12px;font-size:var(--t1)}
 html[data-theme="aurora"] input:focus,html[data-theme="aurora"] select:focus,html[data-theme="aurora"] textarea:focus{border-color:var(--acc);box-shadow:0 0 0 3px rgba(0,240,255,.2)}
 html[data-theme="aurora"] ::placeholder{color:#7C8CA3}
-/* segmented controls and page tabs */
 html[data-theme="aurora"] .seg{border:1px solid var(--line);border-radius:999px;background:rgba(255,255,255,.04);padding:2px;gap:2px}
 html[data-theme="aurora"] .seg button{background:none;border-radius:999px;font-size:var(--t0);font-weight:600;color:var(--mute);padding:6px 14px}
 html[data-theme="aurora"] .seg button:hover{color:var(--fg)}
@@ -478,7 +444,6 @@ html[data-theme="aurora"] .seg button.on{background:rgba(0,240,255,.16);color:va
 html[data-theme="aurora"] .tabs{padding:12px 16px 0}
 html[data-theme="aurora"] .tabs .tab{display:inline-flex;align-items:center;font-size:var(--t0);font-weight:600;background:rgba(255,255,255,.04);border-color:var(--line)}
 html[data-theme="aurora"] .tabs .tab.on{background:rgba(0,240,255,.16);border-color:rgba(0,240,255,.4);color:var(--acc)}
-/* over the page: almost solid */
 html[data-theme="aurora"] .modal{background:var(--pop);border:1px solid rgba(255,255,255,.12);border-radius:16px;box-shadow:0 24px 60px rgba(0,0,0,.5)}
 html[data-theme="aurora"] .modal .mh{color:var(--fg);font-size:var(--t2);font-weight:600}
 html[data-theme="aurora"] .modalbg{background:rgba(0,0,0,.6)}
@@ -493,7 +458,6 @@ html[data-theme="aurora"] .pp-wrap,html[data-theme="aurora"] .gstage{border-radi
 @media (prefers-reduced-motion:reduce){html[data-theme="aurora"] *,html[data-theme="aurora"] *::before,html[data-theme="aurora"] *::after{transition:none!important;animation:none!important}
   html[data-theme="aurora"] .btn:hover,html[data-theme="aurora"] .tabs .tab:hover{transform:none}}
 
-/* Tokens page (app/tokens.py): one row of big numbers, flags, a 14-day stacked bar chart, top sessions. Theme tokens only. */
 .tk-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:12px}
 .tk-big{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px;min-width:0}
 .tk-n{font-size:calc(28px*var(--ts,1));font-weight:700;line-height:1.1;font-variant-numeric:tabular-nums;color:var(--acc)}
@@ -511,7 +475,6 @@ html[data-theme="aurora"] .pp-wrap,html[data-theme="aurora"] .gstage{border-radi
 .tk-scroll{overflow-x:auto}.tk-tbl th,.tk-tbl td{padding:6px 8px;text-align:left;white-space:nowrap}.tk-tbl .num{text-align:right}
 @media(max-width:700px){.tk-val{display:none}.tk-chart{height:150px;gap:2px}}
 
-/* Settings > Menu editor (owner 2026-10-25: "allow me to reorganize the menu of rosie how i want"); colors come from the theme variables */
 .mg-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,340px),1fr));gap:8px;align-items:start}.mg-foot{grid-column:1/-1}
 .mg-card{margin-bottom:0;border:1px solid var(--line);border-radius:6px;background:var(--bg);padding:8px;min-width:0}
 .mg-head,.mg-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0}

@@ -1,23 +1,14 @@
-"""The Morning Paper's back-page puzzles and words, made by plain code (owner 2026-10-13 ~22:00 and ~23:30: words to learn with
-pronunciation, a Sudoku; the crossword gave way to a real cartoon, paper_cartoon.py):
-- "Words to learn": 6 words a day, never one used before. Words, definitions and examples are Princeton WordNet 3.0's; the
-  pronunciation is the CMU Pronouncing Dictionary's, shown as an easy respelling ("ak-wee-ESS"). paper_words.tsv is built by
-  tools/build_paper_words.py (licences: paper_words.LICENSE, paper_words.CMUDICT-LICENSE); a word without a CMU entry isn't in it.
-- a Sudoku with exactly one solution, made for a beginner (owner 2026-10-14: "i an very new to soduko"): lots of numbers already in
-  (45-50 givens) and solvable with singles only, no guessing. After two weeks it gets slowly harder (about one given fewer every
-  3 days) and stops at easy (36) unless the Sudoku level setting says easy or medium.
-Nothing random between runs: the same day gives the same puzzles (seeded by the date). No model and no network here."""
+# board #757 owner-words-sudoku-back-page
 import random
 import re
 from pathlib import Path
 
 WORDS = Path(__file__).resolve().parent / "paper_words.tsv"
-QUOTES = Path(__file__).resolve().parent / "paper_quotes.tsv"     # built by tools/build_paper_quotes.py from Wikiquote (CC BY-SA)
+QUOTES = Path(__file__).resolve().parent / "paper_quotes.tsv"
 QUOTE_FIELDS = ("id", "quote", "person", "role", "citation", "section", "url")
 
 
 def load_quotes(path=None) -> list[dict]:
-    """The quote list: real, sourced quotes from Wikiquote, each with its citation and page (paper_quotes.LICENSE)."""
     out = []
     for line in (path or QUOTES).read_text(encoding="utf-8").splitlines():
         parts = line.split("\t")
@@ -27,8 +18,6 @@ def load_quotes(path=None) -> list[dict]:
 
 
 def pick_quote(quotes: list[dict], used: dict, day: str) -> dict | None:
-    """Today's quote: the same all day (seeded by the date); never one already used until every quote has had its day, then the one
-    used longest ago first. `used` = {id: day it ran}."""
     if not quotes:
         return None
     fresh = [q for q in quotes if q["id"] not in used or used[q["id"]] == day]
@@ -41,7 +30,6 @@ MIN_LEN, MAX_LEN = 4, 9
 
 
 def load_words(path=None) -> list[dict]:
-    """[{word (upper case), pos, definition, example, kind}] from the word list; lines that aren't 4-9 plain letters are skipped."""
     out, seen = [], set()
     for line in (path or WORDS).read_text(encoding="utf-8").splitlines():
         if not line.strip() or line.startswith("#"):
@@ -60,7 +48,6 @@ def load_words(path=None) -> list[dict]:
 
 
 def pick_words(words: list[dict], used: set, seed: str, n=24) -> list[dict]:
-    """Up to n words never used before: words to learn, with a few business / tech / radio terms mixed in (about one in six)."""
     rnd = random.Random("words:" + seed)
     fresh = [w for w in words if w["word"] not in used]
     plain = [w for w in fresh if w["kind"] == "word"]
@@ -73,14 +60,11 @@ def pick_words(words: list[dict], used: set, seed: str, n=24) -> list[dict]:
     return out
 
 
-# ---------------------------------------------------------------- crossword (criss-cross fill: every run of 2+ letters is a word)
 def todays_words(words: list[dict], used: set, seed: str, n=6) -> list[dict]:
-    """The day's "Words to learn": n never-used words (about one in six a business / tech / radio term)."""
     return [{"answer": w["word"], "pos": w["pos"], "clue": w["definition"], "example": w["example"], "say": w.get("say", ""), "kind": w["kind"]}
             for w in pick_words(words, used, seed, n)]
 
 
-# ---------------------------------------------------------------- pronunciation: CMU Pronouncing Dictionary -> easy respelling
 VOWELS = {"AA": ("ah", "ah"), "AE": ("a", "a"), "AH": ("uh", "uh"), "AO": ("aw", "aw"), "AW": ("ow", "ow"), "AY": ("eye", "y"),
           "EH": ("eh", "e"), "ER": ("ur", "ur"), "EY": ("ay", "ay"), "IH": ("ih", "i"), "IY": ("ee", "ee"), "OW": ("oh", "oh"),
           "OY": ("oy", "oy"), "UH": ("uu", "uu"), "UW": ("oo", "oo")}
@@ -95,8 +79,6 @@ ONSETS3 = {("S", "T", "R"), ("S", "P", "R"), ("S", "K", "R"), ("S", "P", "L"), (
 
 
 def respell(phones: str) -> str:
-    """CMUdict ARPAbet ("AE2 K W IY0 EH1 S") -> an easy respelling with the stressed syllable in capitals ("ak-wee-ESS").
-    Syllables split by plain rules (a short stressed vowel keeps the next consonant; otherwise the longest English onset goes forward)."""
     ph = phones.split()
     vix = [i for i, p in enumerate(ph) if p[-1].isdigit()]
     if not vix:
@@ -113,7 +95,7 @@ def respell(phones: str) -> str:
             if not cl:
                 take = 0
             elif v in SHORT and ph[vi][-1] in "12":
-                take = 1                                      # HAB-it, ak-WEE: the short stressed vowel closes on a consonant
+                take = 1
             elif len(cl) >= 3 and tuple(cl[-3:]) in ONSETS3:
                 take = len(cl) - 3
             elif len(cl) >= 2 and tuple(cl[-2:]) in ONSETS:
@@ -131,25 +113,23 @@ def respell(phones: str) -> str:
         if base == "AY" and not onset:
             vow = "eye"
         if base == "UH" and coda[:1] == ["R"]:
-            vow = "oo"                                            # "SKYOOR", not "SKYUUR"
+            vow = "oo"  # board #757 quirk-respell-stress-caps
         tail = "".join(CONS.get(c, c.lower()) for c in coda)
         if i == len(sylls) - 1 and coda[-1:] == ["S"] and base in SHORT and len(coda) == 1:
-            tail = "ss"                                           # "ESS", not "ES"
+            tail = "ss"
         text = "".join(CONS.get(c, c.lower()) for c in onset) + vow + tail
         out.append(text.upper() if stress == "1" else text)
     return "-".join(out)
 
 
-# ---------------------------------------------------------------- Sudoku (exactly one solution)
-LEVELS = {"beginner": (45, 50), "easy": (36, 40), "medium": (30, 34)}     # givens (numbers already filled in), low..high
-RAMP_START = 48             # beginner, the first two weeks
-RAMP_WAIT, RAMP_EVERY = 14, 3          # then one given fewer every 3 days
-FLOOR = {"beginner": 36, "easy": 36, "medium": 30}   # the ramp never goes below this for the setting
+LEVELS = {"beginner": (45, 50), "easy": (36, 40), "medium": (30, 34)}
+RAMP_START = 48
+RAMP_WAIT, RAMP_EVERY = 14, 3
+FLOOR = {"beginner": 36, "easy": 36, "medium": 30}
 
 
 def want_givens(level: str, days_in: int) -> int:
-    """How many numbers to fill in today. beginner (the default): 48 for the first two weeks, then 1 fewer every 3 days, never below
-    36 (easy). easy: 38. medium: 32."""
+    # board #757 why-sudoku-givens-ramp
     if level == "easy":
         return 38
     if level == "medium":
@@ -162,8 +142,6 @@ def level_name(givens: int) -> str:
 
 
 def singles_solve(grid: list[int]) -> list[int] | None:
-    """Solve with naked singles (a cell with one possible number) and hidden singles (a number with one possible cell in a row,
-    column or box) only, the way a beginner does. The solved grid, or None if it needs guessing."""
     g = list(grid)
     groups = [[r * 9 + c for c in range(9)] for r in range(9)] + [[r * 9 + c for r in range(9)] for c in range(9)] + \
              [[(br + a) * 9 + bc + b for a in range(3) for b in range(3)] for br in (0, 3, 6) for bc in (0, 3, 6)]
@@ -196,7 +174,6 @@ def _cands(g, i):
 
 
 def count_solutions(grid: list[int], limit=2) -> int:
-    """How many solutions (stops at `limit`): 0 = impossible, 1 = a proper puzzle."""
     g = list(grid)
     n = 0
 
@@ -250,8 +227,6 @@ def valid_solution(g: list[int]) -> bool:
 
 
 def sudoku(seed: str, level: str = "beginner", days_in: int = 0) -> dict:
-    """{puzzle: 81 ints (0 = blank), solution, givens, level}: blanks dug out (in symmetric pairs) only while exactly one solution
-    remains and (beginner and easy) a beginner can still solve it with singles alone."""
     rnd = random.Random("sudoku:" + seed)
     sol = _full(rnd)
     want = want_givens(level, days_in)
@@ -271,7 +246,6 @@ def sudoku(seed: str, level: str = "beginner", days_in: int = 0) -> dict:
 
 
 def answer_key(sdk: dict | None) -> dict:
-    """The upside-down answer box: {"sudoku": "..."}."""
     out = {}
     if sdk:
         out["sudoku"] = "SUDOKU (row by row): " + " / ".join("".join(str(v) for v in sdk["solution"][r * 9:r * 9 + 9]) for r in range(9))

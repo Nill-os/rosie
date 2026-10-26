@@ -1,12 +1,3 @@
-"""The Memory graph page (owner 2026-10-21: "build in a visual ui for the memory graph in rosie"): what Rosie's memories look like as
-a map. Read-only, three sources:
-- corner: the Graphiti graph of Rosie's corner in FalkorDB (graph "rosie-corner"): things and the facts between them, each fact
-  traced to the corner pages it came from.
-- board: the agent board's long-term history (graph "agent-board").
-- mind: Rosie's own memory of the owner (data/mind.db): the people and things her memories mention, linked when one memory mentions
-  both; a link's facts are those memories.
-Only read queries (ro_query, a read-only SQLite connection). The busiest node ("Rosie" in the corner) links to almost everything, so
-the page can hide named nodes."""
 import json
 import re
 import sqlite3
@@ -22,8 +13,7 @@ SOURCES = {"corner": "rosie-corner", "board": "agent-board"}
 MAX_NODES = 600
 MAX_EDGES = 2500
 URL_RE = re.compile(r"https?://[^\s\"'<>)]+")
-# things the model pulled out of pages that are not things (owner 2026-10-21: "these categories make no sense"): clock times, dates,
-# colours, "A man", "The image", post ids. They stay in the graph but off the map.
+# board #732 owner-junk-off-map
 JUNK_RE = re.compile(r"""^(\d{1,2}:\d{2}(:\d{2})?\s*(utc|gmt|am|pm|[a-z]{2,4}t)?|\d{4}-\d{2}-\d{2}.*|\d+(\.\d+)?\s*%?|
     (jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2}(st|nd|rd|th)?(,?\s*\d{4})?|\d{1,2}(st|nd|rd|th)?\s+(of\s+)?(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*(\s*\d{4})?|
     (red|orange|yellow|green|blue|purple|violet|white|black|pink|gray|grey|brown|cyan|magenta|silver|gold)|
@@ -36,7 +26,7 @@ _lock = threading.Lock()
 
 
 class Unavailable(Exception):
-    """The graph can't be read now; the message is the plain reason the page shows."""
+    pass
 
 
 def _graph(name: str):
@@ -53,7 +43,7 @@ def _graph(name: str):
 def _ro(g, query: str, params: dict | None = None) -> list:
     try:
         return g.ro_query(query, params or {}).result_set
-    except Exception as e:                                       # down, starting, or a query error: the page says so
+    except Exception as e:
         raise Unavailable(f"The memory graph database is not answering ({type(e).__name__}).")
 
 
@@ -63,13 +53,11 @@ def junk(name: str) -> bool:
 
 
 def _corner_topics(g, ids: list) -> dict:
-    """Each thing's topic: the corner topic group most of its pages are in (her own groups: Meshtastic, SDR, Local AI...).
-    {uuid: (group id, title)}; things only seen on ungrouped pages have none."""
     rows = _ro(g, "MATCH (e:Episodic)-[:MENTIONS]->(n:Entity) WHERE n.uuid IN $ids RETURN n.uuid, e.name", {"ids": ids})
     path = testguard.check(corner.DIR / "corner.db")
     try:
         c = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=5)
-    except sqlite3.Error:                                         # no corner yet: no topics, the page falls back to link groups
+    except sqlite3.Error:
         return {}
     try:
         find_grp = {str(i): g for i, g in c.execute("SELECT id, grp FROM finds WHERE grp IS NOT NULL AND grp != ''")}
@@ -114,10 +102,7 @@ def _corner_topics(g, ids: list) -> dict:
 
 
 def merged_groups(titles: dict) -> dict:
-    """Rosie makes some topic groups herself, and some are offshoots of another ("Meshtastic Tools", "Meshtastic AI & Agents" next to
-    "Meshtastic"). On the map an offshoot joins the group whose whole name it starts with; groups that only share a theme (RF, ham radio,
-    SDR) stay apart (owner 2026-10-21: "refine the groups ... but don't go as hard as moving everything into an rf group").
-    {offshoot id: main group id}."""
+    # board #732 owner-groups-not-by-theme
     norm = {gid: " ".join(re.findall(r"[a-z0-9]+", ((g or {}).get("title") or gid).lower())) for gid, g in titles.items()}
     out = {}
     for gid, t in norm.items():
@@ -125,14 +110,14 @@ def merged_groups(titles: dict) -> dict:
         for other, ot in norm.items():
             if other == gid or not ot:
                 continue
-            same = ot == t and other < gid                        # the same name twice: the first one is the main group
+            same = ot == t and other < gid
             if same or (t.startswith(ot + " ") and (best is None or len(ot) < len(norm[best]))):
                 best = other
                 if same:
                     break
         if best:
             out[gid] = best
-    for gid in list(out):                                         # follow chains: A -> B -> C becomes A -> C
+    for gid in list(out):
         seen = {gid}
         while out.get(out[gid]) and out[out[gid]] not in seen:
             seen.add(out[gid])
@@ -145,8 +130,6 @@ def _when(v) -> str:
 
 
 def view(source: str, q: str = "", limit: int = 150, hide: tuple = (), old: bool = False) -> dict:
-    """{nodes: [{id, name, summary, degree}], edges: [{id, source, target, name, fact, valid, invalid}], total}: the most connected
-    things (or those matching q, with their neighbours)."""
     limit = max(20, min(int(limit or 150), MAX_NODES))
     q = (q or "").strip()[:80]
     hide = tuple(sorted({h.strip().lower() for h in hide if h and h.strip()}))[:20]
@@ -240,7 +223,6 @@ def _view_mind(q: str, limit: int, hide: tuple) -> dict:
 
 
 def node(source: str, nid: str) -> dict:
-    """One node: its summary, its facts (with the other side and, for the corner, the pages they came from)."""
     nid = str(nid or "")[:80]
     if source == "mind":
         c = _mind_db()
@@ -273,8 +255,7 @@ def node(source: str, nid: str) -> dict:
 
 
 def links(source: str, pairs: list) -> dict:
-    """The facts on each link of the chains between Ctrl+clicked things (owner 2026-10-21: "tell me how they are connected"):
-    {"a~b": [{fact, name, valid, invalid}]} for at most 40 links, 12 facts each. Read-only."""
+    # board #732 owner-show-connections
     pairs = [(str(a)[:80], str(b)[:80]) for a, b in pairs[:40] if a and b and a != b]
     out = {f"{a}~{b}": [] for a, b in pairs}
     if not pairs:
@@ -305,7 +286,6 @@ def links(source: str, pairs: list) -> dict:
 
 
 def counts() -> dict:
-    """For the page's source switch: how big each graph is (None when it can't be read)."""
     out = {}
     for key, name in SOURCES.items():
         try:

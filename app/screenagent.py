@@ -1,6 +1,3 @@
-"""'Do this on my phone' for anything the ready-made phone tools do not cover: look at the screen, decide ONE step, do it, look again.
-Safety: bounded steps, screen text is treated as data never instructions, risky buttons (Send, Pay, Delete...) stop and ask the user, and banking / passwords / payments / security
-screens are blocked on the phone itself. Stop on the 'controlling your screen' notification halts it immediately."""
 import time
 
 import phone

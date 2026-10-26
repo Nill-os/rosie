@@ -1,5 +1,4 @@
 #!/bin/bash
-# Run once with: sudo ./install-service.sh   (installs auto-start + Tailscale)
 set -e
 [ "$EUID" -eq 0 ] || { echo "Run with sudo: sudo ./install-service.sh"; exit 1; }
 U="${SUDO_USER:-$USER}"; D="$(cd "$(dirname "$0")" && pwd)"

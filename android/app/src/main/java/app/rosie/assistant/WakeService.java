@@ -31,12 +31,11 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.regex.Pattern;
 
-/** Listens (only on this phone, with a small offline model) for "Hey Rosie" and then opens the app and starts the conversation.
- *  No audio leaves the phone and none is stored: it is matched against that one phrase and thrown away. */
+// board #693 safety-wake-audio-discarded
 public class WakeService extends Service {
     static volatile boolean running = false;
     static final String CHANNEL = "wake", STOP = "app.rosie.assistant.STOP_WAKE", CONVERSE = "app.rosie.assistant.CONVERSE", CANCEL = "app.rosie.assistant.CANCEL_CONVERSATION", LINK = "app.rosie.assistant.LINK";
-    static volatile boolean near = false;                      // proximity sensor: something is covering the front of the phone (a pocket, a table, a hand)
+    static volatile boolean near = false;
     private android.hardware.SensorManager sensors;
     private android.hardware.SensorEventListener proxListener;
 
@@ -47,7 +46,6 @@ public class WakeService extends Service {
 
     static final String[] DEFAULT_ALIASES = {"hey rosie", "hay rosie", "hi rosie", "hey rosy", "hey rosey", "hey rosi", "a rosie"};
 
-    /** Unpacks the offline model once and returns its folder. */
     static File modelDir(Context c) throws Exception {
         File dir = new File(c.getFilesDir(), "model-v1");
         if (!new File(dir, "ok").exists()) {
@@ -59,7 +57,6 @@ public class WakeService extends Service {
         return dir;
     }
 
-    /** The phrases that count as "Hey Rosie": the built-in ones plus whatever your own voice was heard as during training. */
     static java.util.Set<String> aliases(Context c) {
         java.util.Set<String> a = new java.util.LinkedHashSet<>(java.util.Arrays.asList(DEFAULT_ALIASES));
         String learned = c.getSharedPreferences("assistant", MODE_PRIVATE).getString("aliases", "");
@@ -67,14 +64,12 @@ public class WakeService extends Service {
         return a;
     }
 
-    /** Speech quieter than this is ignored (far-away TV, other rooms). Learned from how loudly you spoke in training. */
     static float gate(Context c) {
         SharedPreferences p = c.getSharedPreferences("assistant", MODE_PRIVATE);
         float g = p.getFloat("gate", 0.012f);
-        return p.getBoolean("pocket", false) ? Math.max(0.003f, g * 0.35f) : g;       // in a pocket the voice is muffled: accept quieter speech
+        return p.getBoolean("pocket", false) ? Math.max(0.003f, g * 0.35f) : g;
     }
 
-    /** True if the recognised text is one of the wake phrases (allowing at most one extra word after it). */
     static boolean isWake(String text, java.util.Set<String> aliases) { return isWake(text, aliases, false); }
 
     static boolean isWake(String text, java.util.Set<String> aliases, boolean exactOnly) {
@@ -95,7 +90,7 @@ public class WakeService extends Service {
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent != null && STOP.equals(intent.getAction())) {
             VoiceSession live = activeSession;
-            if (live != null) live.cancel();                                // stop talking this instant, not when she finishes the sentence
+            if (live != null) live.cancel();
             getSharedPreferences("assistant", MODE_PRIVATE).edit().putBoolean("wake", false).apply();
             stopSelf();
             return START_NOT_STICKY;
@@ -111,25 +106,25 @@ public class WakeService extends Service {
                 .addAction(new Notification.Action.Builder(null, "Turn off Hey Rosie", stopPi).build()).build();
         try {
             if (Build.VERSION.SDK_INT >= 29) startForeground(1, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE); else startForeground(1, n);
-        } catch (Throwable t) {                                             // Android refused (permission revoked, or started from the background): stop cleanly instead of crashing and restarting forever
+        } catch (Throwable t) {  // board #693 why-stop-not-restart-loop
             Log.e("Rosie", "cannot start the microphone service: " + t);
             stopSelf();
             return START_NOT_STICKY;
         }
-        if (intent != null && CANCEL.equals(intent.getAction())) {            // "Cancel" on the status notification
+        if (intent != null && CANCEL.equals(intent.getAction())) {
             VoiceSession s = activeSession;
             if (s != null) s.cancel();
             return START_STICKY;
         }
         boolean converse = intent != null && CONVERSE.equals(intent.getAction());
         boolean wakeOn = getSharedPreferences("assistant", MODE_PRIVATE).getBoolean("wake", false);
-        if (converse && !sessionActive) {                                   // headphone button / assistant gesture: talk now
+        if (converse && !sessionActive) {
             sessionActive = true;
             new Thread(() -> {
                 try { woke(); } finally {
                     sessionActive = false;
                     SharedPreferences sp2 = getSharedPreferences("assistant", MODE_PRIVATE);
-                    if (!sp2.getBoolean("wake", false)) stopSelf();                  // phone control runs in its own service: it must not keep the microphone service alive
+                    if (!sp2.getBoolean("wake", false)) stopSelf();
                 }
             }, "converse").start();
         }
@@ -152,7 +147,7 @@ public class WakeService extends Service {
             lock.acquire();
             loop = new Thread(this::listen, "wake");
             loop.start();
-            new Thread(() -> Sounds.play(this, "on")).start();                                 // "I'm listening for Hey Rosie now"
+            new Thread(() -> Sounds.play(this, "on")).start();
             new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> android.widget.Toast.makeText(this, "Hey Rosie is on. Say \"Hey Rosie\" any time.", android.widget.Toast.LENGTH_LONG).show());
         }
         return converse && !wakeOn ? START_NOT_STICKY : START_STICKY;
@@ -175,7 +170,7 @@ public class WakeService extends Service {
         Model model = null; Recognizer rec = null; AudioRecord mic = null;
         try {
             model = new Model(modelDir(this).getAbsolutePath());
-            rec = new Recognizer(model, 16000f);                        // free-form listening: it must really hear the words, not just something close
+            rec = new Recognizer(model, 16000f);
             double peak = 0;
             short[] buf = new short[3200];
             long coolUntil = 0;
@@ -185,16 +180,15 @@ public class WakeService extends Service {
             int silentFrames = 0;
             boolean warned = false;
             while (!stop) {
-                boolean idle = MainActivity.visible || sessionActive || System.currentTimeMillis() < coolUntil;     // the app itself is using the mic, or we just woke
+                boolean idle = MainActivity.visible || sessionActive || System.currentTimeMillis() < coolUntil;
                 SharedPreferences sp = getSharedPreferences("assistant", MODE_PRIVATE);
                 boolean pocketRule = sp.getBoolean("pocketrule", true);
-                boolean pocketNow = near && !((PowerManager) getSystemService(POWER_SERVICE)).isInteractive();          // covered and the screen is off: in a pocket or bag
+                boolean pocketNow = near && !((PowerManager) getSystemService(POWER_SERVICE)).isInteractive();
                 boolean headset = MicRoute.wired(this) != null || MicRoute.bluetooth(this) != null;
                 if (pocketRule && pocketNow && !headset) idle = true;
-                                                  // in a pocket with no headset: stay off
-                boolean bt = sp.getBoolean("btmic", false) || (pocketRule && pocketNow);                              // in a pocket: only the Bluetooth headset mic can hear you
+                boolean bt = sp.getBoolean("btmic", false) || (pocketRule && pocketNow);
                 String route = MicRoute.key(this, bt);
-                if (mic != null && !route.equals(curRoute)) idle = true;                              // headphones plugged in or out: reopen on the right microphone
+                if (mic != null && !route.equals(curRoute)) idle = true;
                 boolean dbg = sp.getBoolean("wake_debug", false);
                 if (dbg) {
                     String st = idle ? (MainActivity.visible ? "paused: app on screen" : sessionActive ? "paused: conversation" : System.currentTimeMillis() < coolUntil ? "paused: cooldown" : (pocketRule && pocketNow && !headset) ? "paused: pocket, no headset" : "paused: route change") : "listening via " + route;
@@ -217,25 +211,25 @@ public class WakeService extends Service {
                 int n = mic.read(buf, 0, buf.length);
                 if (n <= 0) { Thread.sleep(50); continue; }
                 int maxAbs = 0; for (int i = 0; i < n; i++) maxAbs = Math.max(maxAbs, Math.abs(buf[i]));
-                if (maxAbs == 0) { if (++silentFrames > 60 && !warned) { warned = true; micBlocked(); } } else { silentFrames = 0; warned = false; }       // Android sometimes silences the mic for a background app
+                if (maxAbs == 0) { if (++silentFrames > 60 && !warned) { warned = true; micBlocked(); } } else { silentFrames = 0; warned = false; }  // board #693 quirk-background-mic-silence
                 double sum = 0; for (int i = 0; i < n; i++) sum += (buf[i] / 32768.0) * (buf[i] / 32768.0);
                 peak = Math.max(peak, Math.sqrt(sum / n));
                 beatPeak = Math.max(beatPeak, Math.sqrt(sum / n));
                 if (sp.getBoolean("wake_debug", false) && System.currentTimeMillis() - beat > 5000) { Log.i("Rosie", "wake: alive, mic level peak=" + String.format("%.4f", beatPeak) + " phrases=" + finals); beat = System.currentTimeMillis(); beatPeak = 0; }
-                if (!rec.acceptWaveForm(buf, n)) continue;                // only act on a finished phrase
+                if (!rec.acceptWaveForm(buf, n)) continue;
                 String text = new JSONObject(rec.getResult()).optString("text", "");
                 double loud = peak; peak = 0;
                 if (sp.getBoolean("wake_debug", false)) { finals++; Log.i("Rosie", "wake: heard [" + text + "] level=" + String.format("%.4f", loud) + " gate=" + String.format("%.4f", gate(this))); }
                 if (text.isEmpty()) continue;
                 boolean heardName = text.contains("ros") || text.contains("hey");
                 boolean pocket = getSharedPreferences("assistant", MODE_PRIVATE).getBoolean("pocket", false);
-                boolean match = isWake(text, aliases(this), pocket);        // pocket mode is stricter about the words to make up for the quieter gate
+                boolean match = isWake(text, aliases(this), pocket);
                 if (match && loud < gate(this)) { Log.i("Rosie", "ignored (too quiet " + loud + "): " + text); continue; }
                 if (heardName) Log.i("Rosie", (match ? "WAKE: " : "ignored: ") + text);
                 if (match) {
                     rec.reset();
-                    if (mic != null) { try { mic.stop(); } catch (Exception ignored) { } mic.release(); mic = null; MicRoute.release(this); }     // the conversation uses the microphone now
-                    sessionActive = true;                                    // a headphone-button press now must not start a second conversation on top of this one
+                    if (mic != null) { try { mic.stop(); } catch (Exception ignored) { } mic.release(); mic = null; MicRoute.release(this); }
+                    sessionActive = true;  // board #693 why-no-second-session
                     try { woke(); } finally { sessionActive = false; }
                     coolUntil = System.currentTimeMillis() + 1500;
                 }
@@ -247,7 +241,7 @@ public class WakeService extends Service {
             if (rec != null) rec.close();
             if (model != null) model.close();
             running = false;
-            loop = null;                                                     // so a dead listener can be started again
+            loop = null;
             if (lock != null && lock.isHeld()) lock.release();
         }
     }
@@ -260,11 +254,11 @@ public class WakeService extends Service {
     }
 
     private void woke() {
-        if (Sounds.vibrate(this)) try { ((android.os.Vibrator) getSystemService(Context.VIBRATOR_SERVICE)).vibrate(android.os.VibrationEffect.createOneShot(70, android.os.VibrationEffect.DEFAULT_AMPLITUDE)); } catch (Exception ignored) { }   // so you feel it in your pocket
+        if (Sounds.vibrate(this)) try { ((android.os.Vibrator) getSystemService(Context.VIBRATOR_SERVICE)).vibrate(android.os.VibrationEffect.createOneShot(70, android.os.VibrationEffect.DEFAULT_AMPLITUDE)); } catch (Exception ignored) { }
         Sounds.play(this, "wake");
         RosieOverlay ov = new RosieOverlay(this);
         PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
-        if (!(Settings.canDrawOverlays(this) && pm.isInteractive())) ov = new RosieOverlay(this) { @Override void show(String st, String cap) { } };      // screen off or no permission: talk with sound only
+        if (!(Settings.canDrawOverlays(this) && pm.isInteractive())) ov = new RosieOverlay(this) { @Override void show(String st, String cap) { } };
         new VoiceSession(this, ov).run();
     }
 

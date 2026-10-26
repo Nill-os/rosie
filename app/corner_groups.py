@@ -1,15 +1,4 @@
-"""Rosie's finds in easy-to-read groups (owner 2026-10-17: "have her consolidate her finds into easy to read groups in tabs").
-
-- Groups come from the owner's interests (near-duplicates merged: every "Local AI …" interest is one "Local AI" group, festivals and
-  rave tech are one group), plus groups Rosie adds herself through her layout ("add_group", logged, undoable, inside her change
-  budget). Anything that fits none goes in "Other".
-- A find is placed by keywords first. Only unclear ones (a tie, or no keyword at all) go to the local model, as one short JSON question
-  per batch. The owner's "Move to…" is final: it is never redone.
-- Consolidating for the page: duplicates (the same address, or nearly the same title) become one card that says "also on …"; each
-  group is newest first, with "more like this" finds on top; the header is either the group's most representative sentence, word
-  for word from a find with its source, or a note of Rosie's, marked as hers. Nothing is made up here.
-
-This file reads and writes only the corner's own database; the model is passed in by corner_browse (it has no network of its own)."""
+# board #723 owner-finds-in-groups
 import difflib
 import re
 import urllib.parse
@@ -24,7 +13,7 @@ LOCAL_AI = {"id": "local-ai", "title": "Local AI",
 FESTIVALS = {"id": "festivals-rave-tech", "title": "Festivals & rave tech",
              "words": ["festival", "festivals", "rave", "raves", "edm", "burning man", "light show", "sound system", "dj", "ws2812",
                        "neopixel", "led strip", "led strips", "laser show"]}
-KNOWN = {   # extra keywords for the owner's interests, by their lowercase name
+KNOWN = {
     "rf": ["rf", "radio frequency", "antenna", "antennas", "yagi", "dipole", "mhz", "ghz", "spectrum"],
     "ham radio": ["ham radio", "ham", "amateur radio", "arrl", "callsign", "qso", "repeater", "pota", "sota", "hf", "vhf", "uhf", "fcc"],
     "meshtastic": ["meshtastic", "lora", "meshcore", "mesh network", "mesh radio"],
@@ -43,7 +32,6 @@ def _slug(t: str) -> str:
 
 
 def groups(layout: dict | None = None) -> list[dict]:
-    """The groups, in order: the owner's interests (merged), then Rosie's own. "Other" is not in this list."""
     out, seen = [], set()
 
     def add(g):
@@ -68,13 +56,11 @@ def _rx(words):
 
 
 def score(f: dict, gs: list[dict]) -> dict:
-    """Keyword hits per group: a hit in the title counts 2, in the summary 1."""
     title, body = f["title"], " ".join(f.get("summary") or [])
     return {g["id"]: sum(2 * bool(r.search(title)) + bool(r.search(body)) for r in _rx(g["words"])) for g in gs}
 
 
 def by_keywords(f: dict, gs: list[dict]) -> tuple[str, bool]:
-    """(group id, clear?). Clear = one group scores highest; otherwise the best guess (or Other) and the model is asked."""
     sc = score(f, gs)
     top = max(sc.values(), default=0)
     best = [g for g, v in sc.items() if v == top and v > 0]
@@ -84,14 +70,12 @@ def by_keywords(f: dict, gs: list[dict]) -> tuple[str, bool]:
 
 
 def assign(llm=None, batch: int = 20) -> int:
-    """Place finds that have no group yet (or only a guess, or a group that no longer exists). The owner's moves are never redone.
-    `llm(user, schema, predict)` answers the unclear ones, one JSON question per batch. Returns how many were placed."""
     gs = groups()
     ids = {g["id"] for g in gs} | {"other"}
     with corner._db() as db:
         rows = [corner._find_row(r) for r in db.execute("SELECT * FROM finds WHERE hidden=0 AND (grp_by IS NULL OR grp_by != 'owner')")]
     sig = ",".join(sorted(ids))
-    if corner.meta_get("groups_sig") != sig:                    # first run, or the groups changed: look at every find again
+    if corner.meta_get("groups_sig") != sig:
         todo = rows
         corner.meta_set("groups_sig", sig)
     else:
@@ -122,7 +106,7 @@ def assign(llm=None, batch: int = 20) -> int:
 
 
 def move(fid: int, gid: str) -> dict:
-    """The owner's "Move to…": final, and remembered (assign never touches it again)."""
+    # board #723 owner-move-is-final
     if gid not in {g["id"] for g in groups()} | {"other"}:
         raise ValueError("No such group")
     with corner._db() as db:
@@ -131,7 +115,6 @@ def move(fid: int, gid: str) -> dict:
     return corner.find(fid)
 
 
-# ---------------------------------------------------------------- consolidating for the page
 def _norm_url(u: str) -> str:
     p = urllib.parse.urlsplit(u)
     q = "&".join(x for x in p.query.split("&") if x and not x.lower().startswith(("utm_", "fbclid", "gclid", "ref=")))
@@ -140,7 +123,7 @@ def _norm_url(u: str) -> str:
 
 
 def _norm_title(t: str) -> str:
-    t = re.split(r"\s+[|–—-]\s+", t.lower())[0]                 # "Title | Site name" -> "title"
+    t = re.split(r"\s+[|–—-]\s+", t.lower())[0]
     return re.sub(r"[^a-z0-9 ]+", " ", t).strip()
 
 
@@ -155,7 +138,6 @@ def _same(a: dict, b: dict) -> bool:
 
 
 def cards(finds: list[dict]) -> list[dict]:
-    """Duplicates merged into one card ("also on …"); newest first, "more like this" on top."""
     finds = sorted(finds, key=lambda f: f["at"], reverse=True)
     finds = sorted(finds, key=lambda f: not f["more"])
     out = []
@@ -176,8 +158,6 @@ def cards(finds: list[dict]) -> list[dict]:
 
 
 def _header(g: dict, members: list[dict], notes: list[dict]) -> dict:
-    """What's in here, without making anything up: the most representative sentence word for word with its source, and Rosie's newest
-    note that is about two or more of these finds, marked as hers."""
     rx = _rx(g["words"])
     best, best_score = None, 0
     for f in members:
@@ -194,8 +174,7 @@ def _header(g: dict, members: list[dict], notes: list[dict]) -> dict:
 
 
 def view(look: bool = False) -> dict:
-    """Everything the Finds tab shows. Places new finds by keywords first (the model pass runs in her sessions). look=True: the owner
-    opened the tab, which moves "New since you looked" on (at most once every 30 minutes, so a refresh doesn't empty it)."""
+    # board #723 why-look-every-30min
     assign(llm=None)
     gs = groups()
     now = corner._iso()

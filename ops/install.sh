@@ -1,5 +1,4 @@
 #!/bin/bash
-# Installs the A/B update system. Safe to run again. The live service keeps running on slot A until you switch.
 set -e
 SRC="$(cd "$(dirname "$0")" && pwd)"
 OPS="$HOME/rosie-ops"
@@ -25,7 +24,6 @@ OnUnitActiveSec=1min
 [Install]
 WantedBy=timers.target
 UNIT
-# autopilot: audits new chats after you use Rosie and fixes the idle slot; switches at midnight (turn off: python3 ~/rosie-ops/autopilot.py off)
 cat > "$HOME/.config/systemd/user/rosie-audit.service" <<UNIT
 [Unit]
 Description=Rosie autopilot audit

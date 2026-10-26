@@ -13,8 +13,7 @@ import org.json.JSONObject;
 
 import java.util.ArrayList;
 
-/** Lets Rosie read your notifications and answer message notifications (WhatsApp, Messages, Slack...) with the reply box built into them.
- *  Only a short in-memory list is kept; nothing is written to disk. */
+// board #689 safety-notifications-memory-only
 public class RosieNotificationListener extends NotificationListenerService {
     static volatile RosieNotificationListener instance;
 

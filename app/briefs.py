@@ -1,5 +1,4 @@
-"""Daily Brief, built entirely by plain code from your real calendar, tasks and working memory.
-No model is involved, so it cannot invent items, reasons, health data or appointments, and it works even if the model is not loaded."""
+# board #715 why-brief-plain-code
 import datetime as dt
 import json
 import sqlite3
@@ -51,7 +50,6 @@ def _plural(n, word):
 
 
 def build_text(day: dt.date | None = None) -> str:
-    """Everything here is computed by code from real data."""
     day = day or workflows.today()
     mem = workflows.read_memfile()
     cal_error = ""
@@ -59,8 +57,8 @@ def build_text(day: dt.date | None = None) -> str:
         cal = [e for e in gcal.events_on(day) if not e["all_day"]]
     except gcal.LoginExpired as e:
         cal, cal_error = [], str(e)
-    except Exception as e:                                # no network yet after a wake-up: a brief without the calendar beats no brief
-        cal, cal_error = [], f"The calendar couldn't be read ({type(e).__name__}); check it yourself today."   # (audit 2026-10-23)
+    except Exception as e:  # board #715 why-brief-without-calendar
+        cal, cal_error = [], f"The calendar couldn't be read ({type(e).__name__}); check it yourself today."
     open_today = [t for t in tasks.list_for(day.isoformat()) if not t["done"]]
     overdue = tasks.overdue()
     aging = []
@@ -69,8 +67,7 @@ def build_text(day: dt.date | None = None) -> str:
         if age >= 7 and t["due"] >= day.isoformat() and t["id"] not in {x["id"] for x in open_today}:
             aging.append((t, age))
 
-    # Fixed, predictable order (no model): overdue, due today, long-open, then calendar to fill any gaps.
-    cands: list[dict] = []   # {"title","reason"}
+    cands: list[dict] = []
     for t in overdue[:6]:
         days = (day - dt.date.fromisoformat(t["due"])).days
         cands.append({"title": t["title"], "reason": f"overdue since {t['due']} ({_plural(days, 'day')})"})
@@ -151,7 +148,6 @@ def generate(force=False, day: dt.date | None = None) -> dict:
         return for_day(day.isoformat())
 
 
-# ---------- scheduler ----------
 _started = False
 _attempts: dict[str, int] = {}
 

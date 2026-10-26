@@ -12,7 +12,6 @@ import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 
-/** Keeps a connection to your PC and does the jobs Rosie sends (see PhoneActions). Runs only while "Let Rosie use my phone" is on. */
 public class PhoneLink implements Runnable {
     static volatile boolean running = false;
     private final Context ctx;
@@ -48,7 +47,7 @@ public class PhoneLink implements Runnable {
                 fails = 0;
                 JSONObject cmd = j.optJSONObject("cmd");
                 if (cmd == null) continue;
-                if (stop || !ctx.getSharedPreferences("assistant", Context.MODE_PRIVATE).getBoolean("phonectl", false)) break;     // switched off while waiting: do NOT run it
+                if (stop || !ctx.getSharedPreferences("assistant", Context.MODE_PRIVATE).getBoolean("phonectl", false)) break;  // board #688 why-recheck-after-wait
                 JSONObject res = new JSONObject().put("id", cmd.getString("id"));
                 try {
                     Log.i("Rosie", "phone job: " + cmd.getString("action"));

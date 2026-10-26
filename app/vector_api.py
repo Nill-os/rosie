@@ -1,5 +1,4 @@
-"""The Vector page (owner 2026-10-21: "make my own local AI on it without using the clunky program, i want it to be rosie"):
-turn Rosie's Vector server on, point the robot at her, set his personality and voice commands, and see what he heard last."""
+# board #788 owner-vector-runs-rosie
 import re
 import subprocess
 
@@ -87,7 +86,7 @@ def vector_settings(body: dict):
     if "on" in body:
         cfg["vector_on"] = bool(body["on"])
     config.save(cfg)
-    if "quiet_idle" in body or "talk_volume" in body:              # muted now when turned on; his talking volume back when turned off
+    if "quiet_idle" in body or "talk_volume" in body:  # board #788 why-quiet-idle-volume
         bot = vector_pod.robot() if cfg.get("vector_robots") else None
         if bot is not None:
             try:

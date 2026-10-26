@@ -1,4 +1,3 @@
-"""Full PC control tools (runs as your user, no sudo). Every call is logged to data/audit.log."""
 import datetime as dt
 import json
 import subprocess
@@ -8,9 +7,8 @@ import os
 import shutil
 
 def user_bus_env() -> dict:
-    """This environment plus the owner's user systemd bus. Rosie runs as a system service without them, so `systemd-run --user` and
-    `systemctl --user` failed with "Failed to connect to bus" (audit 2026-10-20: Shut down all and the self-update jobs)."""
-    if os.name == "nt":                                    # Windows has no user bus: the plain environment
+    # board #760 why-user-bus-missing
+    if os.name == "nt":
         return dict(os.environ)
     run = f"/run/user/{os.getuid()}"
     return {**os.environ, "XDG_RUNTIME_DIR": os.environ.get("XDG_RUNTIME_DIR") or run,
@@ -18,9 +16,6 @@ def user_bus_env() -> dict:
 
 
 def gui_env() -> dict:
-    """Environment of the user's live desktop session (DISPLAY, XAUTHORITY, ...), read from the running
-    desktop shell, because this service runs headless. Works for X11 and Wayland. On Windows Rosie runs in the owner's own session:
-    nothing extra is needed ({})."""
     if os.name == "nt":
         return {}
     me = os.getuid()
@@ -45,9 +40,7 @@ GUI_KEYS = ("DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "XDG_RUNTIME_DIR", "DBUS
 
 
 def _session_env(me: int) -> dict:
-    """The desktop session's environment as the user's systemd keeps it. On a Wayland session gnome-shell's own environment has no
-    DISPLAY or WAYLAND_DISPLAY (it makes them), so the loop in gui_env found nothing and every desktop feature of the service
-    (notifications, the voice-key and overlay checks) went without (2026-10-22)."""
+    # board #760 fix-gnome-shell-display-env
     run = f"/run/user/{me}"
     base = {"XDG_RUNTIME_DIR": run, "DBUS_SESSION_BUS_ADDRESS": f"unix:path={run}/bus"}
     try:
@@ -77,8 +70,7 @@ def _trim(s):
 
 
 def run_command(command: str, cwd: str = "~", timeout: int = 60):
-    """One command in the user's shell (PowerShell on Windows, bash here). It runs in its own process group, so a timeout stops
-    exactly what it started, by PID (a program it left running would otherwise hold the output pipe open forever on Windows)."""
+    # board #760 why-own-process-group
     import plat
     cwd = str(Path(cwd).expanduser())
     _log("run", {"command": command, "cwd": cwd})
@@ -100,10 +92,10 @@ def run_command(command: str, cwd: str = "~", timeout: int = 60):
         out, err = p.communicate(timeout=limit)
         return {"exit_code": p.returncode, "stdout": _trim(out), "stderr": _trim(err)}
     except subprocess.TimeoutExpired:
-        if p.poll() is None:                                  # the command itself still runs: stop it and what it started
+        if p.poll() is None:
             _stop_tree(p.pid)
             msg = f"Timed out after {limit}s"
-        else:                                                 # it finished, but an app it started (`app &`) still holds the output
+        else:
             msg = f"Done (exit {p.returncode}); a program it started is still running"
         try:
             out, err = p.communicate(timeout=5)
@@ -116,7 +108,6 @@ def run_command(command: str, cwd: str = "~", timeout: int = 60):
 
 
 def _stop_tree(pid: int):
-    """Stop a timed-out command and only the processes it started (its own process group / tree), by PID."""
     try:
         if os.name == "nt":
             subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)], capture_output=True, timeout=20)
@@ -128,8 +119,6 @@ def _stop_tree(pid: int):
 
 
 def read_file(path: str, max_chars: int = 6000):
-    """Through fsguard, like the notes MCP: inside the home folder only, never keys, tokens, credential stores or Rosie's own
-    secrets and databases, and known secret patterns are redacted (audit 2026-10-20: an injected turn could read a token and send it out)."""
     import fsguard
     _log("read", {"path": str(Path(path).expanduser())})
     try:
@@ -149,7 +138,7 @@ def write_file(path: str, content: str, append: bool = False):
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
         backup = None
-        if p.exists() and not append:  # cheap safety net, no prompt
+        if p.exists() and not append:
             backup = p.with_name(p.name + ".bak")
             backup.write_bytes(p.read_bytes())
         with p.open("a" if append else "w") as f:
@@ -172,7 +161,6 @@ def list_dir(path: str = "~"):
 
 
 def open_on_desktop(target: str):
-    """Open a file, folder, URL or app on the user's screen (like double-clicking it)."""
     t = target if "://" in target else str(Path(target).expanduser())
     _log("open", {"target": t})
     if "://" not in t and not Path(t).exists():
@@ -184,7 +172,7 @@ def open_on_desktop(target: str):
         p = subprocess.run(["xdg-open", t], env={**os.environ, **env}, stdin=subprocess.DEVNULL,
                            capture_output=True, text=True, timeout=8)
     except subprocess.TimeoutExpired:
-        return {"status": "launched (still starting)", "target": t}   # slow apps keep xdg-open alive; not a failure
+        return {"status": "launched (still starting)", "target": t}  # board #760 quirk-xdg-open-slow-apps
     if p.returncode != 0:
         return {"error": f"xdg-open failed (code {p.returncode}): {(p.stderr or p.stdout).strip()[:200]}"}
     return {"status": "launched; check your screen. I cannot see the screen to confirm a window appeared.", "target": t}

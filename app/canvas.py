@@ -1,9 +1,4 @@
-"""Canvas due dates in Google Calendar (owner 2026-10-24: move the partner's daily "Canvas to Calendar" task into Rosie, so there is one
-place to fix). Reads the Canvas calendar feed (Canvas: Calendar > Calendar Feed, an .ics link), and keeps one all-day event per upcoming
-due date in the calendar Rosie writes to (Settings > Calendar writes). Each event carries a private school_uid, so a rerun updates it
-instead of adding a copy; events her own script made earlier carry the same tag, so they are taken over, not doubled.
-The feed link is personal (anyone with it can read the course calendar): it lives in secrets/canvas.json and is never shown in full.
-Extra dates that are not in Canvas (a syllabus's finals week) can go in data/canvas_extra.json: [{"uid", "title", "course", "start"}]."""
+# board #716 owner-canvas-into-rosie
 import datetime as dt
 import json
 import re
@@ -17,8 +12,8 @@ ROOT = Path(__file__).resolve().parent.parent
 SECRET = ROOT / "secrets" / "canvas.json"
 EXTRA = ROOT / "data" / "canvas_extra.json"
 STATE = ROOT / "data" / "canvas_state.json"
-MAX_FEED = 5_000_000                     # bytes: a whole year of a few courses is far under this
-REMIND_MIN = 15 * 60                     # a popup 15 hours before the all-day event: 9 AM the day before
+MAX_FEED = 5_000_000  # board #716 why-feed-size-cap
+REMIND_MIN = 15 * 60  # board #716 why-popup-nine-am
 _lock = threading.Lock()
 
 
@@ -43,7 +38,7 @@ def feed_url() -> str:
 
 
 def set_url(url: str) -> dict:
-    """Save the feed link (empty turns the sync off). Only https links, so the link and the course data never travel in the clear."""
+    # board #716 safety-https-only-feed
     url = (url or "").strip()
     if url:
         u = urlsplit(url)
@@ -60,15 +55,13 @@ def status() -> dict:
             "added": st.get("added", 0), "updated": st.get("updated", 0), "upcoming": st.get("upcoming", 0), "error": st.get("error", "")}
 
 
-# ---------------------------------------------------------------- the feed
 def _unescape(v: str) -> str:
     return v.replace("\\n", " ").replace("\\,", ",").replace("\\;", ";").replace("\\\\", "\\").strip()
 
 
 def parse(ics: str, tz=None) -> list[dict]:
-    """[{uid, title, course, start (YYYY-MM-DD, local), url}] from an iCalendar feed. A due time in UTC becomes the local date."""
     tz = tz or dt.datetime.now().astimezone().tzinfo
-    raw = re.sub(r"\r?\n[ \t]", "", ics)                   # unfold continuation lines
+    raw = re.sub(r"\r?\n[ \t]", "", ics)
     out = []
     for block in re.findall(r"BEGIN:VEVENT(.*?)END:VEVENT", raw, re.S):
         f = {}
@@ -100,7 +93,6 @@ def fetch(url: str) -> str:
         return r.text
 
 
-# ---------------------------------------------------------------- into the calendar
 def event_body(e: dict) -> dict:
     day = dt.date.fromisoformat(e["start"])
     course = (e.get("course") or "").split(" ")[0] or "School"
@@ -115,7 +107,6 @@ def event_body(e: dict) -> dict:
 
 
 def sync(svc=None, calendar_id=None, today=None, ics=None) -> dict:
-    """Add or update every upcoming due date. Past ones are left alone; nothing is ever deleted."""
     import gcal
     with _lock:
         url = feed_url()
@@ -143,14 +134,13 @@ def sync(svc=None, calendar_id=None, today=None, ics=None) -> dict:
                     added += 1
             res = {"last_run": dt.datetime.now().isoformat(timespec="minutes"), "day": today.isoformat(), "added": added, "updated": updated,
                    "upcoming": upcoming, "error": ""}
-        except Exception as ex:                                  # offline, Canvas down, Google login expired: say so, try again tomorrow
+        except Exception as ex:
             res = {**_read(STATE, {}), "day": today.isoformat(), "error": f"{type(ex).__name__}: {str(ex)[:160]}"}
         _write(STATE, res)
         return res
 
 
 def due_today_run(now: dt.datetime, at: str = "07:00") -> bool:
-    """The daily run is due: a feed is set, it is past the time, and today's run has not happened."""
     if not feed_url():
         return False
     h, m = (int(x) for x in (at or "07:00").split(":"))

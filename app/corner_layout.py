@@ -1,13 +1,4 @@
-"""The layout of Rosie's corner, which Rosie builds out herself (owner 2026-10-14: "also allow her to build out her corrner however she wants").
-
-Rosie never writes HTML, CSS or code. She edits a small JSON description (sections, cards, collections, pages, colours from the app's
-own palette) and Markdown text, one checked change at a time. This file:
-  - validates the layout against a fixed schema with size caps (unknown keys, odd ids, too much text: refused);
-  - turns Markdown into a short list of plain blocks (headings, paragraphs, lists, quotes, code, links with their destination, pictures
-    from her own scanned gallery only). Raw HTML is never passed on: it stays visible text. The page's fixed renderer (static/corner.js)
-    draws these blocks with textContent only;
-  - applies Rosie's changes within a daily change budget, logs every change (before / after) for "What Rosie changed", and lets the
-    owner undo any change or reset to the default."""
+# board #724 owner-layout-freedom
 import copy
 import json
 import re
@@ -16,7 +7,7 @@ import urllib.parse
 
 import corner
 
-PALETTE = ("cyan", "purple", "green", "lilac", "red", "grey", "white", "plain")       # the app theme's colours, or plain black and white
+PALETTE = ("cyan", "purple", "green", "lilac", "red", "grey", "white", "plain")
 KINDS = ("finds", "pictures", "notes", "text", "links")
 MAX_SECTIONS, MAX_ITEMS, MAX_PAGES, MAX_LINKS = 12, 40, 20, 30
 MAX_TITLE, MAX_ABOUT, MAX_SECTION_TEXT, MAX_PAGE_TEXT = 60, 1500, 3000, 8000
@@ -36,7 +27,6 @@ def default() -> dict:
             "pages": [], "groups": []}
 
 
-# ---------------------------------------------------------------- validation
 class Bad(ValueError):
     pass
 
@@ -63,7 +53,6 @@ def _keys(d, allowed, what):
 
 
 def _link(v, what):
-    """A link in a 'links' section: a public http(s) address and a short label."""
     _keys(v, ("label", "url"), what)
     label = _text(v.get("label", ""), MAX_TITLE, what + " label", allow_empty=False)
     url = _text(v.get("url", ""), 500, what + " address", allow_empty=False)
@@ -73,7 +62,6 @@ def _link(v, what):
 
 
 def validate(lay) -> dict:
-    """Return a clean copy of the layout or raise Bad. Only these fields exist; everything has a cap."""
     _keys(lay, ("version", "accent", "about", "sections", "pages", "groups"), "The layout")
     if lay.get("version") != 1:
         raise Bad("Unknown layout version")
@@ -137,9 +125,8 @@ def validate(lay) -> dict:
     return out
 
 
-# ---------------------------------------------------------------- Markdown -> plain blocks (never HTML)
 def safe_href(url: str) -> str | None:
-    """An http(s) link with a real site name, else None (javascript:, data:, file:, relative links… all become plain text)."""
+    # board #724 safety-links-http-only
     u = str(url or "").strip()
     if any(ord(c) < 32 or c in ' "<>\\`' for c in u):
         return None
@@ -166,7 +153,7 @@ def inline(text: str) -> list[dict]:
     for m in INLINE.finditer(text):
         if m.start() > i:
             out.append({"t": "text", "v": text[i:m.start()]})
-        if m.group(2) is not None:                                # a picture: only from her own gallery (corner:pic/12)
+        if m.group(2) is not None:
             pm = re.fullmatch(r"corner:pic/([1-9][0-9]{0,8})", m.group(2))
             out.append({"t": "img", "pic": int(pm.group(1)), "alt": m.group(1)} if pm else {"t": "text", "v": m.group(1) or "(picture left out)"})
         elif m.group(3) is not None:
@@ -185,7 +172,6 @@ def inline(text: str) -> list[dict]:
 
 
 def markdown(text: str) -> list[dict]:
-    """A strict subset of Markdown as data: h (## / ###), p, ul, ol, quote, code, hr. Anything else is plain text."""
     blocks, para, lst, code = [], [], None, None
 
     def flush():
@@ -243,7 +229,6 @@ def markdown(text: str) -> list[dict]:
     return blocks[:400]
 
 
-# ---------------------------------------------------------------- the stored layout, changes, undo, reset
 def current() -> dict:
     lay = corner.meta_get("layout")
     try:
@@ -311,7 +296,6 @@ OPS = ("add_section", "rename_section", "move_section", "remove_section", "set_c
 
 
 def apply(op: dict, lay: dict) -> tuple[dict, str]:
-    """Apply one change to a copy of `lay`. Returns (new layout, plain description). Raises Bad."""
     if not isinstance(op, dict) or op.get("op") not in OPS:
         raise Bad("Unknown change")
     allowed = {"add_section": ("title", "kind", "color"), "rename_section": ("id", "title"), "move_section": ("id", "to"), "remove_section": ("id",),
@@ -409,7 +393,7 @@ def apply(op: dict, lay: dict) -> tuple[dict, str]:
         p = _page(new, op.get("id"))
         new["pages"].remove(p)
         what = f"Removed the page “{p['title']}”"
-    elif o == "add_group":                                       # a topic for her finds that the owner's interests don't cover
+    elif o == "add_group":
         import corner_groups
         title = _text(op.get("title", ""), 40, "A group title", allow_empty=False)
         gid = _new_id(title, set())
@@ -431,9 +415,8 @@ def apply(op: dict, lay: dict) -> tuple[dict, str]:
 
 
 def rosie_change(op: dict) -> dict:
-    """One change by Rosie: checked, inside her daily budget, logged."""
     budget = corner.settings()["corner_changes_day"]
-    if not corner.nonstop() and changes_today("rosie") >= budget:          # nonstop mode: no daily budget (history and undo stay)
+    if not corner.nonstop() and changes_today("rosie") >= budget:  # board #724 why-nonstop-no-budget
         raise Bad("Today's change budget for the corner is used up")
     before = current()
     new, what = apply(op, before)
@@ -444,7 +427,6 @@ def rosie_change(op: dict) -> dict:
 
 
 def undo(change_id: int) -> dict:
-    """The owner's Undo on a change: the layout goes back to how it was just before it (later changes go with it)."""
     with corner._db() as db:
         r = db.execute("SELECT * FROM changes WHERE id=?", (int(change_id),)).fetchone()
         later = db.execute("SELECT COUNT(*) FROM changes WHERE id>?", (int(change_id),)).fetchone()[0]
@@ -467,8 +449,6 @@ def reset() -> dict:
 
 
 def render_data() -> dict:
-    """The layout with Markdown turned into blocks and every reference resolved, for the page's fixed renderer. Hidden finds and missing
-    pictures are left out; an empty finds / pictures / notes section shows the newest ones."""
     lay = current()
     fs = {f["id"]: f for f in corner.finds(limit=500)}
     ps = {p["id"]: p for p in corner.pictures(limit=500)}
@@ -483,10 +463,10 @@ def render_data() -> dict:
 
     def blocks(text):
         bl = markdown(text)
-        for b in bl:                                              # a gallery picture in Markdown: resolved here, or dropped
+        for b in bl:
             for parts in ([b.get("c")] if "c" in b else b.get("items", [])):
                 for x in parts or []:
-                    if x["t"] == "link" and not corner.has_read(x["href"]):      # never a link to a page she didn't read (she can invent addresses)
+                    if x["t"] == "link" and not corner.has_read(x["href"]):  # board #724 safety-no-unread-links
                         label = x["v"]
                         x.clear()
                         x.update({"t": "text", "v": label})

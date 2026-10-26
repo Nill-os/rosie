@@ -1,7 +1,3 @@
-"""Test-run guard: under pytest, refuse any path inside the real data, secrets, notes vault or ~/rosie-ops.
-
-Tests must only ever touch stand-in folders (tests/conftest.py `isolated`). Code that writes state calls check(path) first;
-in normal running it does nothing."""
 import os
 import sys
 from pathlib import Path
@@ -17,7 +13,7 @@ def forbidden_roots() -> list[Path]:
     for r in roots:
         out.append(r)
         try:
-            out.append(r.resolve())                       # slot B's data/ and secrets/ are links to slot A's
+            out.append(r.resolve())
         except OSError:
             pass
     return list(dict.fromkeys(out))
@@ -41,17 +37,12 @@ def is_real(path) -> bool:
 
 
 def check(path):
-    """Raise under pytest if `path` is real data, a real secret or the live ops folder."""
     if active() and is_real(path):
         raise RuntimeError(f"testguard: a test tried to use a real path: {path}")
     return path
 
 
-# ---------------------------------------------------------------- no network under pytest
-# Socket-level, so it covers every client (httpx, requests, urllib, websockets, raw sockets, asyncio): an outbound connect, a
-# datagram sent to an address (sendto / sendmsg: UDP, DNS by hand) or a name lookup is refused unless it is a Unix socket or loopback
-# (127.0.0.0/8, ::1, localhost). uvloop's event loop does its networking in C (libuv), past these Python functions, so under tests
-# uvloop can't be started at all (new_event_loop / install / run / EventLoopPolicy raise).
+# board #784 safety-no-network-under-tests
 import ipaddress
 import socket
 
@@ -61,7 +52,7 @@ _real = {"connect": socket.socket.connect, "connect_ex": socket.socket.connect_e
 
 
 class NetworkBlocked(ConnectionRefusedError):
-    """A test tried to reach the network."""
+    pass
 
 
 def _loopback_host(host) -> bool:
@@ -98,14 +89,12 @@ def _guarded_connect_ex(self, address):
 
 
 def _guarded_sendto(self, data, *args):
-    """sendto(data, address) / sendto(data, flags, address)."""
     if args and not _allowed(self, args[-1]):
         raise NetworkBlocked(f"testguard: network is blocked in tests (sendto {args[-1]!r})")
     return _real["sendto"](self, data, *args)
 
 
 def _guarded_sendmsg(self, buffers, *args):
-    """sendmsg(buffers[, ancdata[, flags[, address]]]): only a datagram with an address can leave without a guarded connect."""
     if len(args) >= 3 and args[2] is not None and not _allowed(self, args[2]):
         raise NetworkBlocked(f"testguard: network is blocked in tests (sendmsg to {args[2]!r})")
     return _real["sendmsg"](self, buffers, *args)
@@ -144,13 +133,12 @@ if _real["sendmsg"] is not None:
 def _uvloop_guards() -> tuple:
     try:
         import uvloop
-    except ImportError:                                              # not installed: nothing to block
+    except ImportError:
         return ()
     return tuple((uvloop, name, _no_uvloop) for name in ("new_event_loop", "install", "run", "EventLoopPolicy") if hasattr(uvloop, name))
 
 
 def block_network(setattr_=setattr):
-    """Install the socket guard. Only under pytest / ROSIE_TESTING; `setattr_` may be pytest's monkeypatch.setattr."""
     if not active():
         raise RuntimeError("testguard.block_network() is only for test runs")
     for owner, name, fn in GUARDS + _uvloop_guards():

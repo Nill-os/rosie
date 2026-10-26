@@ -1,5 +1,3 @@
-"""Life Quest: a gamified life in a local SQLite file. Areas of life are character stats, goals are quests, and XP comes only from a
-real, done action with a note saying what it was. Nothing here is personal: the starting stats, quests and rewards are defaults to edit."""
 import datetime as dt
 import re
 import sqlite3
@@ -8,12 +6,11 @@ from pathlib import Path
 
 DB = Path(__file__).resolve().parent.parent / "data" / "lifequest.db"
 
-MAX_STATS = 10                 # a handful of areas stays a game; more is a to-do list
-MAX_XP = 1000                  # one entry, one stat
-KINDS = ("daily", "quest", "boss")   # daily: again every day; quest: once; boss: once, the hard thing you keep avoiding
+MAX_STATS = 10  # board #737 why-limit-stat-count
+MAX_XP = 1000
+KINDS = ("daily", "quest", "boss")
 TITLES = ["Adventurer", "Apprentice", "Journeyer", "Pathfinder", "Veteran", "Champion", "Hero", "Legend"]
 
-# Defaults, only used when the database is brand new. The user edits or archives all of them on the page.
 DEFAULT_STATS = [("Knowledge", "Learning, reading, thinking"), ("Fitness", "Moving, sleeping, eating well"), ("Money", "Budget, saving, earning"),
                  ("Discipline", "Focus and following through"), ("Social", "Friends, family, speaking up"),
                  ("Creativity", "Making things"), ("Calm", "Handling feelings and stress")]
@@ -82,9 +79,7 @@ def _int(v, what, lo, hi):
     return n
 
 
-# ---------------- levels ----------------
 def level_start(n):
-    """XP where level n begins: 50*n*(n-1), so level 2 at 100, 3 at 300, 4 at 600, 5 at 1000."""
     return 50 * n * (n - 1)
 
 
@@ -105,13 +100,11 @@ def title_of(lvl):
     return TITLES[min((lvl - 1) // 2, len(TITLES) - 1)]
 
 
-# ---------------- stats ----------------
 def _stat_rows(c, archived=False):
     return [dict(r) for r in c.execute("SELECT * FROM stats WHERE archived=? ORDER BY pos, rowid", (1 if archived else 0,))]
 
 
 def save_stats(items):
-    """Upsert the user's stats. An item with an id edits that stat; without one it adds a new one. archived=True hides a stat (its XP stays in the totals)."""
     if not isinstance(items, list) or not items:
         raise ValueError("Send at least one stat")
     with _db() as c:
@@ -133,8 +126,6 @@ def save_stats(items):
 
 
 def find_stat(text):
-    """Resolve a stat from the user's or the model's words: exact id or name first, then a name that contains the text (or the other way round).
-    Returns the stat row, or None when nothing or more than one matches."""
     t = re.sub(r"\s+", " ", str(text or "")).strip().lower()
     if not t:
         return None
@@ -147,7 +138,6 @@ def find_stat(text):
     return hits[0] if len(hits) == 1 else None
 
 
-# ---------------- quests ----------------
 def save_quest(title, stat, xp, kind="quest", quest_id=None, archived=False):
     title = _text(title, "Quest name", 120)
     xp = _int(xp, "XP", 1, MAX_XP)
@@ -166,8 +156,6 @@ def save_quest(title, stat, xp, kind="quest", quest_id=None, archived=False):
 
 
 def complete_quest(quest_id, done=True, note=""):
-    """Check a quest off for today (a daily) or for good (a quest or boss). The XP is logged with the quest's name, or the user's note, as the evidence.
-    done=False takes it back: the XP entry is removed."""
     with _db() as c:
         q = c.execute("SELECT * FROM quests WHERE id=? AND archived=0", (quest_id,)).fetchone()
         if not q:
@@ -179,15 +167,13 @@ def complete_quest(quest_id, done=True, note=""):
             c.execute("DELETE FROM log WHERE win=?", (have["win"],))
         if not done:
             c.execute("UPDATE quests SET done_day=NULL WHERE id=?", (quest_id,))
-    if not done or have:                                        # already done: ticking twice never pays twice
-        return state()                                          # (after the with: its writes are committed)
+    if not done or have:  # board #737 why-no-double-pay
+        return state()
     return log_win(_text(note, "Note", 200, required=False) or q["title"], [{"stat": q["stat"], "xp": q["xp"]}], quest_id=quest_id)
 
 
-# ---------------- the log ----------------
 def log_win(note, entries, quest_id=None, source="page"):
-    """Log a real, done action. note says what happened (required: no note, no XP). entries = [{stat, xp}], one or more stats.
-    The result carries level_up (the overall level before and after) so the page can celebrate."""
+    # board #737 why-note-required-for-xp
     note = _text(note, "Note (what did you do?)", 200)
     if not isinstance(entries, list) or not 1 <= len(entries) <= 4:
         raise ValueError("Pick between 1 and 4 stats")
@@ -211,7 +197,6 @@ def log_win(note, entries, quest_id=None, source="page"):
 
 
 def remove_win(win):
-    """Take back a mistake. Removes every stat entry of that win; a quest it completed opens again."""
     with _db() as c:
         qs = [r["quest_id"] for r in c.execute("SELECT DISTINCT quest_id FROM log WHERE win=? AND quest_id IS NOT NULL", (win,))]
         if not c.execute("DELETE FROM log WHERE win=?", (win,)).rowcount:
@@ -228,7 +213,6 @@ def _total(c, stat=None):
     return c.execute("SELECT COALESCE(SUM(xp),0) FROM log" + (" WHERE stat=?" if stat else ""), (stat,) if stat else ()).fetchone()[0]
 
 
-# ---------------- rewards ----------------
 def save_reward(title, cost, reward_id=None, archived=False):
     title = _text(title, "Reward name", 80)
     cost = _int(cost, "Cost", 1, 1_000_000)
@@ -243,7 +227,7 @@ def save_reward(title, cost, reward_id=None, archived=False):
 
 
 def claim_reward(reward_id):
-    """Spend points on a reward. Spending never lowers a level (levels come from earned XP, not the balance)."""
+    # board #737 why-spend-keeps-level
     with _db() as c:
         r = c.execute("SELECT * FROM rewards WHERE id=? AND archived=0", (reward_id,)).fetchone()
         if not r:
@@ -254,9 +238,7 @@ def claim_reward(reward_id):
     return state()
 
 
-# ---------------- weekly review ----------------
 def week_end(day):
-    """The Sunday that ends the week of day (the review day)."""
     d = dt.date.fromisoformat(day)
     return (d + dt.timedelta(days=(6 - d.weekday()))).isoformat()
 
@@ -271,11 +253,10 @@ def save_review(wins, lessons, next_, day=None):
     return state()
 
 
-# ---------------- everything the page needs ----------------
 def _streak(days, today):
     d = dt.date.fromisoformat(today)
     if today not in days:
-        d -= dt.timedelta(days=1)                               # today is not over yet
+        d -= dt.timedelta(days=1)
     n = 0
     while d.isoformat() in days:
         n, d = n + 1, d - dt.timedelta(days=1)
@@ -300,7 +281,7 @@ def state(today=None):
             quests.append(q)
         log = [dict(r) for r in c.execute("SELECT * FROM log ORDER BY id DESC LIMIT 300")]
         wins = {}
-        for r in log:                                           # one row per win for the page (a win can pay several stats)
+        for r in log:
             w = wins.setdefault(r["win"], {"win": r["win"], "day": r["day"], "ts": r["ts"], "note": r["note"], "source": r["source"], "stats": [], "xp": 0})
             w["stats"].append({"stat": r["stat"], "xp": r["xp"]})
             w["xp"] += r["xp"]
@@ -329,7 +310,6 @@ def state(today=None):
 
 
 def progress_text():
-    """A plain summary for chat: level, XP, each stat, and what is still open today."""
     s = state()
     o = s["overall"]
     lines = [f"Level {o['level']} {o['title']}: {o['xp']} XP, {o['to_next']} to the next level. Streak {s['streak']} day(s), {s['today_xp']} XP today."]

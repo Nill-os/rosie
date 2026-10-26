@@ -1,4 +1,3 @@
-"""Turns Rosie's pixel-art octopus logo (SVG of tiny rectangles) into a list of (x, y, w, h, color) so the overlay can draw and glitch it."""
 import re
 from pathlib import Path
 

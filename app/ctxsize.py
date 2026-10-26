@@ -1,13 +1,4 @@
-"""The context window per model (owner 2026-10-19: "auto tuning in settings for the context window that works with all models").
-
-Every Ollama call for the chat model must send the SAME num_ctx and num_gpu, or Ollama reloads the model each time it switches
-between callers (Rosie, her corner and memory, Agent Zero). The values live in config["ctx"][model]. tune() finds the
-largest context that keeps the whole model on the GPU: it loads the model at growing sizes with every layer forced onto the
-GPU (num_gpu 99) and keeps the biggest that loads on the first try, stays 100% on the GPU and leaves MARGIN_MB free. A model
-too big for the GPU at any size keeps Ollama's own split between GPU and CPU at DEFAULT_CTX. After tuning, Agent Zero's model
-preset is set to the same model and values (sync_agent_zero), so both keep sharing one copy of the model.
-Measured on an 8 GB laptop GPU: a 9B Qwen 3.5 model = 64k on the GPU (6.8 GB, 41 tok/s); without
-num_gpu 99 Ollama's own estimate spills 20% to the CPU at 64k (20 tok/s)."""
+# board #726 why-same-ctx-everywhere
 import datetime as dt
 import json
 import subprocess
@@ -20,10 +11,10 @@ import config
 import testguard
 
 OLLAMA = "http://127.0.0.1:11434"
-DEFAULT_CTX = 32768                    # untuned models, and models too big for the GPU
+DEFAULT_CTX = 32768
 LADDER = (8192, 16384, 24576, 32768, 49152, 65536, 98304, 131072, 196608, 262144)
-STEP = 4096                            # final sizes are multiples of this
-MARGIN_MB = 300                        # video memory left free after loading: long prompts and the desktop need a little
+STEP = 4096
+MARGIN_MB = 300
 A0_CONTAINER = "agent-zero"
 _lock = threading.Lock()
 status = {"running": False, "model": "", "step": "", "log": [], "result": None, "error": ""}
@@ -34,18 +25,15 @@ def _model(model=None) -> str:
 
 
 def settings(model=None) -> dict:
-    """The saved values for a model: {"num_ctx", "num_gpu"?, "fits"?, "vram_mb"?, "tuned_at"?}. Untuned: DEFAULT_CTX."""
     saved = (config.load().get("ctx") or {}).get(_model(model))
     return saved if saved and saved.get("num_ctx") else {"num_ctx": DEFAULT_CTX}
 
 
 def options(model=None) -> dict:
-    """What every Ollama call for this model puts in "options" (plus its own temperature etc.)."""
     s = settings(model)
     return {"num_ctx": s["num_ctx"], **({"num_gpu": s["num_gpu"]} if s.get("num_gpu") else {})}
 
 
-# --- measuring ------------------------------------------------------------------------------------
 def gpu_total_mb():
     try:
         out = subprocess.run(["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"], capture_output=True, text=True, timeout=10).stdout
@@ -63,7 +51,6 @@ def gpu_used_mb():
 
 
 def model_max_ctx(model) -> int:
-    """The longest context the model was trained for (Ollama's model_info), so tuning never asks for more."""
     try:
         info = httpx.post(OLLAMA + "/api/show", json={"model": model}, timeout=30).json().get("model_info") or {}
         return int(next(v for k, v in info.items() if k.endswith(".context_length")))
@@ -84,9 +71,7 @@ RETRY_MARKS = ("startup-oom-retry", "retrying with projector CPU offload", "cuda
 
 
 def load_retried(since: float) -> bool:
-    """True if Ollama's log shows this load first ran out of video memory and only came up on a retry (llama-server crashes,
-    then Ollama moves the vision projector to the CPU). That works, but every later load crashes once too, so it doesn't count
-    as fitting. Without the journal (other systems) this can't be seen and counts as clean."""
+    # board #726 quirk-retry-not-fitting
     try:
         out = subprocess.run(["journalctl", "-u", "ollama", "--since", f"@{int(since)}", "-o", "cat", "--no-pager"],
                              capture_output=True, text=True, timeout=15).stdout
@@ -96,7 +81,6 @@ def load_retried(since: float) -> bool:
 
 
 def probe(model, num_ctx, num_gpu) -> dict:
-    """Load the model at one size. {"ok", "vram_mb", "on_gpu", "why"}."""
     unload_all()
     started = time.time() - 1
     opts = {"num_ctx": num_ctx, "num_predict": 1, **({"num_gpu": num_gpu} if num_gpu else {})}
@@ -114,9 +98,7 @@ def probe(model, num_ctx, num_gpu) -> dict:
     on_gpu = loaded.get("size") and loaded.get("size_vram", 0) >= loaded["size"]
     used, total = gpu_used_mb(), gpu_total_mb()
     room = total is not None and used is not None and used <= total - MARGIN_MB
-    # Windows doesn't refuse a model bigger than the card: its driver moves the rest into shared system memory, and Ollama still reports
-    # it all as on the GPU while the card itself looks full but not over (2026-10-23: 14 GB at 262144 tokens on an 8 GB RTX 4060 passed,
-    # and ran slowly). The model has to fit in the card's own memory.
+    # board #726 fix-shared-memory-fit
     over = bool(total) and loaded.get("size_vram", 0) / 2 ** 20 > total - MARGIN_MB
     retried = load_retried(started)
     why = ("part of it ran on the CPU" if not on_gpu
@@ -127,7 +109,6 @@ def probe(model, num_ctx, num_gpu) -> dict:
 
 
 def tune(model=None, log=print) -> dict:
-    """Find and save the biggest context that keeps the whole model on the GPU. Takes a few minutes (one model load per try)."""
     model = _model(model)
     total = gpu_total_mb()
     top = model_max_ctx(model)
@@ -145,7 +126,7 @@ def tune(model=None, log=print) -> dict:
                 break
             best = (c, p["vram_mb"])
             log(f"{c:,} tokens: fits ({p['vram_mb']} of {total} MB)")
-        while best and bad and bad - best[0] > STEP:          # narrow the gap between the last fit and the first miss
+        while best and bad and bad - best[0] > STEP:
             mid = (best[0] + bad) // 2 // STEP * STEP
             if mid <= best[0]:
                 break
@@ -170,7 +151,7 @@ def tune(model=None, log=print) -> dict:
     synced = sync_agent_zero(model)
     log(synced)
     unload_all()
-    try:                                                      # load it back at the new size, so the next question doesn't wait
+    try:
         httpx.post(OLLAMA + "/api/generate", json={"model": model, "keep_alive": "30m", "options": options(model)}, timeout=600)
     except httpx.HTTPError:
         pass
@@ -178,7 +159,6 @@ def tune(model=None, log=print) -> dict:
 
 
 def start(model=None) -> bool:
-    """Run tune() in the background (Settings polls status). False if a tune is already running."""
     if not _lock.acquire(blocking=False):
         return False
     status.update(running=True, model=_model(model), step="Starting…", log=[], result=None, error="")
@@ -207,18 +187,16 @@ def running() -> bool:
     return bool(status["running"])
 
 
-LIVE_FILE = config.PATH.with_name("live_model.json")   # models._publish: the chat model the running server uses
+LIVE_FILE = config.PATH.with_name("live_model.json")
 
 
 def live_model() -> str:
-    """The chat model to ask: this process's pick once models.load_saved ran (the server); in a helper process (rosie-mind's MCP server,
-    the paper's morning build) the owner's saved pick, not the built-in default: asking Ollama for another model swapped the live one
-    off the 8 GB GPU (audit 2026-10-23)."""
+    # board #726 fix-helper-uses-saved-pick
     import corner_browse
     if corner_browse.LIVE["set"]:
         return corner_browse.MODEL
-    try:                                                          # what the server really uses (models._publish): the default when the
-        import json                                               # saved pick couldn't be used (audit pass 3)
+    try:
+        import json
         name = json.loads(LIVE_FILE.read_text()).get("model")
         if name:
             return name
@@ -228,12 +206,10 @@ def live_model() -> str:
 
 
 def push(model=None):
-    """Hand the current values to the corner's browsing code, which may not import this module (it can run docker)."""
     import corner_browse
     corner_browse.CTX_OPTIONS = options(model or corner_browse.MODEL)
 
 
-# --- Agent Zero follows Rosie's model --------------------------------------------------------------
 SYNC_SCRIPT = r"""
 import json, sys, yaml
 want = json.loads(sys.argv[1])
@@ -261,7 +237,6 @@ print("updated preset " + name)
 
 
 def sync_agent_zero(model=None) -> str:
-    """Point Agent Zero's active Ollama preset at Rosie's model and context, so both share one copy on the GPU."""
     if testguard.active():
         return "Agent Zero: not touched in tests"
     model = _model(model)

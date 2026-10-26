@@ -1,5 +1,3 @@
-// Renders the Vector page (static/app.js + static/vector.js) in jsdom with the server's real /api/vector answer (test_vector.py fills it
-// with hostile text: <script>, onerror= and the like in his personality, commands and what he heard) and reports what ended up in the DOM.
 const fs = require('fs');
 const vm = require('vm');
 const path = require('path');
@@ -37,7 +35,7 @@ const T = (s, file) => new vm.Script(s, { filename: file }).runInContext(dom.get
   out.danger = [...doc.querySelectorAll('#view script, #view iframe, #view img, #view svg')].map((e) => e.tagName)
     .concat([...doc.querySelectorAll('#view *')].flatMap((e) => [...e.attributes].filter((a) => /^on/i.test(a.name)).map((a) => a.name)));
   out.buttons = [...doc.querySelectorAll('#view button')].map((b) => b.textContent);
-  const box = doc.querySelector('#view input[type=checkbox]');       // the first screen (Clock) is on: turn it off
+  const box = doc.querySelector('#view input[type=checkbox]');
   box.checked = false;
   box.dispatchEvent(new w.Event('change'));
   const add = [...doc.querySelectorAll('#view button')].find((b) => b.textContent === 'Add');

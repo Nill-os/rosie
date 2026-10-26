@@ -25,7 +25,7 @@ ROOT = Path(__file__).resolve().parent.parent
 BACKUPS = Path(os.environ.get("ROSIE_BACKUP_DIR") or Path.home() / "backups" / "rosie")
 CONF = Path(os.environ.get("ROSIE_BACKUP_CONF") or Path.home() / ".config" / "rosie")
 KEEP_FILES = ("config.json", "voice_chat.json")
-KEEP_SECRETS = ("google_client.json",)             # downloadable but annoying to recreate; tokens and codes are NOT backed up
+KEEP_SECRETS = ("google_client.json",)  # board #712 safety-secrets-not-backed-up
 KEEP = 14
 
 
@@ -34,11 +34,11 @@ def _paths():
 
 
 def passphrase_file() -> Path:
-    """The passphrase that locks the backups. Created once. COPY IT OFF THIS COMPUTER (password manager): without it a dead disk means no restore."""
+    # board #712 safety-passphrase-copy-off-pc
     p = CONF / "backup.pass"
     if not p.exists():
         CONF.mkdir(parents=True, exist_ok=True)
-        fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)   # private from the first byte
+        fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(fd, "w") as f:
             f.write(secrets.token_urlsafe(36) + "\n")
     return p
@@ -51,7 +51,7 @@ def _gpg(*args, passfile: Path):
     cmd = ["gpg", "--homedir", str(home), "--batch", "--yes", "--quiet", "--pinentry-mode", "loopback", "--passphrase-file", str(passfile), *args]
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-    finally:                                                 # gpg starts an agent for this home; it is not needed afterwards
+    finally:
         subprocess.run(["gpgconf", "--homedir", str(home), "--kill", "gpg-agent"], capture_output=True, timeout=30)
     if r.returncode != 0:
         raise RuntimeError("gpg failed: " + (r.stderr or r.stdout).strip()[-200:])
@@ -84,8 +84,8 @@ def make_snapshot(dest: Path, passfile: Path | None = None, data: Path | None = 
     with tempfile.TemporaryDirectory(prefix="rosie-bk-") as tmp:
         stage = Path(tmp) / "stage"
         (stage / "data").mkdir(parents=True)
-        nested = [p for p in (data / "corner" / "corner.db",) if p.exists()]   # her corner's finds, groups and notes (audit 2026-10-20)
-        for db in sorted(data.glob("*.db")) + nested:            # the sqlite backup API: a consistent copy even while the app is writing
+        nested = [p for p in (data / "corner" / "corner.db",) if p.exists()]  # board #712 why-corner-data-in-backup
+        for db in sorted(data.glob("*.db")) + nested:
             src = sqlite3.connect(db)
             (stage / "data" / db.relative_to(data)).parent.mkdir(parents=True, exist_ok=True)
             dst = sqlite3.connect(stage / "data" / db.relative_to(data))
@@ -129,7 +129,6 @@ def _unpack(file: Path, passfile: Path, target: Path):
 
 
 def verify(file: Path, passfile: Path | None = None) -> dict:
-    """Decrypt, unpack, check every file hash and every database. Raises or returns {'ok': False,...} on any problem."""
     passfile = passfile or passphrase_file()
     problems = []
     with tempfile.TemporaryDirectory(prefix="rosie-vf-") as tmp:
@@ -165,8 +164,6 @@ def restore(file: Path, target: Path, passfile: Path | None = None) -> Path:
 
 
 def rotate(dest: Path, keep: int = KEEP, days: int = 30):
-    """Keep the newest `keep`, and also the newest one of each of the last `days` days: a switch makes a backup each time, so
-    counting alone kept barely a day of history (audit 2026-10-20)."""
     import time
     files = sorted(dest.glob("rosie-data-*.gpg"), reverse=True)
     keepers, days_seen = set(files[:keep]), set()
@@ -193,7 +190,7 @@ def run_backup() -> Path:
     out = make_snapshot(BACKUPS)
     v = verify(out)
     (BACKUPS / "last_verify.json").write_text(json.dumps({**v, "file": out.name}))
-    if not v["ok"]:                                           # set aside, so rotation never keeps it in place of a good one
+    if not v["ok"]:  # board #712 why-bad-backup-set-aside
         out.rename(out.with_name(out.name + ".failed"))
         raise SystemExit("Backup was made but did NOT pass its check: " + "; ".join(v["problems"]))
     rotate(BACKUPS)

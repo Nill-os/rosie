@@ -1,4 +1,3 @@
-"""Hub API: everything the sidebar pages need (home, tasks, calendar, notes, memory, settings, briefs, spaces)."""
 import datetime as dt
 import json
 import re
@@ -45,7 +44,6 @@ def _task(t):
     return {"id": t["id"], "title": t["title"], "due": t["due"], "done": bool(t["done"]), "project_id": t.get("project_id")}
 
 
-# ---------------- home ----------------
 @router.get("/api/mind")
 def mind_status():
     import mind
@@ -104,7 +102,6 @@ def home():
     return out
 
 
-# ---------------- tasks ----------------
 class NewTask(BaseModel):
     title: str
     due: str = ""
@@ -142,7 +139,6 @@ class NotesPatch(BaseModel):
 
 @router.get("/api/tasks/{task_id}")
 def task_details(task_id: int):
-    """Everything about one task, for its details panel: notes, dates, project, and where it came from (owner 2026-10-24)."""
     import proposals
     t = tasks.get(task_id)
     if not t:
@@ -198,7 +194,6 @@ def task_delete(task_id: int):
     return {"ok": True}
 
 
-# ---------------- calendar ----------------
 class NewEvent(BaseModel):
     title: str
     date: str
@@ -239,7 +234,6 @@ def calendar_add(e: NewEvent):
     return {**r, "calendar": config.load()["write_target"]}
 
 
-# ---------------- notes / vault ----------------
 class FileWrite(BaseModel):
     path: str
     content: str
@@ -314,7 +308,7 @@ def vault_write(f: FileWrite):
         return err("This file is generated; change tasks from the Tasks page.", 403)
     if len(f.content) > MAX_FILE:
         return err("Too large", 413)
-    if p.exists():  # keep the previous version so a bad edit is recoverable
+    if p.exists():  # board #734 safety-keep-previous-version
         bak = testguard.check(ROOT / "data" / "vault_bak")
         bak.mkdir(parents=True, exist_ok=True)
         (bak / (f.path.replace("/", "__") + ".bak")).write_text(p.read_text(errors="replace"))
@@ -339,7 +333,6 @@ def vault_new(f: NewFile):
     return {"ok": True, **_entry(p)}
 
 
-# ---------------- memory ----------------
 class NewMemory(BaseModel):
     kind: str = "note"
     content: str
@@ -362,7 +355,6 @@ def memory_delete(note_id: int):
     return memory.forget(note_id)
 
 
-# ---------------- briefs ----------------
 class Gen(BaseModel):
     force: bool = False
 
@@ -382,7 +374,6 @@ def brief_generate(g: Gen):
         return err(f"{type(e).__name__}: {e}", 500)
 
 
-# ---------------- spaces + settings ----------------
 class Spaces(BaseModel):
     spaces: list[str]
 
@@ -401,12 +392,11 @@ class Settings(BaseModel):
 
 
 def pages_off() -> list[str]:
-    """Pages this PC can't run (owner 2026-10-23, the Windows copy): live terminals and the meeting recorder use Linux's own tools, and
-    the Agent Zero page expects Linux Docker. They leave the menu instead of failing. The Agent Deck works where psutil is installed."""
+    # board #734 owner-linux-only-pages
     if sys.platform.startswith("linux"):
         return []
     import importlib.util
-    deck = [] if importlib.util.find_spec("psutil") else ["deck"]          # the Deck runs on Windows through psutil (agentdeck_win.py)
+    deck = [] if importlib.util.find_spec("psutil") else ["deck"]
     return deck + ["terminal", "meetings", "agentzero"]
 
 
@@ -430,12 +420,10 @@ def spaces_put(s: Spaces):
     return {"spaces": clean}
 
 
-ORCH = Path.home() / ".claude" / "skills" / "orchestrate" / "state.json"   # Claude Code's orchestrator mode (the orchestrate skill, `delegate on|off`)
+ORCH = Path.home() / ".claude" / "skills" / "orchestrate" / "state.json"
 
 
 def orchestrator(on: bool | None = None) -> bool | None:
-    """Read, or turn on or off, Claude Code's orchestrator mode: Claude plans and checks, Rosie and Agent Zero do the work.
-    None when the orchestrate skill isn't installed on this PC (the switch is hidden then)."""
     if not ORCH.parent.exists():
         return None
     try:
@@ -475,9 +463,9 @@ def settings_set(s: Settings):
     if s.hidden_pages is not None:
         if len(s.hidden_pages) > 40 or not all(isinstance(k, str) and re.fullmatch(r"[a-z0-9]{1,20}", k) for k in s.hidden_pages):
             return err("hidden_pages must be a list of page names")
-        cfg["hidden_pages"] = [k for k in dict.fromkeys(s.hidden_pages) if k != "settings"]     # Settings always stays reachable
+        cfg["hidden_pages"] = [k for k in dict.fromkeys(s.hidden_pages) if k != "settings"]
     if s.menu_layout is not None:
-        # Own menu order (owner 2026-10-25: "allow me to reorganize the menu of rosie how i want"). The client drops keys it doesn't know.
+        # board #734 owner-own-menu-order
         lay, why = _clean_menu_layout(s.menu_layout)
         if why:
             return err(why)
@@ -489,13 +477,12 @@ def settings_set(s: Settings):
     config.save(cfg)
     if s.owner_notes is not None:
         import a0
-        a0.write_include()                                     # Agent Zero's copy of the rules picks up the notes
+        a0.write_include()
     return {"write_target": cfg["write_target"], "brief_time": cfg["brief_time"], "brain": cfg["brain"], "planning": claude_plan.status(), "orchestrator": orchestrator(),
             "owner_name": cfg.get("owner_name", ""), "owner_notes": cfg.get("owner_notes", ""), "hidden_pages": cfg.get("hidden_pages") or [], "menu_layout": cfg.get("menu_layout") or []}
 
 
 def _clean_menu_layout(raw):
-    """(layout, problem): groups of page keys. Settings always stays in the menu: it is added to the last group when missing."""
     if not isinstance(raw, list) or len(raw) > 20:
         return None, "menu_layout must be a list of at most 20 groups"
     out, seen = [], set()
@@ -518,7 +505,7 @@ def _clean_menu_layout(raw):
         if not out:
             out.append({"label": "", "pages": []})
         out[-1]["pages"].append("settings")
-    for i, g in enumerate(out):                              # a nameless group is only the last one, the one that holds Settings
+    for i, g in enumerate(out):
         if not g["label"] and not (i == len(out) - 1 and "settings" in g["pages"]):
             return None, "only the last group, the one with Settings, can have no name"
     return out, None
@@ -526,7 +513,6 @@ def _clean_menu_layout(raw):
 
 @router.get("/api/ctx")
 def ctx_get():
-    """Settings > Context window: the current model's saved window and any tune in progress."""
     model = models.current()
     return {"model": model, "current": ctxsize.settings(model), "tuned": model in (config.load().get("ctx") or {}),
             "status": {k: ctxsize.status[k] for k in ("running", "model", "step", "log", "result", "error")}}
@@ -593,7 +579,6 @@ class ServerLabel(BaseModel):
 
 @router.get("/api/tokens")
 def tokens_get():
-    """The Claude token report (tokens.py), from its cache; the hourly job and `python app/tokens.py` refresh it. Only reads."""
     import tokens
     return tokens.summary()
 
@@ -668,7 +653,7 @@ def _cached(key, ttl, fn):
 
 def _model_info():
     r = httpx.get("http://127.0.0.1:11434/api/ps", timeout=3).json()
-    ms = [m for m in r.get("models", []) if agent.MODEL in (m.get("name"), m.get("model"))]   # her chat model, not the embedder or vision model
+    ms = [m for m in r.get("models", []) if agent.MODEL in (m.get("name"), m.get("model"))]
     if not ms:
         return {"model": agent.MODEL, "loaded": False, "where": "not loaded (loads on first message)"}
     m = ms[0]
@@ -708,13 +693,11 @@ def status():
 
 @router.post("/api/signout-all")
 def signout_all():
-    """Rotate the session key: every signed-in device (including this one) must enter the access code again."""
     import atomic
-    atomic.write_text(ROOT / "secrets" / "session_key", secrets.token_hex(32), 0o600)   # never empty or half-written, private from the start
+    atomic.write_text(ROOT / "secrets" / "session_key", secrets.token_hex(32), 0o600)  # board #734 safety-session-key-write
     return {"ok": True}
 
 
-# ---------------- small helpers for the page ----------------
 class Cap(BaseModel):
     text: str
 
@@ -729,7 +712,6 @@ def capture(c: Cap):
 
 @router.post("/api/routine/{name}")
 def routine(name: str):
-    """sync / wrap-up without creating a chat (used by Home buttons)."""
     try:
         if name == "sync":
             return {"text": workflows.sync()}
@@ -747,7 +729,6 @@ def skills_list():
     return {"skills": [{"name": n, "description": d, "path": f"skills/{n}.md"} for n, d in skills.listing()]}
 
 
-# ---------------- inbox, reminders, automations ----------------
 import automations  # noqa: E402
 import inbox  # noqa: E402
 
@@ -789,7 +770,6 @@ def canvas_sync():
 
 @router.post("/api/look/theme")
 def look_theme(body: dict):
-    """This Rosie's default theme, for every device that has not picked its own (Settings > Display)."""
     t = str(body.get("theme") or "")
     if t not in ("aurora", "cyberdeck", "jetsons"):
         return err("Pick aurora, cyberdeck or jetsons")
@@ -889,7 +869,6 @@ def automations_test():
     return {"desktop_shown": shown}
 
 
-# ---------------- mail + proposals ----------------
 import gmail  # noqa: E402
 import mailorganize  # noqa: E402
 import mailwatch  # noqa: E402
@@ -913,8 +892,8 @@ def mail_home():
     cfg = config.load()
     accts = [{"name": a["name"], "email": a["email"]} for a in gmail.accounts()]
     try:
-        mailwatch.migrate_email_tasks()                    # once: email-made tasks leave Tasks for the action list (backup first)
-    except Exception:                                      # the page still loads; it tries again next time
+        mailwatch.migrate_email_tasks()
+    except Exception:
         pass
     return {"accounts": accts, "items": mailwatch.list_items() if accts else [], "digest": mailwatch.digest(24) if accts else None, "last_check": mailwatch.last_check(),
             "todos": mailwatch.todos(), "organize": mailorganize.enabled(),
@@ -956,7 +935,7 @@ def mail_labels_set(body: dict):
 
 @router.get("/api/mail/organize")
 def mail_organize_preview():
-    return mailorganize.preview()                         # read-only: what would be labeled
+    return mailorganize.preview()
 
 
 @router.post("/api/mail/organize/apply")
@@ -1006,7 +985,7 @@ def mail_disconnect(name: str):
 @router.get("/api/proposals")
 def proposals_list():
     out = proposals.list_("pending")
-    for p in out:                                                  # "from email" opens that email, so a request is never a bare yes/no
+    for p in out:
         src = p.get("source") or ""
         if src.startswith("email:") and src.count(":") >= 2:
             _, acct, mid = src.split(":", 2)
@@ -1033,7 +1012,6 @@ def proposal_dismiss(pid: int):
     return {"ok": True}
 
 
-# ---------------- terminals + agents ----------------
 import terminals  # noqa: E402
 
 _NAME_RE = re.compile(r"^[a-z0-9-]{1,40}$")
@@ -1103,7 +1081,6 @@ def term_summary(name: str):
     return {"summary": " ".join(r["summary"].split())[:500]}
 
 
-# ---------------- projects ----------------
 import projects  # noqa: E402
 
 
@@ -1243,7 +1220,6 @@ def projects_open(pid: int):
     return pc_tools.open_on_desktop(p["folder"])
 
 
-# ---------------- meetings, dictation, search, MCP ----------------
 import fsguard  # noqa: E402
 import meetings  # noqa: E402
 import vaultsearch  # noqa: E402
@@ -1308,7 +1284,7 @@ def dictation_status():
     cfg = config.load()
     env = _user_env()
 
-    def unit_state(name):            # no systemctl on Windows or macOS: report it, don't break Settings (the partner's PC, 2026-10-23)
+    def unit_state(name):
         try:
             return subprocess.run(["systemctl", "--user", "is-active", name], capture_output=True, text=True, env=env, timeout=5).stdout.strip()
         except (OSError, subprocess.SubprocessError):

@@ -1,12 +1,4 @@
 #!/usr/bin/env python3
-"""Rosie autopilot: after you use Rosie, an unattended Claude audits the new chats and fixes the IDLE slot; at midnight the system switches to it and pushes.
-
-  autopilot.py on | off | status    the kill switch (off = nothing below ever runs)
-  autopilot.py audit                run by a timer every 20 minutes; does work only after you used Rosie and went quiet, at most once an hour
-  autopilot.py midnight             run by a timer at 00:00: switch to the idle slot if it passed the full check, then push to GitHub
-
-Safety: the agent can only read an exported copy of the new chats and edit inside the idle slot; afterwards plain code checks that it touched only allowed files and left
-the live slot alone (otherwise its work is thrown away). It never switches, never touches calendar/phone/mail/data. Every step is logged in autopilot.log."""
 import datetime as dt
 import json
 import os
@@ -18,9 +10,9 @@ from pathlib import Path
 
 HOME = Path.home()
 OPS = Path(os.environ.get("ROSIE_OPS_DIR") or HOME / "rosie-ops")
-os.environ.setdefault("ROSIE_AGENT", "autopilot")                 # its name on the agent board (slot claims, posts), also for its Claude
+os.environ.setdefault("ROSIE_AGENT", "autopilot")
 import signal as _signal
-_signal.signal(_signal.SIGTERM, lambda *_: sys.exit(1))           # systemd's stop runs the finally blocks (locks, claims) instead of skipping them
+_signal.signal(_signal.SIGTERM, lambda *_: sys.exit(1))  # board #809 why-sigterm-runs-finally
 FLAG, LOG, STATE, LOCK = OPS / "autopilot.on", OPS / "autopilot.log", OPS / "autopilot.json", OPS / "autopilot.lock"
 SLOTS = OPS / "slots.py"
 CHATS = Path(os.environ.get("ROSIE_CHATS_DB") or HOME / "assistant" / "data" / "chats.db")
@@ -58,11 +50,10 @@ def save_state(s):
     STATE.write_text(json.dumps(s))
 
 
-LOCK_MAX_S = 75 * 60                                                 # a lock left by a crash, a kill or a reboot expires (audit 2026-10-20)
+LOCK_MAX_S = 75 * 60
 
 
 def lock_live(p: Path) -> bool:
-    """A lock holds the pid that made it: it counts while that process runs, for at most LOCK_MAX_S."""
     try:
         age, first = time.time() - p.stat().st_mtime, (p.read_text().split() or [""])[0]
     except OSError:
@@ -73,7 +64,6 @@ def lock_live(p: Path) -> bool:
 
 
 def ops_digest() -> str:
-    """The scripts systemd runs: the unattended agent must never change them."""
     import hashlib
     h = hashlib.sha256()
     for name in ("slots.py", "watchdog.py", "autopilot.py", "launch.sh", "power.sh", "open.sh", "power.conf"):
@@ -97,9 +87,7 @@ def git(path, *args):
     return sh(["git", "-C", str(path), *args], timeout=60).stdout.strip()
 
 
-# ---------- input for the agent ----------
 def new_messages(after_id):
-    """Messages after after_id (read-only copy of the chats)."""
     con = sqlite3.connect(f"file:{CHATS}?mode=ro", uri=True)
     try:
         return con.execute("SELECT id, chat_id, role, body, created FROM msgs WHERE id>? ORDER BY id LIMIT ?", (after_id, MAX_MESSAGES)).fetchall()
@@ -115,7 +103,7 @@ def render(rows):
         except ValueError:
             j = {"content": body}
         calls = "; ".join(f"{c['function']['name']}({json.dumps(c['function'].get('arguments'))[:160]})" for c in j.get("tool_calls") or [])
-        if j.get("role", role) == "tool":                          # a tool's output (web pages, mail, texts) never goes to the unattended agent
+        if j.get("role", role) == "tool":  # board #809 safety-tool-output-withheld
             out.append(f"[chat {cid} {created[:16]}] tool {j.get('tool_name') or j.get('name') or ''}: {'error' if 'error' in str(j.get('content', ''))[:200] else 'ok'}")
             continue
         text = str(j.get("content", ""))[:500]
@@ -123,7 +111,6 @@ def render(rows):
     return "\n".join(out)
 
 
-# ---------- audit ----------
 def audit():
     if not FLAG.exists():
         return
@@ -138,11 +125,11 @@ def audit():
         return
     newest = dt.datetime.fromisoformat(rows[-1][4])
     if (dt.datetime.now() - newest).total_seconds() < QUIET_SECONDS:
-        return                                                    # still in use: wait until the user is done
+        return
     st = slot_status()
     if st.get("probation_seconds_left", 0) > 0 or st.get("inactive_dirty"):
         return
-    if st.get("claimed_by"):                                      # another agent (a Claude session, Rosie) is working in the idle slot
+    if st.get("claimed_by"):
         log(f"audit skipped: {st['claimed_by']}")
         return
     LOCK.write_text(str(os.getpid()))
@@ -152,7 +139,7 @@ def audit():
         log(f"audit crashed: {type(e).__name__}: {e}")
     finally:
         LOCK.unlink(missing_ok=True)
-        sh(["python3", str(SLOTS), "release"], timeout=60)      # its claim lasts only while it works
+        sh(["python3", str(SLOTS), "release"], timeout=60)
 
 
 def run_audit(s, rows, st):
@@ -171,12 +158,12 @@ def run_audit(s, rows, st):
             return
     base_head, active_head = git(idle_path, "rev-parse", "HEAD"), git(active_path, "rev-parse", "HEAD")
     import tempfile
-    box = Path(tempfile.mkdtemp(prefix="rosie-audit-"))              # the agent may read this folder, not ~/rosie-ops (audit 2026-10-20)
+    box = Path(tempfile.mkdtemp(prefix="rosie-audit-"))  # board #809 safety-agent-folder-limit
     inp = box / "audit-input.txt"
     inp.write_text(render(rows))
     ops_before = ops_digest()
     log(f"audit start: {len(rows)} messages, idle slot {idle} at {base_head[:7]}")
-    denied = ["Read(./data/**)", "Read(./secrets/**)", "Read(./vault/**)", "Edit(./.venv/**)", "Write(./.venv/**)",   # the shared folders
+    denied = ["Read(./data/**)", "Read(./secrets/**)", "Read(./vault/**)", "Edit(./.venv/**)", "Write(./.venv/**)",
               "Read(~/assistant/secrets/**)", "Read(~/assistant-b/secrets/**)", "Read(~/assistant/data/**)", "Read(~/.ssh/**)", "Read(~/.gnupg/**)",
               "Read(~/.claude/**)", "Read(~/.claude.json)", "Read(~/agent-zero/**)"]
     allowed = ["Read", "Edit(app/**)", "Edit(static/**)", "Edit(tests/**)", "Edit(docs/**)", "Write(app/**)", "Write(static/**)", "Write(tests/**)",
@@ -187,7 +174,6 @@ def run_audit(s, rows, st):
         log("agent summary: " + " | ".join((r.stdout or r.stderr).strip().splitlines()[-4:])[:600])
     except subprocess.TimeoutExpired:
         log("agent timed out")
-    # ---- plain-code checks: the agent's work only counts if it stayed inside the rules
     s["last_msg_id"], s["last_run"] = rows[-1][0], time.time()
     save_state(s)
     import shutil
@@ -203,11 +189,11 @@ def run_audit(s, rows, st):
     if git(idle_path, "status", "--porcelain", "--untracked-files=no"):
         sh(["python3", str(SLOTS), "commit", "autopilot: uncommitted work"], timeout=120)
     changed = git(idle_path, "diff", "--name-only", f"{base_head}..HEAD").splitlines()
-    changed += [l[3:] for l in git(idle_path, "status", "--porcelain", "--untracked-files=all").splitlines()]   # new files too (a root conftest.py)
+    changed += [l[3:] for l in git(idle_path, "status", "--porcelain", "--untracked-files=all").splitlines()]
     bad = [f for f in changed if Path(f).parts[0] not in ALLOWED_TOP or any(p in DENIED_PARTS for p in Path(f).parts)]
     if bad:
         git(idle_path, "reset", "--hard", base_head)
-        git(idle_path, "clean", "-fd")                                 # new files too (not -x: the shared links stay)
+        git(idle_path, "clean", "-fd")
         log(f"REVERTED: the agent touched forbidden files {bad[:5]}; its work was thrown away")
         return
     if git(idle_path, "rev-parse", "HEAD") == base_head and (st.get("last_stage") or {}).get("head") == git(idle_path, "rev-parse", "--short", "HEAD"):
@@ -216,7 +202,7 @@ def run_audit(s, rows, st):
     log(f"audit committed {len(changed)} files; running the full check")
     (OPS / "stage.lock").write_text(str(os.getpid()))
     try:
-        res = sh(["python3", str(SLOTS), "stage"], timeout=4200)    # tests + start-up + two benchmark runs can take over an hour
+        res = sh(["python3", str(SLOTS), "stage"], timeout=4200)
     finally:
         (OPS / "stage.lock").unlink(missing_ok=True)
     try:
@@ -226,11 +212,10 @@ def run_audit(s, rows, st):
     log(f"full check {'PASSED: will switch at midnight' if ok else 'FAILED: not switching'}")
 
 
-# ---------- midnight ----------
 def midnight():
     if not FLAG.exists():
         return
-    if lock_live(LOCK) or lock_live(OPS / "stage.lock"):            # an audit or a check is still working in the idle slot
+    if lock_live(LOCK) or lock_live(OPS / "stage.lock"):
         log("midnight: an audit or a stage check is running; not switching")
         return
     LOCK.write_text(str(os.getpid()))
@@ -261,20 +246,20 @@ def _midnight():
         sc = sh([str(idle_path / ".venv" / "bin" / "python"), "tests/scenarios.py"], cwd=idle_path, timeout=800)
     except subprocess.TimeoutExpired:
         log("midnight: scenarios timed out; not switching")
-        return     # the wide real-model check the stage gate does not include
+        return
     import re
     m = re.search(r"failed: \[(.*?)\]", sc.stdout)
     fails = [x for x in (m.group(1).split(",") if m else ["no result"]) if x.strip()]
     log(f"midnight scenarios: {len(fails)} failed {fails[:4]}")
-    if len(fails) > 2:                                              # a small local model is a little random: 1 or 2 slips are normal, more means something broke
+    if len(fails) > 2:  # board #809 why-small-model-slips
         log("midnight: too many scenario failures; not switching")
         return
-    again = slot_status()                                           # the scenarios took minutes: switch only what was checked
+    again = slot_status()
     if again["heads"][idle] != st["heads"][idle] or again.get("inactive_dirty"):
         log("midnight: the idle slot changed during the checks; not switching")
         return
     try:
-        r = sh(["python3", str(SLOTS), "switch"], timeout=700)        # the backup alone can take 5 minutes
+        r = sh(["python3", str(SLOTS), "switch"], timeout=700)  # board #809 why-backup-takes-minutes
     except subprocess.TimeoutExpired:
         log("midnight switch: timed out; the watchdog checks the new version")
         return

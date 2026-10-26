@@ -1,5 +1,3 @@
-"""Lessons: short rules learned from real mistakes (audit findings and your corrections). The few that match what you just asked are added to the prompt, so a mistake
-is not repeated. Local SQLite; every lesson can be read and deleted. No training involved: instant and reversible."""
 import datetime as dt
 import re
 import sqlite3
@@ -25,7 +23,7 @@ def _db():
     c.execute("CREATE TABLE IF NOT EXISTS lessons (id INTEGER PRIMARY KEY AUTOINCREMENT, trigger TEXT NOT NULL, lesson TEXT NOT NULL, source TEXT, created TEXT NOT NULL)")
     if not c.execute("SELECT 1 FROM lessons LIMIT 1").fetchone() and not c.execute("PRAGMA user_version").fetchone()[0]:
         c.executemany("INSERT INTO lessons(trigger,lesson,source,created) VALUES(?,?,?,?)", [(t, l, "audit", dt.date.today().isoformat()) for t, l in SEEDS])
-        c.execute("PRAGMA user_version = 1")                         # seeded once: deleting them all stays deleted
+        c.execute("PRAGMA user_version = 1")  # board #736 why-seed-once
         c.commit()
     return c
 
@@ -55,7 +53,7 @@ def relevant(text: str, n: int = 2, min_hits: int = 2, owner_only: bool = False)
     w = _words(text)
     scored = []
     for r in list_all():
-        if owner_only and r.get("source") == "agent-zero":   # Agent Zero's own lessons never become Rosie's rules (audit 2026-10-20)
+        if owner_only and r.get("source") == "agent-zero":  # board #736 safety-agent-zero-lessons
             continue
         hits = len(w & _words(r["trigger"]))
         if hits >= min_hits:
@@ -69,7 +67,6 @@ def block(text: str) -> str:
 
 
 def tool(action="list", trigger="", lesson="", lesson_id=0):
-    """One tool for everything: list the lessons, teach a new one, or delete one."""
     if action == "add" and trigger and lesson:
         return add(trigger, lesson)
     if action == "delete" and lesson_id:

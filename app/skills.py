@@ -1,10 +1,8 @@
-"""Skills = plain-text playbooks in vault/skills/*.md. First line = when to use it. The assistant sees the list
-every turn and loads the matching one itself. Edit or add files freely."""
 from pathlib import Path
 
 DIR = Path(__file__).resolve().parent.parent / "vault" / "skills"
 
-DEFAULTS = {   # audited 2026-10-23 (owner: "audit and combine or optimize all skills"): save-recipe merged into meal-planning
+DEFAULTS = {  # board #776 owner-audit-merged-save-recipe
 "test-an-idea": ("Use when the user shares a business, product or project idea and wants feedback.",
 """1. Restate the idea in one line.
 2. Name the BIGGEST risk or flaw first. Be honest, do not flatter.
@@ -51,10 +49,9 @@ DEFAULTS = {   # audited 2026-10-23 (owner: "audit and combine or optimize all s
 }
 
 
-# Earlier default texts (sha256 of the file, first 16 hex), from git history. A playbook that still holds one was never edited by its
-# owner, so a newer default replaces it, and a retired one goes (the 2026-10-23 skill audit merged save-recipe into meal-planning).
+# board #776 why-old-defaults-replaced
 OLD_DEFAULTS = {"test-an-idea": {"d1e28afc721c8003"},
-                "meal-planning": {"09886bc1a32932bf", "2e5f1675b47ae247", "6fbc46a234cf3155", "f7b42b99cdd46e9d"},   # last: the Windows portable
+                "meal-planning": {"09886bc1a32932bf", "2e5f1675b47ae247", "6fbc46a234cf3155", "f7b42b99cdd46e9d"},
                 "save-recipe": {"7d2a1306741f91ce", "80ca73eb70a316fe", "39501aca6cb3e848"}, "reply-to-text": {"46c3687ec1c230e7"},
                 "build-something": {"234909fd1bc1ed0b"}, "plan-my-day": {"cedf71ed1aa08179"}, "project-planning": {"b5dffeb513f33919"},
                 "life-support": {"e4eff804806b4a66"}}
@@ -64,7 +61,7 @@ RETIRED = {"save-recipe"}
 def _unedited(p: Path, name: str) -> bool:
     import hashlib
     try:
-        return hashlib.sha256(p.read_bytes().replace(b"\r\n", b"\n")).hexdigest()[:16] in OLD_DEFAULTS.get(name, ())   # Windows
+        return hashlib.sha256(p.read_bytes().replace(b"\r\n", b"\n")).hexdigest()[:16] in OLD_DEFAULTS.get(name, ())
     except OSError:
         return False
 
@@ -96,13 +93,11 @@ def listing() -> list[tuple[str, str]]:
 
 
 def copied(name: str) -> bool:
-    """A skill copied from Claude Code or Agent Zero (skill_sync.py), not one of her own playbooks."""
     p = DIR / f"{Path(name).stem}.md"
     return p.exists() and "\nMirrored-from: " in "\n" + "\n".join(p.read_text(errors="replace", encoding="utf-8").split("\n")[:8])
 
 
 def prompt_line() -> str:
-    """Her own playbooks with when to use them; copied skills by name only (there can be dozens: her prompt stays small)."""
     own, other = [], []
     for n, d in listing():
         (other if copied(n) else own).append((n, d))

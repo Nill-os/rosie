@@ -1,6 +1,4 @@
 #!/bin/bash
-# Daily: make an encrypted backup and check it. If secrets/backup_repo names a private GitHub repo (owner/name), copy the backup there
-# too (encrypted files only, newest 30). Without it the backup stays on this PC (~/backups/rosie).
 set -e
 cd "$(dirname "$0")"
 PY=.venv/bin/python

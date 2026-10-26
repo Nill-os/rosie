@@ -1,30 +1,5 @@
 #!/usr/bin/env python3
-"""Builds app/paper_words.tsv (the Morning Paper's vocabulary crossword words) from Princeton WordNet 3.0.
-
-Source: the nltk_data WordNet corpus, https://raw.githubusercontent.com/nltk/nltk_data/gh-pages/packages/corpora/wordnet.zip
-(sha256 cbda5ea6eef7f36a97a43d4a75f85e07fccbb4f23657d27b4ccbc93e2646ab59, fetched 2026-10-13). WordNet licence: app/paper_words.LICENSE.
-
-    python3 -I tools/build_paper_words.py <wordnet.zip> --cmudict <cmudict.dict> [--dict /usr/share/dict/american-english] [--out app/paper_words.tsv]
-
-Pronunciation: the CMU Pronouncing Dictionary, https://raw.githubusercontent.com/cmusphinx/cmudict/master/cmudict.dict
-(sha256 81917843c7f44ce2b094ac63873c2c7a4cf802040792c455ba3ca406891c3d22, fetched 2026-10-13; licence: app/paper_words.CMUDICT-LICENSE).
-A word's first CMU pronunciation is kept (ARPAbet) with an easy respelling made from it by paper_fun.respell ("ak-wee-ESS").
-A word with no CMU entry is left out: a pronunciation is never guessed.
-
-What gets picked ("words to learn"):
-- plain lower-case single words of 5-9 letters (4-9 for the trade terms) that the system's English word list also has (no obscure
-  or technical oddities);
-- a frequency band from WordNet's own tag counts (cntlist.rev, how often each sense was seen in the SemCor texts): seen at least
-  MIN_FREQ times (a real, used word) but at most MAX_FREQ times (not an everyday word you already know);
-- at most MAX_SENSES meanings in all (WordNet's own familiarity measure: everyday words have many), so one definition is a fair clue;
-- not a form built on an easier word (-ing, -ed, -ly, -ness, -er ...; re-, un-, over- ... on a word that exists by itself);
-- never offensive, vulgar, slang or a slur (by WordNet's own wording and a short list), never a definition that gives the word away;
-- general words: no specialist senses (a gloss that starts with a field like "(botany)"), no plants or animals, and no concrete
-  everyday things (WordNet's artifact, food, body ... files); abstract nouns, verbs, adjectives and adverbs;
-- plus business, tech and radio terms (TRADE below) that have a WordNet sense, with the sense whose definition fits the trade.
-Each line: word, part of speech, WordNet's definition (gloss), a WordNet example sentence when it has one, kind (word|biz|tech|radio),
-respelling, CMU phones.
-Nothing is written by hand: every definition and example is WordNet's."""
+# board #914 safety-wordnet-pinned-hash
 import argparse
 import collections
 import io
@@ -43,8 +18,7 @@ BAD_GLOSS = re.compile(r"\b(offensive|vulgar|obscen|slur|derogatory|disparag|sla
                        r"informal term|archaic|obsolete|dialect|british|chiefly|scottish|irish|euphemism|pejorative)", re.I)
 BAD_WORDS = {"bastard", "bitch", "whore", "slut", "faggot", "nigger", "retard", "spastic", "cripple", "midget", "dyke", "pansy", "tranny"}
 GENUS = re.compile(r"\b(genus|species|family [A-Z]|order [A-Z])\b")
-# WordNet lexicographer files of concrete nouns (artifact, animal, body, food, object, plant, quantity, substance, location, Tops):
-# everyday things are not "words to learn"; abstract nouns (acts, states, feelings, ideas, people) stay
+# board #914 why-concrete-nouns-dropped
 CONCRETE = {3, 5, 6, 8, 13, 15, 17, 20, 23, 27}
 TRADE = {
     "biz": "accrual amortize arbitrage attrition backorder benchmark bootstrap brokerage chargeback collateral commodity consignment "
@@ -122,12 +96,12 @@ def entry(word, pos_key, offsets, data, kind, hint=None):
         if not gloss or BAD_GLOSS.search(gloss):
             continue
         if kind == "word" and (gloss.startswith("(") or GENUS.search(gloss) or (p == "noun" and data[(p, off, "lex")] in CONCRETE)):
-            continue                                              # a specialist's sense, a plant or animal, a thing you can point at
+            continue
         defn, ex = split_gloss(gloss)
         if not fair(word, defn) or (hint and not hint.search(defn)):
             continue
         return {"word": word, "pos": POS[pos_key][1], "definition": defn, "example": pick_example(word, ex), "kind": kind}
-        # only the first acceptable sense (WordNet lists the most frequent first)
+        # board #914 why-first-sense-only
     return None
 
 
@@ -155,9 +129,9 @@ def build(zpath, dict_path):
         if not MIN_FREQ <= total <= MAX_FREQ:
             continue
         if sum(len(v) for v in by_pos.values()) > MAX_SENSES or DERIVED.search(w):
-            continue                                              # many meanings = an everyday word; -ing / -ly / -ness = built on an easier one
+            continue  # board #914 why-everyday-words-skipped
         m = PREFIX.match(w)
-        if m and w[m.end():] in english:                          # reopen, unhappy, overpay: the base word is the one to learn
+        if m and w[m.end():] in english:
             continue
         main = max(by_pos, key=lambda k: (freq[(w, k)] + (freq[(w, "s")] if k == "a" else 0), -len(by_pos[k])))
         e = entry(w, main, by_pos[main], data, "word")
@@ -167,7 +141,6 @@ def build(zpath, dict_path):
 
 
 def load_cmudict(path) -> dict:
-    """{word: first pronunciation} (alternates like "word(2)" and comments dropped)."""
     out = {}
     for line in Path(path).read_text(encoding="latin-1").splitlines():
         line = line.split("#", 1)[0].strip()

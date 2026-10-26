@@ -1,4 +1,3 @@
-"""Daemon side of the link to the overlay program (see overlay.py). Never blocks and never raises: if the overlay is not running, calls do nothing."""
 import json
 import os
 import socket

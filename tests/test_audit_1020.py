@@ -1,5 +1,3 @@
-"""Regression checks for the full audit of 2026-10-20 (owner: "do a full audit on rosie ... fix any issues"). Each test pins one verified
-finding so it can't silently come back."""
 import json
 import sqlite3
 import threading
@@ -15,7 +13,6 @@ import agentboard as board
 import config
 
 
-# ---------------------------------------------------------------- security
 def test_file_reads_never_return_secrets_and_wait_after_outside_content(tmp_path, monkeypatch):
     import fsguard
     import pc_tools
@@ -24,18 +21,18 @@ def test_file_reads_never_return_secrets_and_wait_after_outside_content(tmp_path
     (tmp_path / ".ssh" / "id_ed25519").write_text("PRIVATE")
     (tmp_path / "notes.txt").write_text("shopping list")
     assert "error" in pc_tools.read_file(str(tmp_path / ".ssh" / "id_ed25519"))
-    assert "error" in pc_tools.read_file("/etc/hostname")                         # outside the home folder
+    assert "error" in pc_tools.read_file("/etc/hostname")
     assert pc_tools.read_file(str(tmp_path / "notes.txt"))["content"] == "shopping list"
     assert ".ssh/" not in pc_tools.list_dir(str(tmp_path))["items"]
     held = agent.guard("read_file", {"path": "~/notes.txt"}, True)
-    assert held and held["status"] == "needs_confirmation"                        # after a web page or an email: the owner decides
+    assert held and held["status"] == "needs_confirmation"  # board #847 safety-owner-decides-outside
     assert agent.guard("read_file", {"path": "~/notes.txt"}, False) is None
 
 
 def test_agent_zero_cannot_type_into_shells_or_shift_the_day_without_a_yes():
     assert "terminal_send" not in a0_mcp.SELF_CARD and "terminal_send" in a0_mcp.RISKY
-    assert "shift_day" in a0_mcp.ASK_FIRST                                       # held with its own full card (pass 2)
-    assert "phone_reply_notification" in agent.OWN_CARD                          # its own card names who gets the reply
+    assert "shift_day" in a0_mcp.ASK_FIRST
+    assert "phone_reply_notification" in agent.OWN_CARD
 
 
 def test_agent_zero_calls_wait_after_outside_content(monkeypatch):
@@ -67,7 +64,6 @@ def test_login_never_works_with_an_empty_key_or_code(isolated):
         server._session_value()
 
 
-# ---------------------------------------------------------------- privacy
 def test_paper_deliveries_from_a_bank_or_a_hidden_sender_are_left_out():
     import datetime as dt
     import paper
@@ -109,7 +105,6 @@ def test_a_deleted_chat_leaves_no_words_behind():
         assert c.execute("SELECT COUNT(*) FROM units_fts WHERE units_fts MATCH 'Denver'").fetchone()[0] == 0
 
 
-# ---------------------------------------------------------------- agent board
 def test_a_note_is_never_lost_behind_newer_posts():
     board.post("are you done with slot-B?", "note", "claude-1", agent="claude-2")
     for i in range(12):
@@ -139,7 +134,6 @@ def test_board_text_is_outside_text_and_tainted_posts_say_so(monkeypatch):
     assert board.recent()[-1]["text"].startswith("(written after reading outside content)")
 
 
-# ---------------------------------------------------------------- data
 def test_settings_survive_saves_from_many_threads():
     cfg = config.load()
     cfg["owner_notes"] = "keep me"
@@ -200,19 +194,17 @@ def test_a_capture_during_a_sync_is_kept(monkeypatch):
     assert "jotted meanwhile" in workflows.SCRATCH.read_text(encoding="utf-8") and "first thing" not in workflows.SCRATCH.read_text(encoding="utf-8")
 
 
-# ---------------------------------------------------------------- mail
 def test_cleanup_only_touches_mail_the_action_changes():
     import mailclean
     assert mailclean._query("category:promotions", "archive").endswith("in:inbox")
-    assert "in:inbox" not in mailclean._query("from:news@x.com", "trash")              # trash reaches archived mail too
+    assert "in:inbox" not in mailclean._query("from:news@x.com", "trash")
     assert mailclean._query("older_than:1y", "mark_read").endswith("is:unread")
 
 
-# ---------------------------------------------------------------- ops
 def test_stale_locks_expire(tmp_path):
     import selfdev
     lock = tmp_path / "stage.lock"
-    lock.write_text("999999999")                                                    # no such process
+    lock.write_text("999999999")
     assert not selfdev.lock_live(lock)
     lock.write_text(str(__import__("os").getpid()))
     assert selfdev.lock_live(lock)
@@ -229,18 +221,17 @@ def test_the_orchestrator_switch_in_settings():
 def test_planning_is_off_by_default_in_the_public_copy():
     import re
     src = open(config.__file__).read()
-    assert re.search(r'"claude_planning": False', src)                             # the owner turns it on in their own copy only
+    assert re.search(r'"claude_planning": False', src)  # board #847 owner-planning-own-copy
     line = next((l for l in src.splitlines() if 'DEFAULTS["claude_planning"] = True' in l), None)
-    assert line is None or "<private-line>" in line                                 # the public export deletes the owner's line
+    assert line is None or "<private-line>" in line  # board #847 safety-public-export-strips-line
 
 
-# ---------------------------------------------------------------- pass 2 (2026-10-20)
 def test_an_explicit_date_beats_the_weekday_word():
     import datetime as dt
-    today = dt.date(2026, 10, 20)                                                    # a Tuesday
+    today = dt.date(2026, 10, 20)
     for text in ("add a dentist appointment on Friday October 30 at 3pm", "book gym next Friday at 6pm", "work block Friday 11/6 at 9am",
                  "Move my October 30 meeting to Monday", "Add a 1/2 hour break at 3pm today", "add gym on friday, I may 2 people"):
-        assert agent.named_days(text, today) == set(), text                    # any explicit date: the model's date is never "corrected"
+        assert agent.named_days(text, today) == set(), text  # board #847 why-explicit-date-kept
     assert agent.named_days("gym on Friday", today) == {dt.date(2026, 10, 23)}
 
 
@@ -300,11 +291,11 @@ def test_forgetting_a_note_or_a_chat_also_scrubs_beliefs_built_on_it():
         assert c.execute("SELECT COUNT(*) FROM units_fts WHERE units_fts MATCH 'Acme'").fetchone()[0] == 0
     import numpy as np
     mind_embed = mind.embed
-    mind.embed = lambda texts: [np.ones(768, dtype=np.float32) for _ in texts]   # no Ollama in tests: a stand-in embedder
+    mind.embed = lambda texts: [np.ones(768, dtype=np.float32) for _ in texts]
     try:
         nid = memory.remember("My PIN hint is the dog's birthday")["id"]
         with mind._db() as c:
-            assert c.execute("SELECT COUNT(*) FROM units WHERE text LIKE '%PIN hint%'").fetchone()[0] == 1   # it really was stored
+            assert c.execute("SELECT COUNT(*) FROM units WHERE text LIKE '%PIN hint%'").fetchone()[0] == 1
     finally:
         mind.embed = mind_embed
     memory.forget(nid)
@@ -367,7 +358,6 @@ def test_more_private_titles_stay_out_of_the_paper():
     assert not p.why("Study for exam")
 
 
-# ---------------------------------------------------------------- pass 3 (2026-10-20)
 def test_trash_undo_puts_back_exactly_the_inbox_mail(monkeypatch):
     import gmail
     import mailclean
@@ -457,7 +447,7 @@ def test_env_style_secrets_are_redacted():
         assert n >= 1, line
     t0 = time.time()
     fsguard.redact('"' + "auth " * 20000)
-    assert time.time() - t0 < 2                                                    # bounded: no slow pattern on a long line
+    assert time.time() - t0 < 2  # board #847 fix-bounded-no-slow-pattern
 
 
 def test_only_clear_planning_requests_go_to_claude():

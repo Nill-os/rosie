@@ -22,8 +22,7 @@ import java.net.URL;
 import java.util.ArrayList;
 import java.util.UUID;
 
-/** One hands-free conversation after "Hey Rosie": listen, send to your PC, speak the answer, listen again, until you stop talking or say stop.
- *  The microphone audio goes only to your own assistant over your Tailscale link. */
+// board #692 safety-mic-audio-stays-local
 public class VoiceSession {
     private final Context ctx;
     private final RosieOverlay ov;
@@ -32,7 +31,6 @@ public class VoiceSession {
     private volatile HttpURLConnection cur;
     static final String STATUS_CHANNEL = "rosie_status";
 
-    /** Status notification (shows in the shade, pops up briefly) so you can tell what she is doing even with the phone in a pocket. */
     void status(String title, String text) {
         try {
             android.app.NotificationManager nm = (android.app.NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
@@ -51,7 +49,6 @@ public class VoiceSession {
         try { ((android.app.NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE)).cancel(5); } catch (Throwable ignored) { }
     }
 
-    /** A short blip plus a tiny buzz: "I stopped listening, I'm working on it". */
     void thinkingCue() {
         new Thread(() -> Sounds.play(ctx, "thinking")).start();
         if (Sounds.vibrate(ctx)) try { ((android.os.Vibrator) ctx.getSystemService(Context.VIBRATOR_SERVICE)).vibrate(android.os.VibrationEffect.createOneShot(40, android.os.VibrationEffect.DEFAULT_AMPLITUDE)); } catch (Exception ignored) { }
@@ -61,29 +58,26 @@ public class VoiceSession {
 
     String base() { return ctx.getSharedPreferences("assistant", Context.MODE_PRIVATE).getString("url", MainActivity.DEFAULT_URL); }
 
-    /** A tap on the popup, Stop on the notification, or the headphone button: stop everything right now (microphone, waiting for the PC, her voice) and close the popup. */
     void cancel() {
         stop = true;
         ov.hide();
         try { if (player != null) player.stop(); } catch (Exception ignored) { }
         final HttpURLConnection c = cur;
-        if (c != null) new Thread(() -> { try { c.disconnect(); } catch (Exception ignored) { } }).start();      // give up on a request still waiting for the PC
+        if (c != null) new Thread(() -> { try { c.disconnect(); } catch (Exception ignored) { } }).start();
         clearStatus();
     }
 
-    /** kind: "wake", "thinking", "done", "on", "error" (see Sounds). */
     static void chime(Context c, boolean rising) { Sounds.play(c, rising ? "wake" : "done"); }
 
-    /** Runs the whole conversation. Returns false if it could not even start (not logged in / PC unreachable). */
     void run() {
         stop = false;
         final android.media.AudioManager audio = (android.media.AudioManager) ctx.getSystemService(Context.AUDIO_SERVICE);
         final android.media.AudioFocusRequest focus = new android.media.AudioFocusRequest.Builder(android.media.AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
                 .setAudioAttributes(new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ASSISTANT).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build()).build();
-        audio.requestAudioFocus(focus);                          // pauses your music while she talks; it resumes afterwards
-        MicRoute.acquire(ctx, true);                             // use the headset microphone when you are wearing one
+        audio.requestAudioFocus(focus);
+        MicRoute.acquire(ctx, true);
         android.media.session.MediaSession media = null;
-        try {                                                    // pressing the headphone button while she talks stops her at once
+        try {
             media = new android.media.session.MediaSession(ctx, "Rosie");
             media.setCallback(new android.media.session.MediaSession.Callback() {
                 @Override public boolean onMediaButtonEvent(android.content.Intent i) { cancel(); return true; }
@@ -144,10 +138,8 @@ public class VoiceSession {
         }
     }
 
-    /** How long a pause means "I'm done" (Settings: quick / normal / patient). */
     int endpointMs() { return ctx.getSharedPreferences("assistant", Context.MODE_PRIVATE).getInt("endpoint_ms", 1200); }
 
-    /** Records one spoken request. Returns null if nobody spoke. Stops 1.4 s after you finish. */
     short[] listen(int noSpeechMs) throws Exception {
         int rate = 16000, frame = 1600;
         AudioRecord mic = MicRoute.record(ctx, rate);
@@ -162,7 +154,7 @@ public class VoiceSession {
             double amb = 0, peak = 0; int ambN = 0;
             while (!stop) {
                 int n = mic.read(buf, 0, frame);
-                if (n < 0) { if (++errs > 5) throw new Exception("Microphone error"); Thread.sleep(50); continue; }     // the audio route changed or another app took the mic
+                if (n < 0) { if (++errs > 5) throw new Exception("Microphone error"); Thread.sleep(50); continue; }  // board #692 quirk-mic-route-changes
                 if (n == 0) { if (System.currentTimeMillis() - t0 > 40000) break; continue; }
                 errs = 0;
                 double sum = 0; for (int i = 0; i < n; i++) sum += (buf[i] / 32768.0) * (buf[i] / 32768.0);
@@ -235,24 +227,23 @@ public class VoiceSession {
         return r.isEmpty() ? "I have nothing to say to that." : r;
     }
 
-    /** Siri/Gemini style: say what is about to happen, give a short window to say "cancel", then do it. Returns text to treat as the next request, or null. */
     String autoWindow(JSONObject auto, String spokenSummary) throws Exception {
         String token = auto.getString("token");
         status("Doing it in 3 seconds", "Say cancel or tap Stop to stop.");
         ov.set("listening", "Say cancel to stop");
         short[] w = listen(auto.optInt("window_ms", 3000));
         if (stop) { http("/api/cancel", "application/json", new JSONObject().put("token", token).toString().getBytes("UTF-8"), 15000); return null; }
-        if (w == null) {                                                          // nothing said: go ahead
+        if (w == null) {
             JSONObject r = new JSONObject(new String(http("/api/confirm", "application/json", new JSONObject().put("token", token).toString().getBytes("UTF-8"), 60000), "UTF-8"));
             if (!"done".equals(r.optString("status"))) speak("That did not work: " + r.optString("message", "unknown problem"));
             else if (spokenSummary.startsWith("Text")) speak("Sent.");
             return null;
         }
-        http("/api/cancel", "application/json", new JSONObject().put("token", token).toString().getBytes("UTF-8"), 15000);   // you said something: hold it
+        http("/api/cancel", "application/json", new JSONObject().put("token", token).toString().getBytes("UTF-8"), 15000);
         String t = transcribe(w);
         String low = t.toLowerCase().replaceAll("[^a-z ]", "").trim();
         if (low.matches("(no|nope|cancel|cancel it|stop|stop that|wait|hold on|dont|dont send|dont call|never mind|nevermind)( please)?")) { speak("Okay, cancelled."); return null; }
-        return t.isEmpty() ? null : t;                                           // anything else is your next request
+        return t.isEmpty() ? null : t;
     }
 
     static String spoken(String t) {
@@ -261,7 +252,7 @@ public class VoiceSession {
         return t;
     }
 
-    /** Speaks the answer sentence by sentence: the first sentence starts playing while the rest is still being made, so you hear her much sooner. */
+    // board #692 why-speak-by-sentence
     void speak(String reply) throws Exception {
         if (stop) return;
         ov.set("speaking", reply.length() > 160 ? reply.substring(0, 157) + "…" : reply);
@@ -286,7 +277,7 @@ public class VoiceSession {
         }
     }
 
-    /** Splits text into sentence-sized pieces (small ones joined), at most 6, so speech can start early without sounding choppy. */
+    // board #692 why-chunks-at-most-six
     static java.util.List<String> chunks(String t) {
         java.util.List<String> out = new java.util.ArrayList<>();
         StringBuilder cur = new StringBuilder();

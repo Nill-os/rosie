@@ -1,13 +1,4 @@
-"""Rosie's Servers page: every machine and service on the home network with its address and port, live up/down, and a link to open
-each web app (owner 2026-10-23: "make a live list of my servers and ips in rosie so i can open them from rosie and so it helps me
-remember the ips and ports").
-
-Found by itself, nothing written in by hand: over the home server's SSH login (Settings > Security, the same one the security watch
-uses) she lists the server and, on a Proxmox host, every container with its address, then what each one listens on (ss). A web
-service is named by its page title (or its program); others by what the port is for (SSH, DNS, files). The owner can add machines
-by hand (a NAS, the router, a printer) and rename any service. Everything is kept in data/servers.json; she looks again every few
-hours and on Refresh. Up/down is a quick connection test each time the page asks.
-"""
+# board #772 owner-live-server-list
 import datetime as dt
 import ipaddress
 import json
@@ -27,14 +18,14 @@ import testguard
 ROOT = Path(__file__).resolve().parent.parent
 STATE = ROOT / "data" / "servers.json"
 STALE_S = 6 * 3600
-EPHEMERAL = 32768                           # higher ports are a program's own short-lived ones (not something to open)
+EPHEMERAL = 32768  # board #772 why-skip-ephemeral-ports
 PORTS = {22: "SSH", 53: "DNS", 25: None, 111: None, 139: None, 445: "Files (SMB)", 2049: "Files (NFS)", 3128: None, 5432: None,
-         3306: None, 6379: None, 9090: "Cockpit", 8006: "Proxmox"}                   # None = not shown (internal or a duplicate)
+         3306: None, 6379: None, 9090: "Cockpit", 8006: "Proxmox"}
 PROGRAMS = {"pveproxy": "Proxmox", "immich": "Immich", "navidrome": "Navidrome", "pihole-ftl": "Pi-hole", "jellyfin": "Jellyfin",
             "plexmediaserver": "Plex", "smbd": "Files (SMB)", "sshd": "SSH", "nginx": "Web server", "caddy": "Web server",
             "homeassistant": "Home Assistant", "hass": "Home Assistant", "grafana": "Grafana", "portainer": "Portainer"}
 NOT_WEB = {22, 53, 445, 2049}
-WEB_PATHS = {"pihole-ftl": "/admin/"}       # where a program's page lives when it isn't at /
+WEB_PATHS = {"pihole-ftl": "/admin/"}
 
 DISCOVER_SH = r"""
 PATH="$PATH:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -55,7 +46,6 @@ _lock = threading.Lock()
 state = {"running": False, "last_error": ""}
 
 
-# ---------------------------------------------------------------- the saved list
 def load() -> dict:
     try:
         d = json.loads(STATE.read_text())
@@ -74,15 +64,13 @@ def save(d: dict):
     tmp.replace(STATE)
 
 
-# ---------------------------------------------------------------- finding them
 def _host_address() -> str:
-    """The server's own address: the one Rosie logs in to (its own `hostname -I` starts with VPN addresses)."""
+    # board #772 why-address-from-ssh
     cmd = security_watch._ssh_cmd() or []
     return cmd[-1].rpartition("@")[2] if cmd else ""
 
 
 def parse(text: str, host_ip: str) -> list[dict]:
-    """DISCOVER_SH lines -> [{id, name, kind, ip, running, ports: [(port, program)]}]."""
     machines, by_id = [], {}
     for line in text.splitlines():
         f = line.split()
@@ -96,7 +84,7 @@ def parse(text: str, host_ip: str) -> list[dict]:
             local, prog = f[2], " ".join(f[3:])
             addr, _, port = local.rpartition(":")
             if not port.isdigit() or "%" in addr or addr.startswith(("127.", "[::1]")):
-                continue                                                   # loopback and VPN-only listeners can't be opened from here
+                continue
             p = int(port)
             m = by_id[f[1]]
             if p < EPHEMERAL and p not in {x for x, _ in m["ports"]}:
@@ -113,15 +101,15 @@ def _title(html: str) -> str:
 
 
 def probe(ip: str, port: int) -> dict:
-    """How to open ip:port: {scheme: http|https|'', title}. Web or not is found by asking (no guessing from the port number)."""
+    # board #772 why-ask-not-guess
     if port in NOT_WEB:
         return {"scheme": "", "title": ""}
     for scheme in ("http", "https"):
         try:
             r = httpx.get(f"{scheme}://{ip}:{port}/", timeout=4, verify=False, follow_redirects=True)
             if scheme == "http" and r.status_code == 400 and "https" in r.text.lower():
-                continue                                                   # "plain HTTP request was sent to HTTPS port"
-            return {"scheme": r.url.scheme if r.url.port in (None, port) else scheme, "title": _title(r.text[:20000])}   # http -> https redirects
+                continue
+            return {"scheme": r.url.scheme if r.url.port in (None, port) else scheme, "title": _title(r.text[:20000])}
         except (httpx.HTTPError, OSError):
             continue
     return {"scheme": "", "title": ""}
@@ -137,7 +125,7 @@ def service(ip: str, port: int, program: str, web: dict) -> dict | None:
     if known is None:
         return None
     prog = _program(program)
-    scheme = web["scheme"] or ({80: "http", 443: "https"}.get(port, "") if prog else "")   # a known web app that is busy right now
+    scheme = web["scheme"] or ({80: "http", 443: "https"}.get(port, "") if prog else "")
     if scheme:
         label = (prog if prog not in ("", "SSH", "Files (SMB)", "Web server") else "") or web["title"] or known or program or f"Port {port}"
     else:
@@ -151,7 +139,6 @@ def service(ip: str, port: int, program: str, web: dict) -> dict | None:
 
 
 def discover() -> dict:
-    """Look at the home server again (in the background thread)."""
     cmd = security_watch._ssh_cmd()
     if not cmd:
         raise RuntimeError("no home server is set up (Settings > Security)")
@@ -169,7 +156,7 @@ def discover() -> dict:
     for m in machines:
         del m["ports"]
         progs = {}
-        for s in m["services"]:                                            # one app on 80 and 443: keep the https one
+        for s in m["services"]:  # board #772 why-keep-https-one
             if s["url"] and s["program"]:
                 progs.setdefault(s["program"], []).append(s)
         for same in progs.values():
@@ -182,7 +169,6 @@ def discover() -> dict:
 
 
 def refresh() -> bool:
-    """Start a look in the background; False when one is running."""
     with _lock:
         if state["running"]:
             return False
@@ -200,9 +186,7 @@ def refresh() -> bool:
     return True
 
 
-# ---------------------------------------------------------------- live status and the page
 def _up(ip: str, port: int) -> float | None:
-    """Milliseconds to connect, or None."""
     t = time.monotonic()
     try:
         with socket.create_connection((ip, port), timeout=1.5):
@@ -212,7 +196,6 @@ def _up(ip: str, port: int) -> float | None:
 
 
 def listing(now: float | None = None) -> dict:
-    """The page: every machine (found and added by hand) with its services, each checked now."""
     d = load()
     found = d.get("found_at")
     if security_watch._ssh_cmd() and not testguard.active() and (not found or (now or time.time()) - dt.datetime.fromisoformat(found).timestamp() > STALE_S):
@@ -238,7 +221,6 @@ def _ping_any(ip: str) -> bool:
     return any(_up(ip, p) is not None for p in (22, 80, 443))
 
 
-# ---------------------------------------------------------------- the owner's own entries and names
 def _address_ok(a: str) -> bool:
     try:
         ipaddress.ip_address(a)
@@ -280,13 +262,12 @@ def rename(ip: str, port: int, label: str) -> dict:
     if label.strip():
         d["labels"][key] = label.strip()[:60]
     else:
-        d["labels"].pop(key, None)                                         # empty = back to the found name
+        d["labels"].pop(key, None)
     save(d)
     return {"ok": True, "message": "Renamed." if label.strip() else "Back to the found name."}
 
 
 def tool(query: str = "") -> dict:
-    """Chat tool: the addresses and ports of the owner's servers and services (optionally only those matching `query`)."""
     d = load()
     q = query.strip().lower()
     rows = []

@@ -38,7 +38,7 @@ def test_mail_cleanup_actions_never_delete_permanently():
 
 
 def test_windows_credential_places_are_blocked_too(monkeypatch, tmp_path):
-    """Windows keeps browser profiles, logins and app tokens under AppData, and writes paths with backslashes (owner 2026-10-23)."""
+    # board #887 safety-windows-appdata-secrets
     monkeypatch.setattr(fsguard, "HOME", tmp_path)
     for p in ("AppData/Local/Google/Chrome/User Data/Default/Login Data", "AppData/Roaming/Microsoft/Credentials/x", ".config/gcloud/credentials.db"):
         with pytest.raises(fsguard.Blocked):
@@ -56,6 +56,6 @@ def test_rosies_own_shipped_skills_stay_readable_even_under_appdata(monkeypatch,
     monkeypatch.setattr(fsguard, "ROOT", root)
     assert fsguard.resolve(str(root / "skills" / "cad" / "SKILL.md")).name == "SKILL.md"
     with pytest.raises(fsguard.Blocked):
-        fsguard.resolve(str(root / "skills" / "cad" / "api_key.json"))         # a key-like name is still blocked
+        fsguard.resolve(str(root / "skills" / "cad" / "api_key.json"))
     with pytest.raises(fsguard.Blocked):
-        fsguard.resolve(str(root / "app" / "server.py"))                          # the rest of AppData stays blocked
+        fsguard.resolve(str(root / "app" / "server.py"))

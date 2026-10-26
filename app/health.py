@@ -1,5 +1,3 @@
-"""Is everything Rosie depends on working, and what is about to break? Each check returns {name, level, detail, fix}. level: ok | warn | bad | off.
-Shown on the Home page (only when something is wrong) and in Settings; problems also arrive in your Inbox once a day per problem."""
 import datetime as dt
 import json
 import shutil
@@ -14,8 +12,8 @@ import plat
 
 ROOT = Path(__file__).resolve().parent.parent
 DATES = ROOT / "data" / "login_dates.json"
-BACKUP_FIX = plat.pick("~/assistant/backup-data.sh", "")     # the nightly backup is a Linux timer; Windows has no script for it yet
-LOGIN_WARN_DAYS = 5                                   # Google logins for an app in "Testing" mode stop working after 7 days
+BACKUP_FIX = plat.pick("~/assistant/backup-data.sh", "")  # board #733 fix-windows-backup-missing
+LOGIN_WARN_DAYS = 5  # board #733 quirk-testing-logins-expire
 _cache: dict = {"at": 0.0, "rows": []}
 
 
@@ -23,7 +21,6 @@ def _row(name, level, detail="", fix=""):
     return {"name": name, "level": level, "detail": detail, "fix": fix}
 
 
-# ---------- login ages ----------
 def record_login(key: str):
     try:
         d = json.loads(DATES.read_text()) if DATES.exists() else {}
@@ -37,7 +34,6 @@ def record_login(key: str):
 
 
 def login_age_days(key: str) -> float:
-    """Days since you last signed in. If we never saw the sign-in, start counting now (the first look)."""
     try:
         d = json.loads(DATES.read_text()) if DATES.exists() else {}
     except ValueError:
@@ -55,7 +51,6 @@ def _aging(name, key, what, fix):
     return None
 
 
-# ---------- checks ----------
 def check_ollama():
     import httpx
     import agent
@@ -112,10 +107,10 @@ def check_phone():
 
 
 def check_user_services():
-    if not shutil.which("systemctl"):               # Windows (and any system without systemd): these two are Linux services
+    if not shutil.which("systemctl"):
         return [_row(label, "off", "not available on this system (Linux only)") for label in ("Voice keys (dictation / Copilot key)", "Octopus overlay")]
     import pc_tools
-    env = pc_tools.user_bus_env()                  # the user bus is enough for systemctl --user (no desktop session needed)
+    env = pc_tools.user_bus_env()
     rows = []
     for unit, label in (("assistant-dictation", "Voice keys (dictation / Copilot key)"), ("assistant-overlay", "Octopus overlay")):
         try:
@@ -128,7 +123,6 @@ def check_user_services():
 
 
 def _unit_result(unit: str) -> str:
-    """systemd's Result of the user unit's last run ("success", "exit-code", ...), "" when unknown or never run."""
     import pc_tools
     try:
         return subprocess.run(["systemctl", "--user", "show", "-p", "Result", "--value", unit], capture_output=True, text=True, timeout=5,
@@ -140,10 +134,10 @@ def _unit_result(unit: str) -> str:
 def check_backup():
     if plat.IS_WIN and not backup.status().get("exists"):
         return _row("Backup", "off", "not set up on Windows yet")
-    res = _unit_result("rosie-backup.service")     # includes the push to the off-PC copy, which the files below can't show (audit pass 2)
+    res = _unit_result("rosie-backup.service")
     if res not in ("success", ""):
         return _row("Backup", "bad", f"the last nightly backup run failed ({res}); the off-PC copy may be out of date",
-                    "systemctl --user start rosie-backup.service")   # running the unit itself also clears its failed result
+                    "systemctl --user start rosie-backup.service")
     s = backup.status()
     if not s.get("exists"):
         return _row("Backup", "bad", "no backup yet", BACKUP_FIX)
@@ -157,7 +151,7 @@ def check_backup():
     return _row("Backup", "ok", f"{s['count']} kept, newest {h:.0f} h ago, verified")
 
 
-LAUNCHER_STATE = Path(__file__).resolve().parents[3] / "state.json"    # ROOT/slots/<X>/app/health.py: the launcher keeps state.json in ROOT
+LAUNCHER_STATE = Path(__file__).resolve().parents[3] / "state.json"
 
 
 def _windows_updates():
@@ -176,7 +170,7 @@ def _windows_updates():
 
 
 def check_repo():
-    if plat.IS_WIN:                                 # the daily GitHub sync is a Linux timer; Rosie's Windows copy updates itself (launcher.py)
+    if plat.IS_WIN:
         return _windows_updates()
     try:
         dirty = subprocess.run(["git", "-C", str(ROOT), "status", "--porcelain"], capture_output=True, text=True, timeout=10).stdout.strip().splitlines()
@@ -184,10 +178,10 @@ def check_repo():
     except Exception:
         return _row("Code backup (GitHub)", "off", "git not available")
     days = (time.time() - last) / 86400
-    res = _unit_result("rosie-sync.service")       # the daily push itself (audit 2026-10-23: the row said "synced" while it could fail)
+    res = _unit_result("rosie-sync.service")  # board #733 why-sync-row-real-result
     if res not in ("success", ""):
         return _row("Code backup (GitHub)", "warn", f"the last daily sync failed ({res}): the code isn't reaching GitHub",
-                    "systemctl --user start rosie-sync.service")   # running the unit itself also clears its failed result
+                    "systemctl --user start rosie-sync.service")
     if dirty and days > 3:
         return _row("Code backup (GitHub)", "warn", f"{len(dirty)} unsaved changes, last sync {days:.0f} days ago", "~/assistant/sync-repo.sh")
     return _row("Code backup (GitHub)", "ok", "synced" if not dirty else f"{len(dirty)} changes waiting for the daily sync")
@@ -203,8 +197,6 @@ def check_tailscale():
 
 
 def check_containers():
-    """Agent Zero (her brain), the memory graph's database, and Agent Zero's line to Rosie's tools (a0_mcp on docker0). A container left
-    stopped by Shut down all, or a line that failed to start before docker was up, used to show nothing here (audit 2026-10-23)."""
     import socket
 
     import a0_host
@@ -251,8 +243,7 @@ def _refresh():
 
 
 def cached(ttl=120) -> list[dict]:
-    """For the web pages: ALWAYS answers instantly with the latest saved result (empty until the first check finishes) and refreshes it in the background,
-    so a page never waits on Google or Gmail and never hammers them."""
+    # board #733 why-page-never-waits
     global _refreshing
     if time.time() - _cache["at"] > ttl and not _refreshing:
         _refreshing = True
@@ -268,7 +259,6 @@ def summary(rows: list[dict]) -> dict:
 
 
 def alert(rows: list[dict], now: dt.datetime, add):
-    """Tell the user ONCE per day per problem (add = inbox.add). Warnings are shown on the pages but only the ones about to cause trouble are sent."""
     for r in rows:
         if r["level"] == "bad" or (r["level"] == "warn" and "login is" in r["detail"]):
             add("system", f"Needs attention: {r['name']}", f"{r['detail']}. {('Fix: ' + r['fix']) if r['fix'] else ''}".strip(), "#/settings", key=f"health:{r['name']}:{now.date().isoformat()}", now=now)

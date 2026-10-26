@@ -1,7 +1,4 @@
 #!/bin/bash
-# Let you start, stop and restart Rosie's service without a password (Shut down all, the desktop icon). Run once:
-#   sudo ./ops/allow-power.sh        (install-service.sh runs it too)
-# The rule covers only assistant.service and only your user.
 set -e
 [ "$EUID" -eq 0 ] || { echo "Run with sudo: sudo $0"; exit 1; }
 U="${SUDO_USER:-$USER}"

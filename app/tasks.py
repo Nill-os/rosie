@@ -1,4 +1,3 @@
-"""Simple task list in a local SQLite file."""
 import datetime as dt
 import sqlite3
 from pathlib import Path
@@ -16,7 +15,7 @@ def _db():
     have = [r["name"] for r in c.execute("PRAGMA table_info(tasks)")]
     if "project_id" not in have:
         c.execute("ALTER TABLE tasks ADD COLUMN project_id INTEGER")
-    if "notes" not in have:                                        # the details a task's title leaves out (owner 2026-10-24)
+    if "notes" not in have:  # board #782 owner-task-notes-details
         c.execute("ALTER TABLE tasks ADD COLUMN notes TEXT NOT NULL DEFAULT ''")
     return c
 
@@ -64,7 +63,6 @@ def overdue():
 
 
 def find(text):
-    """Open tasks whose title contains text (so the model can resolve 'the bank task')."""
     with _db() as c:
         return [dict(r) for r in c.execute(
             "SELECT * FROM tasks WHERE done=0 AND title LIKE ? ORDER BY due", (f"%{text}%",))]

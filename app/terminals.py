@@ -1,6 +1,4 @@
-"""Terminal sessions (tmux) and AI-agent launching. Sessions live in a dedicated tmux server that is started OUTSIDE the assistant's service,
-so they keep running when the assistant restarts. Everything is logged. The assistant never passes 'skip all permissions' style flags:
-agents ask their own permission questions inside their session, which you answer from the Terminal page."""
+# board #783 safety-no-skip-permission-flags
 import os
 import re
 import shlex
@@ -53,7 +51,7 @@ def _server_up() -> bool:
 
 
 def ensure_server():
-    """Start the tmux server in the user's systemd manager (outside the assistant service) so sessions survive assistant restarts."""
+    # board #783 why-tmux-outside-service
     if not available():
         raise RuntimeError("tmux is not installed. Run: sudo apt install tmux   (or see the README)")
     CONF.parent.mkdir(exist_ok=True)
@@ -66,7 +64,7 @@ def ensure_server():
     e = env()
     e.setdefault("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
     e.setdefault("DBUS_SESSION_BUS_ADDRESS", f"unix:path=/run/user/{os.getuid()}/bus")
-    try:   # preferred: its own user scope, so a service restart cannot kill the sessions
+    try:
         subprocess.run(["systemd-run", "--user", "--scope", "--quiet", *start], env=e, capture_output=True, timeout=15, check=True)
     except Exception:
         subprocess.run(start, env=e, capture_output=True, timeout=15)
@@ -103,7 +101,7 @@ def list_sessions() -> list[dict]:
             continue
         cmd, done = f[6], (len(f) > 8 and f[8] == "1")
         kind = f[1] or "shell"
-        # agents: idle only once their command has really ended (the session marks itself @done); shells: idle when sitting at a prompt
+        # board #783 why-agent-idle-after-done
         idle = done if kind == "agent" else cmd in ("bash", "sh", "zsh", "fish")
         out.append({"name": f[0], "kind": kind, "agent": f[2], "folder": f[3], "created": int(f[4] or 0), "activity": int(f[5] or 0), "running": cmd, "idle": idle})
     return sorted(out, key=lambda s: -s["activity"])

@@ -1,5 +1,3 @@
-"""Vector's face menu while he sits (vector_menu.py: backpack button and lift) and his vision orders (vector_look.py:
-look around, go to a thing)."""
 import time
 import types
 
@@ -28,13 +26,13 @@ def test_lift_bands_run_from_down_first_to_up_last():
 def test_a_press_opens_nothing_by_itself_then_changes_the_highlighted_setting():
     applied, closed, stood = [], [], []
     m = _menu(applied, closed, stood)
-    assert m.press() is False and m.recent_press()                       # closed: vector_pod opens it after his listening
+    assert m.press() is False and m.recent_press()
     m.lift(vector_menu.LIFT_DOWN_MM + 1)
     m.show()
     assert m.open and m.index == 0
-    m.press()                                                             # Screens: Clock + PC -> Clock
+    m.press()
     assert applied == [{"face_panels": ["clock"]}]
-    m.lift(vector_menu.LIFT_UP_MM)                                        # all the way up: the last line, Done
+    m.lift(vector_menu.LIFT_UP_MM)
     assert vector_menu.ITEMS[m.index][0] == "done"
     m.press()
     assert not m.open and closed == [1] and stood == []
@@ -46,7 +44,7 @@ def test_the_lift_needs_to_be_clearly_in_the_next_band():
     m.lift(vector_menu.LIFT_DOWN_MM + band / 2)
     m.show()
     assert m.index == 0
-    m.lift(vector_menu.LIFT_DOWN_MM + band + 0.5)                        # just over the edge: stays
+    m.lift(vector_menu.LIFT_DOWN_MM + band + 0.5)
     assert m.index == 0
     m.lift(vector_menu.LIFT_DOWN_MM + band + 3)
     assert m.index == 1
@@ -66,7 +64,7 @@ def test_values_cycle_and_the_menu_draws_at_his_screen_size():
     cfg["vector_talk_volume"] = "HIGH"
     config.save(cfg)
     choices = dict((k, c) for k, _, c in vector_menu.ITEMS)
-    assert vector_menu.next_value("talk_volume", choices["talk_volume"]) == "LOW"            # wraps round
+    assert vector_menu.next_value("talk_volume", choices["talk_volume"]) == "LOW"
     assert vector_menu.shown("talk_volume", choices["talk_volume"]) == "High"
     m = _menu([])
     m.show()
@@ -93,7 +91,7 @@ def test_the_face_loop_draws_the_open_menu_instead_of_the_screens():
     while not shown and time.time() < deadline:
         time.sleep(0.02)
     loop.stop()
-    assert shown and shown[0] == 1000 + 1500 and loop.last_frame.size == vector_face.size()    # menu frames: 1 s each
+    assert shown and shown[0] == 1000 + 1500 and loop.last_frame.size == vector_face.size()
 
 
 def _sitting(monkeypatch, priorities):
@@ -112,10 +110,10 @@ def test_his_listening_after_a_press_is_answered_safely_then_the_menu_holds_him_
     bot, menu = _sitting(monkeypatch, priorities)
     menu.pressed_at = time.time()
     out = vector_pod.route("", time.time())
-    assert out == ("intent", vector_pod.ROSIE_SPEAKS_INTENT, {})                           # his greeting first, control after
+    assert out == ("intent", vector_pod.ROSIE_SPEAKS_INTENT, {})
     assert menu.open and priorities == [vector_bot.MENU_PRIORITY]
     menu.close()
-    assert priorities == [vector_bot.MENU_PRIORITY, vector_bot.SIT_PRIORITY]              # "Hey Rosie" works again
+    assert priorities == [vector_bot.MENU_PRIORITY, vector_bot.SIT_PRIORITY]
 
 
 def test_nothing_said_while_sitting_without_a_press_is_still_the_next_screen(monkeypatch):
@@ -143,7 +141,6 @@ def test_screen_time_is_a_setting_with_limits():
     assert vector_api.vector_settings({"face_seconds": "soon"})["ok"]
 
 
-# --- vision orders ---------------------------------------------------------------------------------------------------
 def test_orders_for_his_eyes_and_his_own_skills_first():
     assert vector_intents.go_to_target("Hey Rosie, go to the mug.") == "mug"
     assert vector_intents.go_to_target("find my phone") == "phone"
@@ -239,16 +236,16 @@ def test_the_watcher_turns_his_state_stream_into_presses_and_lift_moves():
     events = Stream([ev(0, 0, kind=None), ev(0, 33), ev(0x10, 33), ev(0x10, 33), ev(0, 33), ev(0x10, 90)])
     presses, m, calls = [], _menu([]), []
 
-    def states():                                                         # the second stream: the test is over
+    def states():
         calls.append(1)
         if len(calls) > 1:
             w.stop()
             return Stream()
         return events
     w = vector_menu.Watcher(types.SimpleNamespace(states=states), m, lambda: presses.append(1))
-    w._stop.wait = lambda t: None                                         # no 2 s pause between streams
+    w._stop.wait = lambda t: None
     w._run()
-    assert len(presses) == 2 and m.lift_mm == 90                          # one press per push, held button counts once
+    assert len(presses) == 2 and m.lift_mm == 90
 
 
 def test_the_controller_runs_the_menu_while_he_sits(monkeypatch):
@@ -257,18 +254,18 @@ def test_the_controller_runs_the_menu_while_he_sits(monkeypatch):
     bot, menu = _sitting(monkeypatch, priorities)
     monkeypatch.setattr(vector_pod, "robot", lambda: bot)
     d = vector_pad.Driver(types.SimpleNamespace())
-    d.menu_move(1)                                                         # D-pad while closed: open it
+    d.menu_move(1)
     assert menu.open and priorities == [vector_bot.MENU_PRIORITY]
     start = menu.index
     d.menu_move(1)
     assert menu.index == (start + 1) % len(vector_menu.ITEMS)
     d.menu_move(-1)
     d.menu_move(-1)
-    assert menu.index == (start - 1) % len(vector_menu.ITEMS)              # wraps round
+    assert menu.index == (start - 1) % len(vector_menu.ITEMS)
     menu.index = [k for k, *_ in vector_menu.ITEMS].index("quiet_idle")
-    d.press(vector_pad.BTN_SOUTH)                                          # Cross: change the line (not a quip)
+    d.press(vector_pad.BTN_SOUTH)
     assert config.load()["vector_quiet_idle"] is True
-    d.press(vector_pad.BTN_EAST)                                           # Circle: close (not stand up)
+    d.press(vector_pad.BTN_EAST)
     assert not menu.open and priorities[-1] == vector_bot.SIT_PRIORITY
 
 
@@ -277,7 +274,6 @@ def test_the_menu_hint_fits_his_screen():
     assert d.textlength(vector_menu.HINT, font=vector_face.font(11)) < img.size[0] - 8
 
 
-# --- moves while he talks (vector_moves.py) and "what do you see" as a conversation ----------------------------------
 import vector_moves
 
 
@@ -297,14 +293,14 @@ class Body:
 
 def test_move_tags_come_out_of_the_words_and_unknown_ones_are_never_spoken():
     assert vector_moves.split("Oh, a cat! [look_up] Hi [Wiggle] there [dance].") == ("Oh, a cat! Hi there .", ["look_up", "wiggle"])
-    assert vector_moves.split("[nod] [nod] [nod] Yes.")[1] == ["nod", "nod"]                # at most two per sentence
+    assert vector_moves.split("[nod] [nod] [nod] Yes.")[1] == ["nod", "nod"]  # board #907 why-two-moves-cap
     assert "[turn_left]" in vector_moves.prompt_hint(False) and "[turn_left]" not in vector_moves.prompt_hint(True)
 
 
 def test_moves_run_and_sitting_keeps_his_wheels_still():
     body = Body()
     vector_moves.perform(body, ["nod", "wiggle"], sitting=True)
-    assert body.moves and all(m == "head" for m, _ in body.moves)                        # the wiggle needs his wheels: skipped
+    assert body.moves and all(m == "head" for m, _ in body.moves)  # board #907 quirk-wiggle-needs-wheels
     body = Body()
     vector_moves.perform(body, ["turn_left", "arms_up"], sitting=False)
     assert ("turn", 35) in body.moves and ("lift", 4.0) in body.moves
@@ -329,15 +325,15 @@ def test_what_do_you_see_is_a_conversation_with_moves_and_rosie_remembers_it(mon
     monkeypatch.setattr(vector_pod, "_later", lambda fn, *a: tasks.append((fn, a)))
     assert vector_pod.route("what do you see", time.time()) == ("intent", vector_pod.ROSIE_SPEAKS_INTENT, {})
     fn, a = tasks[0]
-    fn(*a)                                                                                # the conversation itself
+    fn(*a)
     deadline = time.time() + 3
     while len(performed) < 2 and time.time() < deadline:
         time.sleep(0.02)
-    assert len(played) == 2 and performed == [["look_up"], ["wiggle"]]                   # a closing tag still moves him
+    assert len(played) == 2 and performed == [["look_up"], ["wiggle"]]
     assert vector_pod.status["scene"]["saw"] == "A mug of coffee! Long night, huh?"
 
 
-# --- heat and a sleeping camera (vic-engine crash 2026-10-24) -------------------------------------------------------
+# board #907 fix-vic-engine-crash
 def test_no_picture_is_asked_for_while_he_sleeps(monkeypatch):
     calls = []
     bot = vector_bot.Robot.__new__(vector_bot.Robot)
@@ -374,12 +370,11 @@ def test_heat_has_hysteresis(monkeypatch):
     vector_pod._check_heat("x")
     assert vector_pod._hot
     vector_pod._check_heat("x")
-    assert vector_pod._hot                                                                # still cooling down
+    assert vector_pod._hot
     vector_pod._check_heat("x")
     assert not vector_pod._hot and vector_pod.status["temp_c"] == 66.0
 
 
-# --- holds that survive a dropped stream, and an eye colour that does not keep him busy ------------------------------
 def test_a_dropped_control_stream_still_counts_as_sitting_and_is_taken_back(monkeypatch):
     made = []
 
@@ -405,9 +400,9 @@ def test_a_dropped_control_stream_still_counts_as_sitting_and_is_taken_back(monk
     bot.stub, bot._hold, bot._lock, bot._priority, bot._want_hold = None, None, threading.Lock(), vector_bot.SIT_PRIORITY, False
     assert bot.hold() and bot.held
     first = made[-1]
-    first.granted.clear(); first.lost.set(); first.lost_at = time.time() - 10              # his side ended the stream
-    assert bot.held                                                                       # still sitting
-    assert bot.ensure_control(after_s=3.0) and made[-1] is not first and first.stopped    # a fresh stream, control back
+    first.granted.clear(); first.lost.set(); first.lost_at = time.time() - 10
+    assert bot.held
+    assert bot.ensure_control(after_s=3.0) and made[-1] is not first and first.stopped
     bot.release()
     assert not bot.held
 
@@ -420,4 +415,4 @@ def test_while_he_is_free_his_eye_colour_steps_rarely():
     time.sleep(0.32)
     sweep.stop()
     assert 2 <= len(saved) <= 8 and set(saved) <= {round(h, 3) for h in vector_dev.IDLE_HUES}
-    assert vector_dev.EyeSweep(bot).idle_step_s >= 600                                    # live default: every 10 minutes
+    assert vector_dev.EyeSweep(bot).idle_step_s >= 600

@@ -1,9 +1,4 @@
-"""Failure-injection tests for the skill sync and the board hook (audit 2026-10-25, risks C1-C3 and C5; app/skill_sync.py, app/board_hook.py).
-C4 (Unix-only calls on Windows) is review-only.
-
-Already covered elsewhere, not repeated: tests/test_skill_sync.py (an agent's own skill is never replaced by a copy in Rosie's
-direction, a copy goes when its source goes, a failed swap keeps the old copy, a symlinked skill folder is not listed) and
-tests/test_board.py::test_a_background_notice_keeps_the_current_task_and_its_posts (one pass over the five notice forms)."""
+# board #884 quirk-windows-unix-calls-review
 import json
 import os
 import subprocess
@@ -26,9 +21,7 @@ def _snapshot(root, only="dup"):
     return {str(p.relative_to(root)): p.read_bytes() for p in sorted((root / only).rglob("*")) if p.is_file()}
 
 
-# ---------------------------------------------------------------- C1
 def test_C1_an_own_skill_of_the_same_name_is_never_overwritten_by_sync(world):
-    """Claude, Rosie and Agent Zero each have their own 'dup': a full sync changes none of them."""
     skills.init()
     (ss.CLAUDE_SKILLS / "dup").mkdir()
     (ss.CLAUDE_SKILLS / "dup" / "SKILL.md").write_text(_own_text("claude"))
@@ -44,7 +37,6 @@ def test_C1_an_own_skill_of_the_same_name_is_never_overwritten_by_sync(world):
 
 @pytest.mark.parametrize("target", ["claude", "rosie", "agent-zero"])
 def test_C1_the_writers_refuse_an_own_skill(world, target):
-    """_write_claude/_write_rosie/_write_a0 return False and touch nothing when the target is an unmarked skill."""
     skills.init()
     src = {"origin": "claude:x", "dir": None, "text": "---\nname: dup\ndescription: d\n---\n\nbody\n"}
     if target == "claude":
@@ -63,7 +55,7 @@ def test_C1_the_writers_refuse_an_own_skill(world, target):
 
 
 def test_C1_a_stale_state_entry_never_deletes_an_own_skill(world):
-    """The state says 'claude:dup' was once a copy, its source is gone, and the folder is now the owner's own (no mark): it stays."""
+    # board #884 safety-owner-folder-stays
     skills.init()
     (ss.CLAUDE_SKILLS / "dup").mkdir()
     (ss.CLAUDE_SKILLS / "dup" / "SKILL.md").write_text(_own_text("claude"))
@@ -79,11 +71,11 @@ def test_C1_a_stale_state_entry_never_deletes_an_own_skill(world):
     out = ss.sync()
     assert (ss.CLAUDE_SKILLS / "gone" / "SKILL.md").exists() and (ss.A0_SKILLS / "gone" / "SKILL.md").exists() and (skills.DIR / "gone.md").exists()
     assert (ss.CLAUDE_SKILLS / "dup" / "SKILL.md").exists() and (skills.DIR / "dup.md").exists() and (ss.A0_SKILLS / "dup" / "SKILL.md").exists()
-    assert "claude:gone" in out["removed"]            # the state entry itself is dropped, without deleting the folder
+    assert "claude:gone" in out["removed"]
 
 
 def test_C1_a_playbook_that_quotes_the_mark_after_line_8_stays_an_original(world):
-    """Rosie's own playbook quoting 'Mirrored-from:' in its body is still an original: copied out, never replaced or removed."""
+    # board #884 safety-quoted-mark-original
     skills.init()
     body = "\n".join(f"step {i}" for i in range(12)) + "\nMirrored-from: claude:/x\nmore\n"
     (skills.DIR / "quoter.md").write_text("Use when quoting.\n\n" + body)
@@ -99,12 +91,11 @@ def test_C1_a_playbook_that_quotes_the_mark_after_line_8_stays_an_original(world
 
 
 def test_C1_a_real_mark_in_the_header_is_a_copy():
-    """The mark on one of the first lines does make a playbook a copy (so the rule above isn't just 'never marked')."""
+    # board #884 why-mark-on-first-lines
     assert ss._marked("desc\n\nMirrored-from: claude:/x\nbody\n")
     assert not ss._marked("\n".join(["l"] * 8) + "\nMirrored-from: x\n")
 
 
-# ---------------------------------------------------------------- C2
 def _break(kind, d):
     md = d / "SKILL.md"
     if kind == "unreadable file":
@@ -142,7 +133,6 @@ KINDS = ["unreadable file", "unreadable SKILL.md", "symlink loop", "dir symlink 
 
 @pytest.mark.parametrize("kind", KINDS)
 def test_C2_one_broken_skill_does_not_stop_the_others(world, kind):
-    """A Claude skill 'bad' with this defect syncs (or is skipped) and 'good' still reaches Rosie and Agent Zero in the same round."""
     _skill(ss.CLAUDE_SKILLS, "aaa-first", body="first")
     bad = _skill(ss.CLAUDE_SKILLS, "bad", body="bad one")
     _skill(ss.CLAUDE_SKILLS, "zzz-good", body="good one", extra={"scripts/run.sh": "echo ok"})
@@ -172,7 +162,6 @@ def test_C2_one_broken_skill_does_not_stop_the_others(world, kind):
 
 
 def test_C2_a_broken_skill_in_each_agents_own_folder_does_not_stop_the_round(world):
-    """Rosie's playbook with non-UTF-8 bytes and an Agent Zero skill with a bad header don't stop Claude's skill syncing."""
     skills.init()
     (skills.DIR / "broken-pb.md").write_bytes(b"Use when \xff\xfe.\n\nbody \x80\n")
     _skill(ss.A0_SKILLS, "a0-bad").joinpath("SKILL.md").write_text("---\n: : :\n---\n")
@@ -182,7 +171,6 @@ def test_C2_a_broken_skill_in_each_agents_own_folder_does_not_stop_the_round(wor
 
 
 def test_C2_a_failing_write_to_one_target_is_reported_and_the_rest_continue(world, monkeypatch):
-    """Agent Zero's docker exec fails for one skill: that one lands in errors, every other skill is still written."""
     _skill(ss.CLAUDE_SKILLS, "aaa-bad", body="x")
     _skill(ss.CLAUDE_SKILLS, "bbb-ok", body="y")
     real = ss._write_a0
@@ -199,7 +187,6 @@ def test_C2_a_failing_write_to_one_target_is_reported_and_the_rest_continue(worl
 
 
 def test_C2_a_failing_write_for_claude_leaves_no_half_copy_and_the_rest_continue(world, monkeypatch):
-    """_write_claude raising for one skill leaves no .tmp folder behind, and the next skills still sync."""
     skills.init()
     (skills.DIR / "aaa-pb.md").write_text("Use for a.\n\nbody\n")
     (skills.DIR / "bbb-pb.md").write_text("Use for b.\n\nbody\n")
@@ -215,7 +202,6 @@ def test_C2_a_failing_write_for_claude_leaves_no_half_copy_and_the_rest_continue
     assert [p.name for p in ss.CLAUDE_SKILLS.iterdir() if p.name.startswith(".")] == []
 
 
-# ---------------------------------------------------------------- C3
 def _outside(tmp_path):
     out = tmp_path / "outside"
     (out / "sub").mkdir(parents=True)
@@ -230,7 +216,6 @@ def _leaks(*roots):
 
 @needs_symlinks
 def test_C3_a_symlink_to_outside_is_never_copied(world, tmp_path):
-    """A skill folder with a symlinked file, a symlinked folder, a nested link and a link to ../: no outside byte reaches any agent."""
     out = _outside(tmp_path)
     d = _skill(ss.CLAUDE_SKILLS, "linky", extra={"real.txt": "fine", "refs/ok.md": "ok"})
     os.symlink(out / "secret.txt", d / "file-link.txt")
@@ -249,7 +234,6 @@ def test_C3_a_symlink_to_outside_is_never_copied(world, tmp_path):
 
 @needs_symlinks
 def test_C3_a_symlinked_skill_md_or_skill_folder_is_not_a_skill(world, tmp_path):
-    """SKILL.md linked to an outside file, and a whole skill folder linked from outside, are not synced."""
     out = _outside(tmp_path)
     (out / "SKILL.md").write_text("---\nname: stolen\ndescription: OUTSIDE-SECRET\n---\n\nOUTSIDE-SECRET\n")
     (ss.CLAUDE_SKILLS / "md-link").mkdir()
@@ -264,21 +248,19 @@ def test_C3_a_symlinked_skill_md_or_skill_folder_is_not_a_skill(world, tmp_path)
 
 @needs_symlinks
 def test_C3_a_link_inside_agent_zeros_own_skill_is_not_followed(world, tmp_path):
-    """The owner's files are what Agent Zero could link to: its own skill's link is dropped on the way to Claude and Rosie."""
     out = _outside(tmp_path)
     d = _skill(ss.A0_SKILLS, "a0-skill")
     os.symlink(out / "secret.txt", d / "notes.txt")
     os.symlink(out, d / "dir")
     ss.approve("a0-skill", ss.approve("a0-skill")["version"])
     ss.sync()
-    assert (ss.CLAUDE_SKILLS / "a0-skill" / "SKILL.md").exists()                 # approved, so it did reach Claude
+    assert (ss.CLAUDE_SKILLS / "a0-skill" / "SKILL.md").exists()
     assert _leaks(ss.CLAUDE_SKILLS) == [] and "OUTSIDE" not in skills.use_skill("a0-skill")["instructions"]
     assert sorted(p.name for p in (ss.CLAUDE_SKILLS / "a0-skill").rglob("*") if p.is_file()) == [ss.MARK, "SKILL.md"]
 
 
 @pytest.mark.skipif(os.name != "nt", reason="NTFS junctions exist on Windows only")
 def test_C3_a_junction_to_outside_is_never_copied(world, tmp_path):
-    """A junction inside a skill folder pointing outside it: no outside file is copied."""
     out = _outside(tmp_path)
     d = _skill(ss.CLAUDE_SKILLS, "junky")
     r = subprocess.run(["cmd", "/c", "mklink", "/J", str(d / "jn"), str(out)], capture_output=True)
@@ -287,7 +269,6 @@ def test_C3_a_junction_to_outside_is_never_copied(world, tmp_path):
     assert _leaks(ss.A0_SKILLS / "junky", ss.CLAUDE_SKILLS / "junky") == []
 
 
-# ---------------------------------------------------------------- C5
 NOTICES = {
     "task-notification": "<task-notification>\n<task-id>b1</task-id> completed</task-notification>",
     "task-notification with leading space": "  \n<task-notification>x</task-notification>",
@@ -310,7 +291,6 @@ def _session(monkeypatch, prompt="fix the build"):
 
 @pytest.mark.parametrize("form", sorted(NOTICES))
 def test_C5_a_notice_after_a_post_keeps_the_stop_hook_quiet(monkeypatch, form):
-    """After a doing post, this notice form arrives as a prompt: later work and Stop still say nothing about a missing post."""
     hook = _session(monkeypatch)
     board.post("fixing the build", "doing", agent="claude-1")
     for _ in range(3):
@@ -322,7 +302,6 @@ def test_C5_a_notice_after_a_post_keeps_the_stop_hook_quiet(monkeypatch, form):
 
 
 def test_C5_the_notice_never_becomes_the_task(monkeypatch):
-    """The board keeps the real request as the session's task through every notice form."""
     hook = _session(monkeypatch, "deploy the Canvas sync")
     for n in NOTICES.values():
         hook.main("UserPromptSubmit", {"cwd": "/tmp/x", "prompt": n})
@@ -332,7 +311,6 @@ def test_C5_the_notice_never_becomes_the_task(monkeypatch):
 
 
 def test_C5_a_real_prompt_after_a_post_starts_a_new_count(monkeypatch):
-    """A new user request after a post counts its own work: without a post it is reminded once, and Stop holds it."""
     hook = _session(monkeypatch)
     board.post("fixing the build", "doing", agent="claude-1")
     hook.main("UserPromptSubmit", {"cwd": "/tmp/x", "prompt": NOTICES["task-notification"]})
@@ -347,7 +325,6 @@ def test_C5_a_real_prompt_after_a_post_starts_a_new_count(monkeypatch):
 @pytest.mark.parametrize("prompt", ["please fix the <task-notification> parser",
                                     "Another Claude session would help here", "the system notification in the app is wrong"])
 def test_C5_a_real_prompt_that_only_mentions_a_notice_word_is_still_a_new_task(monkeypatch, prompt):
-    """Text that merely mentions a notice (not starting with one) is the user's real request and resets the count."""
     hook = _session(monkeypatch)
     board.post("fixing the build", "doing", agent="claude-1")
     hook.main("UserPromptSubmit", {"cwd": "/tmp/x", "prompt": prompt})
@@ -358,7 +335,6 @@ def test_C5_a_real_prompt_that_only_mentions_a_notice_word_is_still_a_new_task(m
 
 
 def test_C2_an_unreadable_rosie_playbook_does_not_stop_the_round(world):
-    """Pass-1 note 2026-10-25: rosie_skills() read every playbook unguarded, so one unreadable file stopped the whole round."""
     if os.name == "nt" or os.geteuid() == 0:
         pytest.skip("chmod 0 doesn't block reads here")
     skills.init()

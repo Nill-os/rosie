@@ -1,5 +1,3 @@
-"""What the outside world (MCP / cloud AI agents) may READ. Read-only. Credential stores are blocked and secrets are redacted.
-This is a safety net on top of your choice to share all folders: it exists because cloud agents send what they read to a cloud model."""
 import os
 import re
 from pathlib import Path
@@ -8,12 +6,11 @@ ROOT = Path(__file__).resolve().parent.parent
 HOME = Path(os.environ.get("ASSISTANT_MCP_HOME") or Path.home()).resolve()
 MAX_BYTES = 200_000
 
-# any path component with these names is blocked (credential stores, keyrings, browser profiles, other AI tools' logins)
+# board #729 safety-credential-paths-blocked
 DENY_PARTS = {".ssh", ".gnupg", ".aws", ".kube", ".azure", ".docker", ".password-store", ".mozilla", ".thunderbird", ".pki", ".claude", ".codex", ".gemini", ".opencode",
               ".gcloud", ".keyrings", "keyrings", "brave-browser", "braveSoftware", "google-chrome", "chromium", "signal", "slack", "discord", "1password", "bitwarden", ".trash",
-              "secrets", "agent-zero"}   # any checkout's secrets folder; Agent Zero's settings hold its tokens (audit 2026-10-20)
-# relative path prefixes (from the home folder)
-DENY_PREFIXES = ("appdata", ".config", ".local/share",   # AppData: Windows' .config and .local (browser profiles, logins, app tokens) ".local/state", ".var", "snap", ".config/gcloud", ".config/gh", ".config/solana", ".config/opencode", ".config/google-chrome", ".config/chromium", ".config/BraveSoftware", ".config/Signal",
+              "secrets", "agent-zero"}
+DENY_PREFIXES = ("appdata", ".config", ".local/share",
                  ".config/discord", ".config/Slack", ".local/share/keyrings", "snap/firefox", ".cache", ".mozilla")
 DENY_NAME = re.compile(r"^(id_(rsa|dsa|ecdsa|ed25519)(\..*)?|.*\.(pem|key|p12|pfx|kdbx|keystore|jks|ppk|gpg|asc)|\.env(\..*)?|\.netrc|\.npmrc|\.pypirc|\.git-credentials|"
                        r"\.(bash|zsh|python|psql|mysql|node_repl)_history|\.lesshst|credentials(\.json)?|.*(token|secret|apikey|api_key)s?.*\.(json|txt|env|ini|yaml|yml)|id\.json|"
@@ -21,11 +18,11 @@ DENY_NAME = re.compile(r"^(id_(rsa|dsa|ecdsa|ed25519)(\..*)?|.*\.(pem|key|p12|pf
 SECRET_PATTERNS = [(re.compile(r"://[^/\s:@]+:[^@\s/]{3,}@"), "://[REDACTED url credentials]@"), (re.compile(r"AIza[0-9A-Za-z_\-]{30,}"), "[REDACTED google key]"), (re.compile(r"\bsk-[A-Za-z0-9_\-]{20,}"), "[REDACTED api key]"),
                    (re.compile(r"\bgh[pousr]_[A-Za-z0-9]{30,}"), "[REDACTED github token]"), (re.compile(r"\bxox[abprs]-[A-Za-z0-9\-]{10,}"), "[REDACTED slack token]"),
                    (re.compile(r"\bAKIA[0-9A-Z]{16}\b"), "[REDACTED aws key]"), (re.compile(r"\bya29\.[A-Za-z0-9_\-]{20,}"), "[REDACTED google oauth]"),
-                   (re.compile(r"(?i)(?<![A-Za-z0-9])[\w.-]{0,40}(password|passwd|secret|token|api[_-]?key)\w{0,20}\s*[:=]\s*['\"]?[^\s'\"]{8,}"), "[REDACTED credential]"),   # also MY_SERVICE_ACCESS_TOKEN=...
-                   (re.compile(r'(?i)"[^"\n]{0,40}(?:password|passwd|secret|token|api[_-]?key|authorization)[^"\n]{0,40}"\s*:\s*"[^"\n]{8,}"'), '"[REDACTED credential]": "[REDACTED]"'),   # JSON keys (bounded)
+                   (re.compile(r"(?i)(?<![A-Za-z0-9])[\w.-]{0,40}(password|passwd|secret|token|api[_-]?key)\w{0,20}\s*[:=]\s*['\"]?[^\s'\"]{8,}"), "[REDACTED credential]"),
+                   (re.compile(r'(?i)"[^"\n]{0,40}(?:password|passwd|secret|token|api[_-]?key|authorization)[^"\n]{0,40}"\s*:\s*"[^"\n]{8,}"'), '"[REDACTED credential]": "[REDACTED]"'),
                    (re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=\-]{16,}"), "Bearer [REDACTED]"),
                    (re.compile(r"\b[1-9A-HJ-NP-Za-km-z]{80,90}\b"), "[REDACTED possible private key]"),
-                   (re.compile(r"\b(?:[a-z]{3,8} ){11}[a-z]{3,8}\b(?=.{0,300}\bseed\b)", re.I), "[REDACTED possible seed phrase]")]   # bounded look-ahead: long lines stay fast
+                   (re.compile(r"\b(?:[a-z]{3,8} ){11}[a-z]{3,8}\b(?=.{0,300}\bseed\b)", re.I), "[REDACTED possible seed phrase]")]
 PRIVATE_BLOCK = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")
 
 
@@ -34,28 +31,27 @@ class Blocked(Exception):
 
 
 def resolve(path: str) -> Path:
-    """Turn what the agent asked for into a real path, or raise Blocked with a plain reason."""
     raw = (path or "~").strip()
     if raw == "~" or raw.startswith("~/"):
-        p = HOME / raw[2:]                 # '~' always means the protected home folder (no other user's home)
+        p = HOME / raw[2:]
     else:
         p = Path(raw)
         if not p.is_absolute():
             p = HOME / p
     try:
-        real = p.resolve()                                     # follows symlinks: a link cannot be used to escape
+        real = p.resolve()  # board #729 safety-symlinks-resolved
     except (OSError, RuntimeError):
         raise Blocked("That path could not be resolved.")
     if real != HOME and HOME not in real.parents:
         raise Blocked("Only files inside the home folder can be read.")
     rel = real.relative_to(HOME)
     parts = [x.lower() for x in rel.parts]
-    shipped = ROOT.resolve() / "skills"                       # the skills that come with Rosie: readable even where her folder is
-    if (real == shipped or shipped in real.parents) and not (real.name and DENY_NAME.match(real.name)):   # under AppData (Windows)
+    shipped = ROOT.resolve() / "skills"
+    if (real == shipped or shipped in real.parents) and not (real.name and DENY_NAME.match(real.name)):
         return real
     if any(x in {d.lower() for d in DENY_PARTS} for x in parts):
         raise Blocked("That location holds credentials or private app data and is blocked.")
-    rels = rel.as_posix().lower()                          # the prefixes use "/"; Windows paths use "\\" (owner 2026-10-23, the Windows copy)
+    rels = rel.as_posix().lower()  # board #729 quirk-windows-backslash-paths
     if any(rels == pre.lower() or rels.startswith(pre.lower() + "/") for pre in DENY_PREFIXES):
         raise Blocked("That location holds credentials or private app data and is blocked.")
     if real.name and DENY_NAME.match(real.name):
@@ -103,7 +99,7 @@ def list_dir(path: str, limit: int = 200) -> dict:
         try:
             resolve(str(e))
         except Blocked:
-            continue                                            # blocked entries are simply not listed
+            continue
         out.append(e.name + ("/" if e.is_dir() else ""))
         if len(out) >= limit:
             break

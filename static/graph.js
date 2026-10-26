@@ -1,18 +1,15 @@
 'use strict';
-/* The Memory graph page (owner 2026-10-21: "build in a visual ui for the memory graph in rosie"). A map of Rosie's memories: the corner's
-   Graphiti graph, the agent board's history, or her own memory of the owner (graphview.py, read-only). Drawn on a canvas with a small
-   force layout that stops once it settles (no CPU while you only look). Names and facts from the server are drawn as canvas text or put
-   on the page as text (h() children), never as HTML; source links are http(s) only. */
+// board #824 owner-memory-graph-visual
 const GCOLORS = ['#3EE6E0', '#D4FF4F', '#FF5FA2', '#FFB04F', '#A98BFF', '#7CFFB0', '#FF6B5A', '#4F8BFF', '#FFE45C', '#00F0FF', '#E07CFF', '#9CFF6B'];
 const GMISC = '#8696AE';
-const ekey = (a, b) => (a < b ? a + '|' + b : b + '|' + a);       // one key per link, whichever way it points
+const ekey = (a, b) => (a < b ? a + '|' + b : b + '|' + a);
 const GSRC = [['corner', "Rosie's corner"], ['board', 'Agent board'], ['mind', "Rosie's mind"]];
-let G = null;                                                    // the page's state while it is open
+let G = null;
 
 VIEWS.graph = async () => {
   setHeader('Memory graph', []);
   const keep = (k, d) => { try { const v = localStorage.getItem('graph.' + k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } };
-  const save = (k, v) => { try { localStorage.setItem('graph.' + k, JSON.stringify(v)); } catch (e) { /* private window */ } };
+  const save = (k, v) => { try { localStorage.setItem('graph.' + k, JSON.stringify(v)); } catch (e) { } };
   if (G && G.raf) cancelAnimationFrame(G.raf);
   G = { source: keep('source', 'corner'), mode: keep('mode', 'clusters'), q: '', limit: keep('limit', 150), hidden: keep('hidden', ['Rosie', 'web page']), old: false, clusters: [], multi: [], pathNodes: new Set(), pathEdges: new Set(),
         nodes: [], edges: [], byId: new Map(), sel: null, hover: null, view: { x: 0, y: 0, k: 1 }, alpha: 0, raf: 0, drag: null, counts: {} };
@@ -58,7 +55,6 @@ VIEWS.graph = async () => {
   ro.observe(stage);
   const here = () => location.hash.replace(/^#\/?/, '').startsWith('graph');
 
-  // ---------------------------------------------------------------- data
   async function load() {
     info.textContent = 'Loading…'; info.hidden = false;
     const p = new URLSearchParams({ source: G.source, q: G.q, limit: G.limit, hide: G.hidden.join('|'), old: G.old ? 'true' : 'false' });
@@ -80,27 +76,26 @@ VIEWS.graph = async () => {
     info.textContent = G.nodes.length ? `${G.nodes.length} of ${d.total} things · ${G.edges.length} links${G.q ? ` · around “${G.q}”` : ''}. Drag to move, scroll to zoom, click a dot for what Rosie knows, Ctrl+click several to see how they connect.`
       : (G.q ? `Nothing named “${G.q}”.` : 'This graph is empty so far.');
     if (G.sel && !G.byId.has(G.sel)) closeSide();
-    if (G.multi.length) { G.multi = []; G.pathNodes = new Set(); G.pathEdges = new Set(); side.hidden = true; }   // a new map: start the picks over
+    if (G.multi.length) { G.multi = []; G.pathNodes = new Set(); G.pathEdges = new Set(); side.hidden = true; }
     arrange();
   }
 
   function arrange() {
     if (G.mode === 'clusters') { layoutClusters(); G.alpha = 0; fit(); G.refit = true; paint(); return; }
     G.alpha = 1;
-    for (let i = 0; i < 260 && G.alpha > 0.05; i++) step();      // most of the settling before the first frame: it opens already arranged
+    for (let i = 0; i < 260 && G.alpha > 0.05; i++) step();
     fit(); G.refit = false; G.moved = false;
     kick();
   }
 
-  // ---------------------------------------------------------------- the cluster view: each group on its own ring, the groups around a big ring
   function layoutClusters() {
     const big = G.clusters.filter((c) => c.nodes.length > 1 && !c.other), misc = G.clusters.filter((c) => c.nodes.length === 1 || c.other).flatMap((c) => c.nodes);
     const sorted = big.map((c) => ({ ...c, nodes: [...c.nodes] }));
-    const list = [];                                              // big, small, big, small...: dense groups never sit side by side
+    const list = [];  // board #824 why-alternate-big-small-rings
     while (sorted.length) { list.push(sorted.shift()); if (sorted.length) list.push(sorted.pop()); }
     if (misc.length) list.push({ color: GMISC, nodes: misc, misc: true, title: G.nodes.some((n) => n.group) ? 'Other topics' : 'Loose ends' });
-    const gap = 90, spacing = 17;                                 // room between rings for the labels
-    for (const c of list) {                                       // the hub in the middle, the rest on rings around it
+    const gap = 90, spacing = 17;
+    for (const c of list) {
       c.nodes.sort((a, b) => b.degree - a.degree);
       const rest = c.misc ? c.nodes : c.nodes.slice(1);
       c.rings = [];
@@ -112,13 +107,13 @@ VIEWS.graph = async () => {
         i += cap;
       }
       c.r = (c.rings.length ? c.rings[c.rings.length - 1].r : 14) + 12;
-      c.nodes.forEach((nd, i) => { nd.outer = i < 5 || c.nodes.length <= 6; });   // labels: each group's five busiest (all of a small one)
+      c.nodes.forEach((nd, i) => { nd.outer = i < 5 || c.nodes.length <= 6; });
     }
     const around = list.reduce((s, c) => s + 2 * c.r + gap, 0);
-    const R = Math.max(200, around / (2 * Math.PI) * 1.12);      // a bit roomier than the arcs need: the rings never touch
+    const R = Math.max(200, around / (2 * Math.PI) * 1.12);  // board #824 why-rings-never-touch
     let walk = 0;
     for (const c of list) {
-      const t = (walk + c.r + gap / 2) / around * Math.PI * 2 - Math.PI / 2;   // spread over the whole circle
+      const t = (walk + c.r + gap / 2) / around * Math.PI * 2 - Math.PI / 2;
       walk += 2 * c.r + gap;
       c.cx = Math.cos(t) * R; c.cy = Math.sin(t) * R;
       if (!c.misc) { const hub = c.nodes[0]; hub.x = c.cx; hub.y = c.cy; hub.hub = true; }
@@ -128,17 +123,17 @@ VIEWS.graph = async () => {
       }));
       for (const n of c.nodes) { n.color = c.color; n.cluster = c; }
       const second = c.nodes[1];
-      if (second && second.degree >= Math.max(4, c.nodes[0].degree * 0.5)) second.hub = true;   // a second big one also gets a diamond
+      if (second && second.degree >= Math.max(4, c.nodes[0].degree * 0.5)) second.hub = true;
     }
     G.ring = list;
     G.R = R;
   }
 
   function groups() {
-    if (G.nodes.some((n) => n.group)) return topicGroups();       // Rosie's corner: her own topic groups make the rings
+    if (G.nodes.some((n) => n.group)) return topicGroups();
     return linkGroups();
   }
-  function topicGroups() {                                         // each ring is one of her topics (Meshtastic, SDR, Local AI...)
+  function topicGroups() {
     const by = new Map();
     for (const n of G.nodes) { const k = n.group || ''; if (!by.has(k)) by.set(k, { title: n.group_title || 'Other', nodes: [] }); by.get(k).nodes.push(n); }
     const big = [...by.entries()].filter(([k, c]) => k && c.nodes.length > 1).sort((a, b) => b[1].nodes.length - a[1].nodes.length);
@@ -147,7 +142,7 @@ VIEWS.graph = async () => {
     if (rest.length) G.clusters.push({ title: 'Other topics', color: GMISC, nodes: rest, other: true });
     for (const c of G.clusters) for (const n of c.nodes) n.color = c.color;
   }
-  function linkGroups() {                                          // Louvain communities: groups that link more inside than out
+  function linkGroups() {
     const idx = new Map(G.nodes.map((n, i) => [n.id, i]));
     let n = G.nodes.length, adj = Array.from({ length: n }, () => new Map());
     for (const e of G.edges) {
@@ -155,9 +150,9 @@ VIEWS.graph = async () => {
       if (a === b) continue;
       adj[a].set(b, (adj[a].get(b) || 0) + 1); adj[b].set(a, (adj[b].get(a) || 0) + 1);
     }
-    let seed = 7;                                                  // the same data always gives the same groups (no Math.random)
+    let seed = 7;  // board #824 why-fixed-seed-groups
     const rnd = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
-    let member = G.nodes.map((_, i) => i);                         // original node -> current community
+    let member = G.nodes.map((_, i) => i);
     for (let level = 0; level < 6; level++) {
       const deg = adj.map((m) => [...m.values()].reduce((s, w) => s + w, 0)), m2 = deg.reduce((s, d) => s + d, 0) || 1;
       const comm = adj.map((_, i) => i), tot = [...deg];
@@ -180,7 +175,7 @@ VIEWS.graph = async () => {
       if (!moved) break;
       const ids = [...new Set(comm)], re = new Map(ids.map((c, k) => [c, k]));
       const next = Array.from({ length: ids.length }, () => new Map());
-      adj.forEach((m, i) => { for (const [j, w] of m) { const a = re.get(comm[i]), b = re.get(comm[j]); next[a].set(b, (next[a].get(b) || 0) + w); } });   // a group's own links stay (as a loop): they count toward its weight
+      adj.forEach((m, i) => { for (const [j, w] of m) { const a = re.get(comm[i]), b = re.get(comm[j]); next[a].set(b, (next[a].get(b) || 0) + w); } });
       member = member.map((c) => re.get(comm[c]));
       adj = next; n = ids.length;
     }
@@ -190,21 +185,20 @@ VIEWS.graph = async () => {
     const lab = new Map(G.nodes.map((nd, i) => [nd.id, member[i]]));
     for (const nd of G.nodes) { const r = rank.indexOf(lab.get(nd.id)); nd.color = r < GCOLORS.length && size.get(lab.get(nd.id)) > 1 ? GCOLORS[r] : GMISC; }
     G.clusters = rank.map((l, r) => ({ color: r < GCOLORS.length ? GCOLORS[r] : GMISC, nodes: G.nodes.filter((nd) => lab.get(nd.id) === l) }));
-    for (const c of G.clusters) c.title = [...c.nodes].sort((a, b) => b.degree - a.degree)[0].name;   // named after its busiest thing
-    if (G.clusters.length > GCOLORS.length) {                     // past the palette: small groups join the grey "other" ring
+    for (const c of G.clusters) c.title = [...c.nodes].sort((a, b) => b.degree - a.degree)[0].name;
+    if (G.clusters.length > GCOLORS.length) {
       const tail = G.clusters.splice(GCOLORS.length);
       G.clusters.push(...tail.flatMap((c) => c.nodes.map((nd) => ({ color: GMISC, nodes: [nd] }))));
     }
   }
 
-  // ---------------------------------------------------------------- layout (runs only while it settles or you drag)
   function step() {
     const N = G.nodes, a = G.alpha, rep = 900, len = 70;
     for (let i = 0; i < N.length; i++) {
       const p = N[i];
       for (let j = i + 1; j < N.length; j++) {
         const q = N[j]; let dx = p.x - q.x, dy = p.y - q.y, d2 = dx * dx + dy * dy;
-        if (d2 > 160000) continue;                                // far apart: no push (keeps 500 dots cheap)
+        if (d2 > 160000) continue;  // board #824 why-skip-far-push
         if (d2 < 0.01) { dx = Math.random() - 0.5; dy = Math.random() - 0.5; d2 = 0.5; }
         const f = rep * a / d2;
         p.vx += dx * f; p.vy += dy * f; q.vx -= dx * f; q.vy -= dy * f;
@@ -215,7 +209,7 @@ VIEWS.graph = async () => {
       e.a.vx += dx * f; e.a.vy += dy * f; e.b.vx -= dx * f; e.b.vy -= dy * f;
     }
     for (const p of N) {
-      p.vx -= p.x * 0.004 * a; p.vy -= p.y * 0.004 * a;          // a gentle pull to the middle
+      p.vx -= p.x * 0.004 * a; p.vy -= p.y * 0.004 * a;
       if (G.drag && G.drag.node === p) { p.vx = p.vy = 0; continue; }
       p.vx *= 0.6; p.vy *= 0.6;
       p.x += Math.max(-30, Math.min(30, p.vx)); p.y += Math.max(-30, Math.min(30, p.vy));
@@ -227,10 +221,9 @@ VIEWS.graph = async () => {
     G.raf = 0;
     if (!G || !here()) { ro.disconnect(); return; }
     if (G.mode === 'free' && (G.alpha > 0.02 || G.drag)) { for (let i = 0; i < 2; i++) step(); paint(); kick(); }
-    else { if (!G.moved && !G.refit) { G.refit = true; fit(); } paint(); }   // once settled, frame it (unless you moved the view)
+    else { if (!G.moved && !G.refit) { G.refit = true; fit(); } paint(); }
   }
 
-  // ---------------------------------------------------------------- drawing
   const toScreen = (p) => [(p.x * G.view.k + G.view.x) + W / 2, (p.y * G.view.k + G.view.y) + H / 2];
   const toWorld = (sx, sy) => [(sx - W / 2 - G.view.x) / G.view.k, (sy - H / 2 - G.view.y) / G.view.k];
   function paint() {
@@ -270,7 +263,6 @@ VIEWS.graph = async () => {
     }
     ctx.lineWidth = 1;
   }
-  // what is lit: a clicked (or hovered) dot and its neighbours, or the Ctrl+clicked dots and the chains that connect them
   function lit() {
     if (G.multi.length) return { on: true, main: new Set(G.multi), nodes: G.pathNodes, edge: (e) => G.pathEdges.has(ekey(e.source, e.target)) };
     const f = G.sel || G.hover;
@@ -281,7 +273,7 @@ VIEWS.graph = async () => {
   function paintClusters() {
     const k = G.view.k, L = lit();
     const [ox, oy] = toScreen({ x: 0, y: 0 });
-    for (const c of G.ring) {                                     // a dotted ring around each group
+    for (const c of G.ring) {
       const [cx, cy] = toScreen({ x: c.cx, y: c.cy });
       ctx.globalAlpha = L.on ? 0.25 : 0.55;
       ctx.strokeStyle = c.color; ctx.lineWidth = 1.2; ctx.setLineDash([2, 4]);
@@ -291,14 +283,14 @@ VIEWS.graph = async () => {
     ctx.globalAlpha = L.on ? 0.35 : 1;
     ctx.textAlign = 'center';
     ctx.font = `bold ${Math.round(Math.min(18, 12.5 * Math.max(1, Math.sqrt(k))))}px ui-monospace, "JetBrains Mono", "DejaVu Sans Mono", monospace`;
-    for (const c of G.ring) {                                     // each ring's name above it: what this group is about
+    for (const c of G.ring) {
       if (!c.title) continue;
       const [cx, cy] = toScreen({ x: c.cx, y: c.cy }), t = `${c.title.length > 26 ? c.title.slice(0, 25) + '…' : c.title} · ${c.nodes.length}`;
       ctx.lineWidth = 4; ctx.strokeStyle = 'rgba(4,7,12,0.92)'; ctx.strokeText(t, cx, cy - c.r * k - 8);
       ctx.fillStyle = c.color; ctx.fillText(t, cx, cy - c.r * k - 8);
     }
     ctx.globalAlpha = 1; ctx.lineWidth = 1;
-    ctx.globalCompositeOperation = 'lighter';                     // overlapping links glow, like light
+    ctx.globalCompositeOperation = 'lighter';
     for (const e of G.edges) {
       const on = L.on && L.edge(e);
       if (L.on && !on) continue;
@@ -307,7 +299,7 @@ VIEWS.graph = async () => {
       if (same) {
         ctx.globalAlpha = on ? 0.9 : 0.32; ctx.strokeStyle = e.a.color;
         ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
-      } else {                                                    // between groups: a curve pulled toward the middle (bundles them)
+      } else {
         const mx = (x1 + x2) / 2, my = (y1 + y2) / 2, qx = mx + (ox - mx) * 0.55, qy = my + (oy - my) * 0.55;
         const g = ctx.createLinearGradient(x1, y1, x2, y2);
         g.addColorStop(0, e.a.color); g.addColorStop(1, e.b.color);
@@ -323,13 +315,13 @@ VIEWS.graph = async () => {
       const dim = L.on && !L.nodes.has(n.id);
       ctx.globalAlpha = dim ? 0.15 : 1;
       ctx.fillStyle = n.color; ctx.shadowColor = n.color; ctx.shadowBlur = dim ? 0 : (L.main.has(n.id) || G.match.has(n.id) ? 16 : 6);
-      if (n.hub) {                                                // a group's main thing: a diamond with a light core
+      if (n.hub) {
         const r = 7 * zr; diamond(x, y, r); ctx.fill();
         ctx.shadowBlur = 0; ctx.fillStyle = 'rgba(255,255,255,0.75)'; diamond(x, y, r * 0.42); ctx.fill();
       } else {
         const r = Math.min(5, 2.2 + Math.sqrt(n.degree) * 0.5) * zr;
         ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
-        if (n.degree >= 6 && !dim) {                              // a busy one gets its own small dotted ring
+        if (n.degree >= 6 && !dim) {
           ctx.shadowBlur = 0; ctx.strokeStyle = n.color; ctx.globalAlpha = 0.6; ctx.setLineDash([1.5, 2.5]);
           ctx.beginPath(); ctx.arc(x, y, r + 5 * zr, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
         }
@@ -344,7 +336,7 @@ VIEWS.graph = async () => {
       if (L.on ? !shown : !(n.hub || (n.outer && !many) || k > 1.5 || (many && G.labels.has(n.id)))) continue;
       const [x, y] = toScreen(n);
       if (x < -80 || y < -20 || x > W + 80 || y > H + 20) continue;
-      const c = n.cluster, right = c ? x >= toScreen({ x: c.cx, y: c.cy })[0] - 0.5 : true;   // labels point away from their ring's middle
+      const c = n.cluster, right = c ? x >= toScreen({ x: c.cx, y: c.cy })[0] - 0.5 : true;
       const t = n.name.length > 24 ? n.name.slice(0, 23) + '…' : n.name;
       ctx.textAlign = n.hub ? 'center' : right ? 'left' : 'right';
       const tx = n.hub ? x : x + (right ? 8 : -8), ty = n.hub ? y - 11 * zr : y + 4;
@@ -376,7 +368,6 @@ VIEWS.graph = async () => {
     return best;
   }
 
-  // ---------------------------------------------------------------- pointer: drag a dot, drag the background to pan, wheel to zoom
   const pos = (e) => { const b = canvas.getBoundingClientRect(); return [e.clientX - b.left, e.clientY - b.top]; };
   canvas.onpointerdown = (e) => {
     const [sx, sy] = pos(e), n = pick(sx, sy);
@@ -406,12 +397,10 @@ VIEWS.graph = async () => {
   canvas.ondblclick = (e) => { const n = pick(...pos(e)); if (n) { search.value = n.name; G.q = n.name; load(); } };
   canvas.onwheel = (e) => { e.preventDefault(); G.moved = true; zoomAt(e.deltaY < 0 ? 1.15 : 1 / 1.15, ...pos(e)); };
 
-  // ---------------------------------------------------------------- the side panel: what Rosie knows about one thing
   function closeSide() { G.sel = null; side.hidden = true; paint(); }
 
-  // ---------------------------------------------------------------- Ctrl+click several dots: how they are connected (owner 2026-10-21)
   function clearMulti() { if (G.multi.length) { G.multi = []; G.pathNodes = new Set(); G.pathEdges = new Set(); side.hidden = true; paint(); } }
-  function chain(a, b) {                                          // the shortest chain of links from a to b on the map (or null)
+  function chain(a, b) {
     const prev = new Map([[a, null]]), todo = [a];
     while (todo.length) {
       const x = todo.shift();
@@ -424,7 +413,7 @@ VIEWS.graph = async () => {
     return out;
   }
   function toggleMulti(id) {
-    if (G.sel && !G.multi.length) G.multi = [G.sel];              // a dot already open counts as the first one
+    if (G.sel && !G.multi.length) G.multi = [G.sel];
     G.sel = null;
     G.multi = G.multi.includes(id) ? G.multi.filter((x) => x !== id) : [...G.multi, id];
     connect();
@@ -451,7 +440,7 @@ VIEWS.graph = async () => {
       try { facts = (await J(`/api/graph/links?source=${encodeURIComponent(G.source)}&pairs=${encodeURIComponent(hops.map((k) => k.replace('|', '~')).join('|'))}`)).links || {}; }
       catch (e) { facts = {}; }
     }
-    if (!G || G.multi !== ids) return;                            // the picks changed while this was loading
+    if (!G || G.multi !== ids) return;
     const linked = steps.filter((s) => s.chain).length;
     side.replaceChildren(head, chips,
       h('p', { class: 'gsum' }, linked === steps.length ? (steps.every((s) => s.chain.length === 2) ? 'They are linked directly.' : 'They are linked through other things on the map.')

@@ -1,7 +1,3 @@
-"""An answer to the owner that quotes a secret placeholder by name (§§secret(PROJECT_BOARD_ID), copied from a memory or a page) is text,
-not a secret to fill in. Agent Zero's _10_unmask_secrets raised "not found in secrets store" on it, so the answer never went out, and a
-memory about that failure quoted the placeholder again on every retry (chat 1rGAZ2B2, 2026-10-24). Here a placeholder the store does not
-have becomes plain "secret(NAME)" in the answer; the ones it has are left for _10_unmask_secrets. Other tools keep Agent Zero's error."""
 import re
 
 from helpers.extension import Extension

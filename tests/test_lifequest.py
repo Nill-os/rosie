@@ -1,5 +1,3 @@
-"""Life Quest: XP and level math, logging a win (a note is required), the quest lifecycle, input checks, the API, the chat tools and the page
-(in node + jsdom). Each test gets a fresh database under tmp_path (conftest.py)."""
 import datetime as dt
 import hashlib
 import hmac
@@ -37,7 +35,7 @@ def test_fresh_database_starts_with_editable_defaults():
     assert s["overall"]["level"] == 1 and s["overall"]["xp"] == 0 and s["wallet"] == 0 and s["streak"] == 0
     assert {q["kind"] for q in s["quests"]} == {"daily", "boss"} and len(s["rewards"]) == 3
     lifequest.save_stats([{"id": s["stats"][0]["id"], "name": "Reading", "archived": True}])
-    assert lifequest.state()["stats"][-1]["archived"] and len(lifequest.state()["stats"]) == 7      # hidden, not deleted; defaults are not re-seeded
+    assert lifequest.state()["stats"][-1]["archived"] and len(lifequest.state()["stats"]) == 7  # board #867 why-hidden-not-deleted
 
 
 def test_logging_a_win_adds_xp_to_each_stat_and_levels_up():
@@ -48,7 +46,7 @@ def test_logging_a_win_adds_xp_to_each_stat_and_levels_up():
     assert len(r["wins"]) == 1 and r["wins"][0]["note"] == "Ran two miles" and len(r["wins"][0]["stats"]) == 2
     r = lifequest.log_win("Long study session", [{"stat": kno, "xp": 20}])
     assert r["level_up"] == {"before": 1, "after": 2} and r["overall"]["to_next"] == 190
-    assert next(x for x in r["stats"] if x["id"] == kno)["level"] == 1      # 50 XP in Knowledge: still level 1 there
+    assert next(x for x in r["stats"] if x["id"] == kno)["level"] == 1
 
 
 def test_no_note_no_xp_and_bad_numbers_are_refused():
@@ -65,7 +63,7 @@ def test_no_note_no_xp_and_bad_numbers_are_refused():
         lifequest.log_win("Ran", [])
     with pytest.raises(ValueError):
         lifequest.log_win("x" * 201, [{"stat": fit, "xp": 10}])
-    assert lifequest.state()["overall"]["xp"] == 0                  # nothing slipped through half-way
+    assert lifequest.state()["overall"]["xp"] == 0
 
 
 def test_remove_a_mistake_takes_all_its_xp_back():
@@ -81,7 +79,7 @@ def test_daily_quest_pays_once_a_day_and_can_be_unchecked():
     q = next(q for q in lifequest.state()["quests"] if q["kind"] == "daily")
     r = lifequest.complete_quest(q["id"])
     assert r["overall"]["xp"] == q["xp"] and next(x for x in r["quests"] if x["id"] == q["id"])["done"]
-    assert lifequest.complete_quest(q["id"])["overall"]["xp"] == q["xp"]          # ticking twice never pays twice
+    assert lifequest.complete_quest(q["id"])["overall"]["xp"] == q["xp"]
     r = lifequest.complete_quest(q["id"], done=False)
     assert r["overall"]["xp"] == 0 and not next(x for x in r["quests"] if x["id"] == q["id"])["done"]
 
@@ -96,9 +94,9 @@ def test_quest_lifecycle_add_edit_complete_reopen_archive():
     q = next(x for x in r["quests"] if x["id"] == q["id"])
     assert q["done"] and q["title"] == "Run a 10k" and r["wins"][0]["note"] == "Finished the Sunday race" and r["overall"]["xp"] == 300
     lifequest.complete_quest(q["id"])
-    assert lifequest.state()["overall"]["xp"] == 300                               # a one-time quest pays once
+    assert lifequest.state()["overall"]["xp"] == 300
     r = lifequest.remove_win(r["wins"][0]["win"])
-    assert not next(x for x in r["quests"] if x["id"] == q["id"])["done"]          # removing the win opens the quest again
+    assert not next(x for x in r["quests"] if x["id"] == q["id"])["done"]
     r = lifequest.save_quest("Run a 10k", fit, 300, "boss", quest_id=q["id"], archived=True)
     assert next(x for x in r["quests"] if x["id"] == q["id"])["archived"]
     with pytest.raises(ValueError):
@@ -117,7 +115,7 @@ def test_quest_and_stat_input_checks():
             lifequest.save_stats(bad)
     lifequest.save_stats([{"name": "Gardening"}, {"name": "Reading"}, {"name": "Cooking"}])
     with pytest.raises(ValueError):
-        lifequest.save_stats([{"name": "One too many"}])                             # 7 defaults + 3 = 10 is the cap
+        lifequest.save_stats([{"name": "One too many"}])  # board #867 why-stat-cap-ten
     assert len(lifequest.state()["stats"]) == 10 and lifequest.state()["stats"][-1]["id"] == "cooking"
 
 
@@ -137,25 +135,24 @@ def test_rewards_spend_points_but_never_lower_the_level():
 
 
 def test_weekly_review_is_due_on_sunday_and_saved_once_per_week():
-    sunday = dt.date(2026, 10, 25)                                                 # a Sunday
+    sunday = dt.date(2026, 10, 25)
     assert lifequest.week_end("2026-10-19") == "2026-10-25" and lifequest.week_end("2026-10-25") == "2026-10-25"
     assert lifequest.state(today=sunday.isoformat())["review"]["due"]
     assert not lifequest.state(today="2026-10-24")["review"]["due"]
     with pytest.raises(ValueError):
         lifequest.save_review("", "", "")
     lifequest.save_review("Walked daily", "Mornings work", "Read more", day="2026-10-25")
-    lifequest.save_review("Walked daily", "Mornings work", "Read much more", day="2026-10-23")   # same week: replaced
+    lifequest.save_review("Walked daily", "Mornings work", "Read much more", day="2026-10-23")
     rv = lifequest.state(today="2026-10-25")["review"]
     assert not rv["due"] and rv["saved"]["next"] == "Read much more" and rv["last"]["week"] == "2026-10-25"
 
 
 def test_streak_counts_consecutive_days_and_a_missed_day_is_fine():
     assert lifequest._streak({"2026-10-23", "2026-10-22", "2026-10-20"}, "2026-10-23") == 2
-    assert lifequest._streak({"2026-10-22"}, "2026-10-23") == 1                       # today is not over yet
+    assert lifequest._streak({"2026-10-22"}, "2026-10-23") == 1
     assert lifequest._streak(set(), "2026-10-23") == 0
 
 
-# ---------------- API ----------------
 @pytest.fixture
 def client(isolated, monkeypatch):
     import server
@@ -205,10 +202,9 @@ def test_the_page_is_in_the_menu_and_can_be_hidden(client):
     assert "['lifequest', '★', 'Life Quest']" in js and "VIEWS.lifequest = " in js
     r = client.post("/api/settings", json={"hidden_pages": ["lifequest"]}).json()
     assert r["hidden_pages"] == ["lifequest"]
-    assert client.get("/api/lifequest").status_code == 200                              # hidden from the menu only; its features keep working
+    assert client.get("/api/lifequest").status_code == 200  # board #867 why-hidden-menu-only
 
 
-# ---------------- chat tools ----------------
 def test_chat_tool_logs_only_with_a_note_and_asks_when_the_stat_is_unclear():
     log = agent.TOOLS["lifequest_log"][0]
     assert "error" in log(note="", stat="Fitness")
@@ -220,7 +216,7 @@ def test_chat_tool_logs_only_with_a_note_and_asks_when_the_stat_is_unclear():
     assert r["status"] == "logged" and r["xp"] == 25 and r["stat"] == "Fitness"
     w = lifequest.state()["wins"][0]
     assert w["note"] == "I went for a run" and w["source"] == "chat"
-    assert log(note="Huge", stat="Fitness", xp=5000)["xp"] == 100                       # a chat win is capped
+    assert log(note="Huge", stat="Fitness", xp=5000)["xp"] == 100
     assert log(note="Tiny", stat="Fitness", xp=1)["xp"] == 5
 
 
@@ -241,7 +237,6 @@ def test_chat_progress_tool_and_tool_group():
     assert "lifequest" not in agent.select_groups("what is on my calendar", [])
 
 
-# ---------------- the page, in jsdom ----------------
 def test_the_page_renders_and_logs_a_win_only_with_a_note_and_an_area(isolated, client):
     node = shutil.which("node")
     if not node:
@@ -261,6 +256,6 @@ def test_the_page_renders_and_logs_a_win_only_with_a_note_and_an_area(isolated, 
     assert d["title"] == "Life Quest" and "★Life Quest" in d["nav"]
     assert "Level 1 adventurer" in d["text"] and "Log a win" in d["text"] and "Today’s quests" in d["text"] and "Character stats" in d["text"] and "Rewards" in d["text"]
     assert "Knowledge" in d["tags"] and len(d["tags"]) == 7
-    assert d["postsAfterEmpty"] == 0 and "Say what you did" in d["toastEmpty"]          # no note: nothing sent
-    assert d["postsNoArea"] == 0                                                        # a note but no area: nothing sent
+    assert d["postsAfterEmpty"] == 0 and "Say what you did" in d["toastEmpty"]
+    assert d["postsNoArea"] == 0
     assert len(d["posts"]) == 1 and d["posts"][0][1]["note"] == "ran two miles" and d["posts"][0][1]["entries"][0]["xp"] == 25

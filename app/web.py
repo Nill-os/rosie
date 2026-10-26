@@ -1,4 +1,3 @@
-"""Web lookup so the assistant can check facts instead of guessing."""
 import html
 import re
 import time
@@ -39,8 +38,8 @@ def fetch_url(url: str, max_chars: int = 3500):
     return {"url": r["url"], "status": r["status"], "text": _text(r["html"])[:min(int(max_chars), 6000)]}
 
 
-# ---------- Scrapling: the owner's web scraper for every agent (owner 2026-10-22: "switch rosie to scrapling too") ----------
-_scrapling_get = None                          # tests put a fake here: (url, **kw) -> an object with status, body, headers, encoding
+# board #800 owner-scrapling-for-all-agents
+_scrapling_get = None
 
 
 def _fetcher():
@@ -48,13 +47,12 @@ def _fetcher():
         return _scrapling_get
     import logging
     from scrapling.fetchers import Fetcher
-    logging.getLogger("scrapling").setLevel(logging.WARNING)       # it logs every page it fetches
+    logging.getLogger("scrapling").setLevel(logging.WARNING)
     return Fetcher.get
 
 
 def scrape(url: str, timeout: float = 20, max_hops: int = 5) -> dict:
-    """GET one public web page with Scrapling's fast fetcher (no browser). Redirects are followed one hop at a time and every hop is
-    checked with public_url_problem, so a page can't send the request on to this PC or the LAN. Returns {url, status, html} or {error}."""
+    # board #800 safety-redirect-hop-check
     cur = str(url)
     for _ in range(max_hops + 1):
         prob = public_url_problem(cur)
@@ -73,9 +71,8 @@ def scrape(url: str, timeout: float = 20, max_hops: int = 5) -> dict:
     return {"error": "That page sent me through too many redirects.", "url": cur}
 
 
-# ---------- stricter read-only GET for Rosie's corner (corner_browse.py): every redirect hop is checked again ----------
 PUBLIC_PORTS = (80, 443)
-_public_transport = None                       # tests put an httpx.MockTransport here; None = the real network
+_public_transport = None
 
 
 def _resolve(host: str) -> list:
@@ -87,7 +84,6 @@ def _resolve(host: str) -> list:
 
 
 def _check_public(url: str) -> tuple[str | None, list]:
-    """(problem, the checked addresses). The name is looked up ONCE here; get_public connects to exactly these addresses."""
     import ipaddress
     try:
         p = urllib.parse.urlsplit(str(url))
@@ -118,13 +114,10 @@ def _check_public(url: str) -> tuple[str | None, list]:
 
 
 def public_url_problem(url: str) -> str | None:
-    """None when `url` is an ordinary public web address; otherwise a plain reason it is refused. Fails closed: an address that can't be
-    looked up is refused too (fetch_url's _private_host lets that through and leaves it to the request to fail)."""
     return _check_public(url)[0]
 
 
 def _pinned(url: str, ip: str) -> tuple[str, str, str]:
-    """The same address with its site name replaced by the checked IP: (url to request, Host header, TLS name)."""
     p = urllib.parse.urlsplit(url)
     lit = f"[{ip}]" if ":" in ip else ip
     netloc = lit + (f":{p.port}" if p.port is not None else "")
@@ -132,13 +125,11 @@ def _pinned(url: str, ip: str) -> tuple[str, str, str]:
     return urllib.parse.urlunsplit((p.scheme, netloc, p.path or "/", p.query, "")), host, p.hostname
 
 
-_browser_session = None                        # tests put a fake curl_cffi Session class here; None = the real one
+_browser_session = None
 
 
 class _BrowserHop:
-    """One GET through Scrapling's engine (curl_cffi with a real browser's TLS fingerprint and headers, so sites that turn away plain
-    Python clients answer), pinned to the checked IP with curl's RESOLVE: the TLS name and certificate check stay the site's own name.
-    Never follows a redirect and keeps no cookie. Shaped like the httpx stream get_public reads."""
+    # board #800 safety-no-redirects-no-cookies
 
     def __init__(self, url: str, ip: str, timeout: float):
         from curl_cffi import CurlOpt
@@ -167,19 +158,11 @@ class _BrowserHop:
 
 def get_public(url: str, *, max_bytes: int, accept: tuple = ("text/html", "application/xhtml+xml"), timeout: float = 15,
                headers: dict | None = None, stop=None, max_hops: int = 5, check=None, browser: bool = False) -> dict:
-    """One read-only GET of a public web address. No cookies are kept or sent (not even between redirect hops), no forms, no other
-    methods. Every hop is checked with _check_public (and `check`, the caller's own rule, which returns a reason or None), and the
-    request goes to exactly the address that was checked (DNS pinning: the name is looked up once per hop, the connection is made to
-    that IP with the Host header and the TLS name (SNI, certificate check) set to the site name), so a name that changes its answer
-    between the check and the request can't reach this PC or the LAN. The answer is refused when its type doesn't start with one of
-    `accept` (empty = any) or it is bigger than `max_bytes`. `stop` (a threading.Event) cuts a download short. `browser` reads through
-    Scrapling's engine (_BrowserHop: a browser's own headers, `headers` is not used) with the same checks and pinning; with a test
-    transport set, both ways go through it. Returns {url, status, content_type, body} or {error}."""
     import http.cookiejar
     cur = str(url)
-    deadline = time.monotonic() + max(timeout * 4, 30)              # a whole read, all hops: a slow-drip server can't hold a cycle for minutes
-    with httpx.Client(transport=_public_transport, timeout=timeout, follow_redirects=False, headers=headers or UA, trust_env=False) as c:   # no proxy from the environment: always the pinned, checked address
-        c.cookies.jar.set_policy(http.cookiejar.DefaultCookiePolicy(allowed_domains=[]))     # no cookie is ever stored
+    deadline = time.monotonic() + max(timeout * 4, 30)  # board #800 why-read-deadline
+    with httpx.Client(transport=_public_transport, timeout=timeout, follow_redirects=False, headers=headers or UA, trust_env=False) as c:
+        c.cookies.jar.set_policy(http.cookiejar.DefaultCookiePolicy(allowed_domains=[]))
         for _ in range(max_hops + 1):
             prob, ips = _check_public(cur)
             prob = prob or (check(cur) if check else None)
@@ -214,7 +197,7 @@ def get_public(url: str, *, max_bytes: int, accept: tuple = ("text/html", "appli
                     return {"url": cur, "status": r.status_code, "content_type": ctype, "body": bytes(buf), "encoding": r.encoding or "utf-8"}
             except httpx.HTTPError as e:
                 return {"error": f"{type(e).__name__}: {e}"[:200], "url": cur}
-            except Exception as e:                                    # curl_cffi's own errors (timeouts, TLS, connection)
+            except Exception as e:
                 if not real_browser:
                     raise
                 return {"error": f"{type(e).__name__}: {e}"[:200], "url": cur}
@@ -241,7 +224,6 @@ WMO = {0: "clear", 1: "mostly clear", 2: "partly cloudy", 3: "overcast", 45: "fo
 
 
 def weather(place: str = "", days: int = 3):
-    """Current weather and the next days (3, up to 7) for a place (Open-Meteo, no key). Blank = the newspaper's place (Settings > Newspaper)."""
     import config
     import requests
     cfg = config.load()
@@ -266,7 +248,6 @@ def weather(place: str = "", days: int = 3):
         return {"error": f"Weather lookup failed: {type(e).__name__}: {e}"}
 
 
-# ---------- recipes: read the page's own recipe data instead of guessing from a search snippet ----------
 def _iter_ld(node):
     if isinstance(node, list):
         for x in node:
@@ -279,7 +260,6 @@ def _iter_ld(node):
 
 
 def parse_recipe(page_html: str, url: str = "") -> dict | None:
-    """Pull the schema.org Recipe (JSON-LD) out of a page: name, rating, ingredients, steps. Returns None if the page has no real recipe data."""
     import json
     for m in re.finditer(r'(?is)<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', page_html):
         try:
@@ -315,13 +295,11 @@ def parse_recipe(page_html: str, url: str = "") -> dict | None:
 
 
 def recipe_score(r: dict) -> float:
-    """Best = well rated AND by many people. A 5.0 from 3 people loses to a 4.8 from 2,000."""
     import math
     return r["rating"] * math.log10(r["reviews"] + 10) if r["rating"] else 0.5
 
 
 def find_recipe(query: str):
-    """Search for a recipe, read the real recipe data from the top results, and return the best-rated one with exact ingredients, steps and its link."""
     from concurrent.futures import ThreadPoolExecutor
     res = web_search(query if "recipe" in query.lower() else query + " recipe")
     if isinstance(res, dict):

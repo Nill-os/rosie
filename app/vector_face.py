@@ -1,10 +1,4 @@
-"""Vector's face while he sits (owner 2026-10-21: "its face to display info when shes in sit mode, like timers, clock,
-system info, or anything else i can think of").
-
-While Rosie holds him still (vector_bot.Robot.hold), she draws small screens with Pillow and sends them to his face
-(DisplayFaceImageRGB: 184x96 pixels, RGB565 big-endian, the format of the Vector SDK's screen.py). Screens rotate every
-few seconds; a running timer always wins. To add a screen: write a function that takes a FaceCtx and returns a
-PIL image (or None to skip it), add it to PANELS, and name it in Settings > Vector > Face screens."""
+# board #792 owner-sit-face-screens
 import datetime as dt
 import threading
 import time
@@ -56,13 +50,12 @@ def bar(d, x, y, w, h, frac, fill):
 
 
 def to_rgb565(img) -> bytes:
-    """Pixels as 16-bit RGB565, high byte first (what vic-engine expects)."""
+    # board #792 quirk-rgb565-high-byte-first
     a = np.asarray(img.convert("RGB"), dtype=np.uint16)
     v = ((a[..., 0] >> 3) << 11) | ((a[..., 1] >> 2) << 5) | (a[..., 2] >> 3)
     return v.astype(">u2").tobytes()
 
 
-# timers Rosie runs while Vector sits (his own timer skill needs his behaviors, which are off while he sits) -----------
 class Timers:
     def __init__(self):
         self._lock = threading.Lock()
@@ -96,7 +89,6 @@ def left_text(secs: int) -> str:
 
 
 def spoken(secs: int) -> str:
-    """150 -> '2 minutes 30 seconds'."""
     h, rest = divmod(int(secs), 3600)
     m, s = divmod(rest, 60)
     parts = [f"{n} {w}{'' if n == 1 else 's'}" for n, w in ((h, "hour"), (m, "minute"), (s, "second")) if n]
@@ -109,7 +101,6 @@ class FaceCtx:
         self.robot = robot
 
 
-# screens ------------------------------------------------------------------------------------------------------------
 def clock(ctx):
     img, d = canvas()
     now = dt.datetime.now()
@@ -167,7 +158,6 @@ def _fetch_events():
 
 
 def upcoming() -> list[tuple[str, float]]:
-    """[(title, start epoch)] of today's calendar from the same cache as his NEXT screen (refreshed in the background)."""
     if time.time() - _events["at"] > 300 and not _events["busy"]:
         _events["busy"] = True
         threading.Thread(target=_fetch_events, daemon=True, name="vector-face-cal").start()
@@ -175,7 +165,7 @@ def upcoming() -> list[tuple[str, float]]:
     for e in _events["list"]:
         start = str(e.get("start", ""))
         if "T" not in start:
-            continue                                      # all-day events: no heads-up
+            continue
         try:
             out.append((e.get("summary") or e.get("title") or "Event", dt.datetime.fromisoformat(start).timestamp()))
         except ValueError:
@@ -184,7 +174,7 @@ def upcoming() -> list[tuple[str, float]]:
 
 
 def next_event(ctx):
-    """Calendar from a cache refreshed in the background once a minute: a slow Google call never freezes his face."""
+    # board #792 why-calendar-cached-background
     if time.time() - _events["at"] > 60 and not _events["busy"]:
         _events["busy"] = True
         threading.Thread(target=_fetch_events, daemon=True, name="vector-face-cal").start()
@@ -224,15 +214,14 @@ def _safe(panel, ctx):
     try:
         return panel(ctx)
     except Exception:
-        return None                                       # one broken screen is skipped, the others keep turning
+        return None
 
 
 class FaceLoop:
-    """Rotates screens on Vector's face while he is held (vector_pod says when a timer is done)."""
 
     def __init__(self, robot, timers: Timers, every: float | None = None):
         self.robot, self.timers, self._every = robot, timers, every
-        self.menu = None                                  # vector_menu.Menu: drawn instead of the screens while it is open
+        self.menu = None
         self._stop = threading.Event()
         self._next = threading.Event()
         self.last_frame = None
@@ -247,12 +236,10 @@ class FaceLoop:
         self._next.set()
 
     def next_screen(self):
-        """His backpack button while he sits: the next screen now (or the menu redrawn)."""
         self._next.set()
 
     @property
     def every(self) -> float:
-        """Seconds per screen: fixed when given, else Settings > Vector (his face menu can change it while he sits)."""
         return self._every or float(config.load().get("vector_face_seconds") or 15)
 
     def frames(self):
@@ -262,7 +249,7 @@ class FaceLoop:
         while True:
             img = _safe(timers, ctx) if self.timers.running() else None
             if img is not None:
-                yield img, 1.0                             # a timer counts down every second
+                yield img, 1.0
                 continue
             for _ in range(len(order) or 1):
                 name = order[i % len(order)] if order else "clock"
@@ -280,17 +267,17 @@ class FaceLoop:
             menu = self.menu
             img = _safe(lambda ctx: menu.draw(), None) if menu is not None and menu.open else None
             img, wait = (img, 1.0) if img is not None else next(frames)
-            if not self.robot.held:                       # a moment between two holds (Rosie re-taking control): skip a frame
+            if not self.robot.held:
                 self._next.wait(1.0)
                 self._next.clear()
                 continue
             try:
                 if hasattr(self.robot, "ensure_control") and not self.robot.ensure_control():
-                    self._next.wait(1.0)                      # no control: his eyes would win; try again in a moment
+                    self._next.wait(1.0)  # board #792 why-face-wait-without-control
                     self._next.clear()
                     continue
                 self.robot.show(to_rgb565(img), int(wait * 1000) + 1500)
-                self.last_frame, self.error = img, ""         # tools/vector_e2e.py compares it with his face capture
+                self.last_frame, self.error = img, ""
             except Exception as e:
                 self.error = f"{type(e).__name__}: {e}"
             self._next.wait(wait)

@@ -1,4 +1,4 @@
-"""Approval queue: things the assistant (or email monitoring) suggests. Nothing happens until YOU approve."""
+# board #766 safety-nothing-until-approved
 import datetime as dt
 import json
 import sqlite3
@@ -17,12 +17,11 @@ def _db():
                  title TEXT NOT NULL, detail TEXT NOT NULL DEFAULT '', payload TEXT NOT NULL, source TEXT NOT NULL DEFAULT '',
                  status TEXT NOT NULL DEFAULT 'pending', key TEXT UNIQUE)""")
     if "ref" not in [r["name"] for r in c.execute("PRAGMA table_info(proposals)")]:
-        c.execute("ALTER TABLE proposals ADD COLUMN ref TEXT NOT NULL DEFAULT ''")   # what approving made, e.g. 'task:12'
+        c.execute("ALTER TABLE proposals ADD COLUMN ref TEXT NOT NULL DEFAULT ''")
     return c
 
 
 def add(kind, title, payload, detail="", source="", key=None, desktop=True):
-    """kind: task | event | plan (modules can add their own kinds). Returns the new id (None if the same key was already proposed)."""
     import inbox
     with _db() as c:
         cur = c.execute("INSERT OR IGNORE INTO proposals(created,kind,title,detail,payload,source,key) VALUES(?,?,?,?,?,?,?)",
@@ -44,13 +43,11 @@ def count_pending() -> int:
 
 
 def known(key) -> bool:
-    """Was this exact suggestion made before (waiting, approved or dismissed)? Suggestions are never repeated."""
     with _db() as c:
         return bool(c.execute("SELECT 1 FROM proposals WHERE key=?", (key,)).fetchone())
 
 
 def count_since(kind, day) -> int:
-    """How many suggestions of this kind were made since this ISO day (the daily caps)."""
     with _db() as c:
         return c.execute("SELECT COUNT(*) n FROM proposals WHERE kind=? AND created >= ?", (kind, day)).fetchone()["n"]
 
@@ -65,20 +62,19 @@ def dismiss(pid):
     import inbox
     with _db() as c:
         c.execute("UPDATE proposals SET status='dismissed' WHERE id=? AND status IN ('pending', 'approving')", (pid,))
-    inbox.mark_read_key(f"prop:{pid}")                  # its "Approve? ..." Inbox entry doesn't pile up (audit P4 N3)
+    inbox.mark_read_key(f"prop:{pid}")  # board #766 fix-approve-inbox-entry
 
 
 def approve(pid):
-    """Carry the proposal out (only called from the UI's Approve button)."""
     p = get(pid)
     if not p or p["status"] != "pending":
         return {"error": "That proposal is no longer waiting."}
-    with _db() as c:                                          # one tap only: a double tap can't add it twice (audit 2026-10-20)
+    with _db() as c:  # board #766 fix-double-tap-approval
         if c.execute("UPDATE proposals SET status='approving' WHERE id=? AND status='pending'", (pid,)).rowcount != 1:
             return {"error": "That proposal is no longer waiting."}
     try:
         return _approve(pid, p)
-    except Exception:                                         # it failed part way: it waits again instead of being stuck
+    except Exception:  # board #766 why-failed-stays-waiting
         with _db() as c:
             c.execute("UPDATE proposals SET status='pending' WHERE id=? AND status='approving'", (pid,))
         raise
@@ -98,7 +94,7 @@ def _approve(pid, p):
             c.execute("UPDATE proposals SET ref=? WHERE id=?", (f"task:{t['id']}", pid))
     elif p["kind"] == "event":
         result = actions.add_all_day_event(pl["title"], pl["day"]) if pl.get("all_day") else actions.add_event(pl["title"], pl["start"], pl["end"])
-        if isinstance(result, dict) and result.get("status") in actions.NOT_DONE:   # a clash: nothing was added, so it stays waiting
+        if isinstance(result, dict) and result.get("status") in actions.NOT_DONE:
             with _db() as c:
                 c.execute("UPDATE proposals SET status='pending' WHERE id=?", (pid,))
             return {"error": str(result.get("message") or "It wasn't added.")}
@@ -112,13 +108,11 @@ def _approve(pid, p):
     with _db() as c:
         c.execute("UPDATE proposals SET status='approved' WHERE id=?", (pid,))
     import inbox
-    inbox.mark_read_key(f"prop:{pid}")                  # its "Approve? ..." Inbox entry is done too (audit P5)
+    inbox.mark_read_key(f"prop:{pid}")
     return {"status": "approved", "result": result}
 
 
 def origin_of_task(task: dict) -> dict | None:
-    """The suggestion a task came from: the one whose approval made it, or (older tasks, made before 'ref' was kept) an approved task
-    suggestion with the same title. For the task's details (owner 2026-10-24: a task only said "Accept or decline invitation")."""
     with _db() as c:
         r = c.execute("SELECT * FROM proposals WHERE ref=? ORDER BY id DESC LIMIT 1", (f"task:{task['id']}",)).fetchone()
         if not r:

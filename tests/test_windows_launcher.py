@@ -1,5 +1,4 @@
-"""The Windows launcher's update logic (owner 2026-10-23: "i want ota updates so when i update rosie hers also updates with the slot
-system"). GitHub is faked; the parts that only exist on Windows (junctions, idle time) are covered by the Windows CI job."""
+# board #912 owner-ota-updates
 import importlib.util
 import io
 import json
@@ -23,7 +22,7 @@ def L(tmp_path, monkeypatch):
                     ("SETTINGS", tmp_path / "update.json")):
         monkeypatch.setattr(mod, name, p)
     (tmp_path / "slots").mkdir()
-    mod.real_start_dependencies = mod.start_dependencies          # the other tests must never start a program on this PC
+    mod.real_start_dependencies = mod.start_dependencies  # board #912 safety-tests-never-start-programs
     monkeypatch.setattr(mod, "start_dependencies", lambda: {})
     monkeypatch.setattr(mod, "_spawn", lambda args: pytest.fail(f"started {args}"))
     monkeypatch.setattr(mod, "_wait", lambda s: None)
@@ -39,7 +38,6 @@ def zipball(files: dict, top="rosie-abc") -> bytes:
 
 
 class GitHub:
-    """Answers the few GitHub calls the launcher makes."""
     def __init__(self, head="new1", checks=None, files=None):
         self.head, self.calls = head, []
         self.checks = {"new1": [{"name": "pytest", "status": "completed", "conclusion": "success"},
@@ -68,9 +66,9 @@ def test_only_a_commit_whose_every_check_passed_counts(L):
                         "c": req + [job("lint", "failure")],
                         "d": []})
     assert L.checks_passed("a", gh) is True
-    assert L.checks_passed("b", gh) is None          # still running
+    assert L.checks_passed("b", gh) is None
     assert L.checks_passed("c", gh) is False
-    assert L.checks_passed("d", gh) is None          # no checks yet: wait
+    assert L.checks_passed("d", gh) is None
 
 
 def test_the_required_jobs_must_all_exist_and_succeed(L):
@@ -88,7 +86,7 @@ def test_the_required_jobs_must_all_exist_and_succeed(L):
 
 def test_switch_refuses_when_the_idle_slot_does_not_hold_the_staged_version(L):
     st = L.load()
-    st.update(heads={"A": "old", "B": "other"}, staged="new1")      # B was overwritten after staging
+    st.update(heads={"A": "old", "B": "other"}, staged="new1")
     py = L.venv_python("B")
     py.parent.mkdir(parents=True)
     py.write_text("")
@@ -98,7 +96,7 @@ def test_switch_refuses_when_the_idle_slot_does_not_hold_the_staged_version(L):
     st["heads"]["B"] = "new1"
     assert L.can_switch(st)
     py.unlink()
-    assert L.switch(st) is False                                   # no Python in the slot
+    assert L.switch(st) is False
 
 
 def test_a_failed_build_leaves_nothing_staged(L, monkeypatch):
@@ -134,7 +132,7 @@ def test_a_voice_download_that_times_out_does_not_stop_rosie(L, monkeypatch):
         seen.append(timeout)
         raise TimeoutError("timed out")
     monkeypatch.setattr(L.urllib.request, "urlopen", slow)
-    L.first_run()                                                   # must return normally
+    L.first_run()
     assert seen and all(t == 60 for t in seen)
     assert not list((L.ROOT / "data" / "voices").glob("*.onnx"))
 
@@ -152,7 +150,7 @@ def test_a_new_passing_version_is_built_in_the_idle_slot_and_checked_before_it_i
     assert built == ["B"] and smoked == ["B"]
     assert (L.SLOTS / "B" / "app" / "server.py").read_text(encoding="utf-8") == "x = 1\n"
     assert (L.SLOTS / "B" / "VERSION").read_text(encoding="utf-8").strip() == "new1"
-    for name in L.SHARED:                                   # the slot links to the one shared copy of her data
+    for name in L.SHARED:
         assert L._is_link(L.SLOTS / "B" / name) and (L.SLOTS / "B" / name).resolve() == (L.ROOT / name).resolve()
 
 
@@ -234,7 +232,7 @@ def test_updates_go_in_only_when_the_pc_is_quiet_or_at_night(L, monkeypatch):
     assert L.quiet_now(noon) is False and L.quiet_now(three) is True
     monkeypatch.setattr(L, "idle_seconds", lambda: 3600)
     assert L.quiet_now(noon) is True
-    monkeypatch.setattr(L, "idle_seconds", lambda: None)      # can't tell: wait for the night
+    monkeypatch.setattr(L, "idle_seconds", lambda: None)
     assert L.quiet_now(noon) is False
 
 
@@ -255,9 +253,9 @@ def test_the_windows_start_files_use_windows_line_endings():
 
 def test_the_checker_uses_a_model_she_already_has_instead_of_downloading(L):
     assert L.pick_model(["nomic-embed-text:latest", "qwen3.5:9b"], ask=lambda q: pytest.fail("asked")) == "qwen3.5:9b"
-    answers = iter(["7", "2"])                                     # a wrong number, then her pick
+    answers = iter(["7", "2"])
     assert L.pick_model(["llama3.1:8b", "nomic-embed-text:latest", "gemma4:12b"], ask=lambda q: next(answers)) == "gemma4:12b"
-    assert L.pick_model(["llama3.1:8b"], ask=lambda q: "") is None  # Enter: download the usual one
+    assert L.pick_model(["llama3.1:8b"], ask=lambda q: "") is None
     assert L.pick_model(["nomic-embed-text:latest"], ask=lambda q: pytest.fail("asked")) is None
 
 
@@ -282,9 +280,7 @@ def test_setup_without_agent_zero_leaves_rosie_answering_herself(L, monkeypatch)
     assert json.loads((L.ROOT / "data" / "config.json").read_text(encoding="utf-8")) == {"chat_model": "qwen3.5:9b"}
 
 
-# ---------------------------------------------------------------- starting Ollama, Docker Desktop and Agent Zero (partner's issue #2)
 class FakePC:
-    """Docker and Ollama as one fake: what is running, what a start does, and every command the launcher ran."""
     def __init__(self, L, monkeypatch, ollama=False, docker=False, a0_running=False, ollama_exe=True, docker_exe=True, a0="a0-inst-x-1", boots=True):
         self.ollama, self.docker, self.a0_running, self.boots, self.cmds, self.spawned = ollama, docker, a0_running, boots, [], []
         self.a0 = a0
@@ -400,12 +396,11 @@ def test_setup_and_run_start_the_dependencies_first(L, monkeypatch):
     assert order == ["first", "deps", "start"]
 
 
-# ---------------------------------------------------------------- Google sign-in (partner's issue #3)
 def test_google_sign_in_runs_the_active_slots_python_for_calendar_then_gmail(L, monkeypatch):
     calls = []
     monkeypatch.setattr(L, "venv_python", lambda slot: Path(__file__))
     monkeypatch.setattr(L.subprocess, "run", lambda args, **kw: (calls.append((args, kw["cwd"])), L.subprocess.CompletedProcess(args, 0))[1])
-    assert L.google_login() == 1                                       # no google_client.json yet: says so, runs nothing
+    assert L.google_login() == 1
     assert calls == []
     (L.ROOT / "secrets").mkdir()
     (L.ROOT / "secrets" / "google_client.json").write_text("{}")
@@ -436,7 +431,7 @@ def test_the_sign_in_file_is_copied_into_an_older_install_and_the_installer_crea
 
 
 def test_the_update_check_starts_the_new_version_on_a_free_port(L):
-    """Her 02:35 check on 2026-10-24 failed: the fixed port 8766 was Rosie's own tool line for Agent Zero on Windows."""
+    # board #912 fix-agent-zero-port
     import socket
     with socket.socket() as busy:
         busy.bind(("127.0.0.1", 0))
@@ -450,18 +445,16 @@ def test_the_update_check_starts_the_new_version_on_a_free_port(L):
 
 
 def test_a_smoke_test_that_fails_before_starting_reports_it_instead_of_crashing(L):
-    """Audit 2026-10-25: a slot with no app folder made smoke() raise AttributeError from its cleanup, which stopped the launcher."""
-    res = L.smoke("A")                                           # slot A is empty here
+    # board #912 fix-smoke-empty-slot
+    res = L.smoke("A")
     assert res["ok"] is False and "error" in res
 
 
-# ---- audit 2026-10-25 launcher fixes ----
 class _Stop(Exception):
     pass
 
 
 def _loop(L, monkeypatch, tmp_path, ticks, up_until=0.0, probation=True, boom=None):
-    """Run run()'s loop for `ticks` passes on a fake clock (15 s per pass). Returns (rollbacks, log lines, clock start)."""
     t0 = time.time()
     clock = [t0]
     (tmp_path / "secrets").mkdir(exist_ok=True)
@@ -523,12 +516,12 @@ def test_the_lock_is_refused_while_another_holder_has_it(L, monkeypatch):
     with pytest.raises(OSError):
         fcntl.flock(other.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
     other.close()
-    assert L.single_instance() is False                       # a second open file in this process is refused too
+    assert L.single_instance() is False
     L._LOCK.close()
 
 
 def test_no_rollback_before_she_answered_within_the_startup_grace(L, monkeypatch, tmp_path):
-    rollbacks, _ = _loop(L, monkeypatch, tmp_path, ticks=18)       # 4.5 minutes of silence
+    rollbacks, _ = _loop(L, monkeypatch, tmp_path, ticks=18)
     assert rollbacks == []
 
 
@@ -566,7 +559,7 @@ def test_a_smoke_timeout_marks_the_version_bad_only_the_second_time(L, monkeypat
     st = L.load()
     st["bad"] = []
     L.check(st, GitHub())
-    assert "new1" in L.load()["bad"]                              # any other failure is still bad at once
+    assert "new1" in L.load()["bad"]
 
 
 def test_three_build_failures_of_the_same_version_mark_it_bad(L, monkeypatch):
@@ -583,7 +576,6 @@ def test_three_build_failures_of_the_same_version_mark_it_bad(L, monkeypatch):
 
 
 def test_network_trouble_while_building_never_marks_a_version_bad(L, monkeypatch):
-    """Gate review 2026-10-25: three Wi-Fi outages in a row would have skipped a good version for good."""
     st = L.load()
     st["heads"] = {"A": "old"}
     L.save(st)
@@ -608,7 +600,7 @@ def test_the_required_checks_are_the_workflows_job_ids():
 
 def test_a_marker_without_the_venv_rebuilds(L, monkeypatch):
     (L.ROOT / L.INSTALLED).write_text("ok\n")
-    L.save({**L.load(), "heads": {"A": "old"}})                   # a head is recorded but slot A has no Python
+    L.save({**L.load(), "heads": {"A": "old"}})
     built = []
     monkeypatch.setattr(L, "build", lambda slot, sha, *a: built.append((slot, sha)))
     monkeypatch.setattr(L, "newest", lambda: "new1")

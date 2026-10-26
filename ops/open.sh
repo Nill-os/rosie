@@ -1,9 +1,4 @@
 #!/bin/bash
-# Open Rosie (the desktop icon and the app menu): start whatever isn't running (power.sh start), then her window.
-#   open.sh            Rosie's window
-#   open.sh agentzero  Agent Zero's own window
-#   open.sh stop       Shut down all (power.sh stop), with a notification when it's done
-# ~/rosie-ops/power.conf can set BROWSER (a Chromium-type browser) and APP_PROFILE (its profile folder for the app window).
 set -u
 OPS="$(cd "$(dirname "$0")" && pwd)"
 PORT="${ROSIE_PORT:-8765}"
@@ -30,7 +25,7 @@ if ! curl -s -m 2 "http://127.0.0.1:$PORT/healthz" >/dev/null 2>&1 || [ -f "$OPS
     exit 1
   fi
 else
-  "$OPS/power.sh" start >/dev/null 2>&1 &              # she's up: make sure her helpers and Agent Zero are too (quietly)
+  "$OPS/power.sh" start >/dev/null 2>&1 &
 fi
 
 if [ "${1:-}" = "agentzero" ]; then

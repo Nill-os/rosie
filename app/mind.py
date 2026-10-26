@@ -1,18 +1,3 @@
-"""Rosie's long-term memory ("her mind"): local and free, on SQLite and her own Ollama model. Our own small version of the Hindsight
-design (github.com/vectorize-io/hindsight, MIT), read from its source:
-
-- retain: a conversation or note is queued; in the background (only while the owner isn't using her) her model pulls out the facts
-  worth keeping, each self-contained and dated ("on October 20, 2026", never "yesterday"), with who/when/why and the names in it.
-  Owner facts are "world", what Rosie herself did or found is "experience".
-- recall: four searches at once (meaning by embeddings, exact words by FTS5 BM25, shared names and links, and a time window when the
-  question names one), fused by reciprocal rank (k = 60), with small boosts for recent memories and well-supported observations.
-- consolidate: new facts are folded into "observations", beliefs that grow as evidence comes in (each keeps the ids of the facts
-  behind it and how many there are). A change of state updates the belief ("was X, now Y"); nothing is ever computed or invented.
-- reflect: a question is answered from observations and facts only, citing what it used, or it says it doesn't know.
-- standing summaries ("mental models"): a few questions she keeps an answer to, refreshed when new observations arrive; the
-  "about the owner" one goes into her prompt and Agent Zero's.
-
-Embeddings: nomic-embed-text on the CPU (never pushes the chat model off the GPU). Everything stays in data/mind.db."""
 import datetime as dt
 import json
 import math
@@ -36,18 +21,18 @@ EMBED_MODEL = "nomic-embed-text"
 CHUNK_CHARS = 3000
 RRF_K = 60
 SEMANTIC_MIN = 0.3
-LINK_MIN = 0.7                      # two facts this similar are linked (feeds the graph search)
-DEDUP_MIN = 0.97                    # a new observation this close to an old one is the same belief
-OBS_MAX_CHARS = 400                 # a belief longer than this has swallowed other facets (the 9B model grows one catch-all)
-FACT_SAME_MIN = 0.98                # a new fact this close to a live one, with the same numbers, is the same fact said again
+LINK_MIN = 0.7
+DEDUP_MIN = 0.97
+OBS_MAX_CHARS = 400
+FACT_SAME_MIN = 0.98
 CONSOLIDATE_BATCH = 6
 MAX_PREDICT = 2048
 ROUND_S = 30
-MODEL_EVERY_S = 6 * 3600            # a standing summary is refreshed at most this often
-AUTO_MIN_SIM = 0.66                 # what goes into a chat by itself must be clearly about the message (nomic: related ~0.64-0.72, unrelated ~0.45-0.58)
-AUTO_SURE_SIM = 0.72                # this close counts even without a shared word
+MODEL_EVERY_S = 6 * 3600
+AUTO_MIN_SIM = 0.66
+AUTO_SURE_SIM = 0.72
 AUTO_CHARS = 1200
-_transport = None                   # tests put an httpx.MockTransport here; None = the local Ollama
+_transport = None
 _lock = threading.RLock()
 _cache = {"ver": None, "ids": None, "mat": None}
 state = {"doing": "", "waiting": "", "last_error": "", "retained": 0, "consolidated": 0, "started": False}
@@ -76,10 +61,9 @@ MODELS = {"owner": "Who is the owner, what are they working on and caring about 
 
 
 class Busy(Exception):
-    """The owner (or the paper, or a scheduled job) needs the model: drop this background call and try later."""
+    pass
 
 
-# ---------------------------------------------------------------- storage
 def _db():
     testguard.check(DB)
     DB.parent.mkdir(parents=True, exist_ok=True)
@@ -109,7 +93,6 @@ def _ver(c) -> int:
     return int(r["v"]) if r else 0
 
 
-# ---------------------------------------------------------------- the model and embeddings
 def _model() -> str:
     import ctxsize
     return ctxsize.live_model()
@@ -120,7 +103,6 @@ def _client(timeout=120):
 
 
 def embed(texts: list[str], query: bool = False) -> np.ndarray:
-    """Unit-length vectors (nomic-embed-text on the CPU, with its search_query / search_document prefixes)."""
     pre = "search_query: " if query else "search_document: "
     import corner_graph
     body = {"model": corner_graph.embed_model(_transport), "input": [pre + str(t)[:6000] for t in texts], "truncate": True, "keep_alive": "30m", "options": {"num_gpu": 0}}
@@ -130,7 +112,6 @@ def embed(texts: list[str], query: bool = False) -> np.ndarray:
             r.raise_for_status()
             out = r.json().get("embeddings") or []
     except (httpx.ConnectError, httpx.ConnectTimeout, httpx.RemoteProtocolError, httpx.ReadError) as e:
-        # as in ask(): an outage is a wait (audit pass 2: consolidation embeds first, so facts were still marked failed for good)
         raise Busy(f"Waiting for the AI model: Ollama isn't answering ({type(e).__name__}).") from None
     if len(out) != len(texts):
         raise RuntimeError("the embedding model gave a wrong number of answers")
@@ -145,8 +126,6 @@ def _wait_reason() -> str | None:
 
 
 def ask(system: str, user: str, schema: dict, predict: int = MAX_PREDICT, background: bool = True) -> dict:
-    """One structured answer from her chat model (Ollama's native format=schema, thinking off). A background call is streamed and
-    dropped the moment the owner starts using Rosie (Busy), so she never makes them wait."""
     import corner
     import ctxsize
     if background:
@@ -174,13 +153,12 @@ def ask(system: str, user: str, schema: dict, predict: int = MAX_PREDICT, backgr
                     if d.get("done"):
                         break
     except (httpx.ConnectError, httpx.ConnectTimeout, httpx.RemoteProtocolError, httpx.ReadError) as e:
-        # Ollama is restarting or down: wait, not a failure (audit 2026-10-23: a short outage marked every queued chat and fact failed)
+        # board #746 fix-outage-is-wait
         raise Busy(f"Waiting for the AI model: Ollama isn't answering ({type(e).__name__}).") from None
     return _loose_json(text)
 
 
 def _loose_json(text: str) -> dict:
-    """Small models sometimes wrap or cut their JSON: take the outermost object that parses."""
     text = text.strip()
     try:
         return json.loads(text)
@@ -195,7 +173,6 @@ def _loose_json(text: str) -> dict:
     raise ValueError("the model's answer wasn't valid JSON")
 
 
-# ---------------------------------------------------------------- dates
 MONTHS = {m: i for i, m in enumerate(("january", "february", "march", "april", "may", "june", "july", "august", "september", "october",
                                       "november", "december"), 1)}
 
@@ -213,8 +190,6 @@ def _parse_day(s) -> dt.date | None:
 
 
 def window(question: str, today: dt.date | None = None) -> tuple[dt.date, dt.date] | None:
-    """The time range a question names, by plain rules: today, yesterday, this/last week, this/last month, last N days, in <month>,
-    on <month> <day>, a YYYY-MM-DD date. None when it names none."""
     t = (question or "").lower()
     today = today or _now().date()
     if re.search(r"\btoday\b|\bthis morning\b|\btonight\b", t):
@@ -256,7 +231,6 @@ def window(question: str, today: dt.date | None = None) -> tuple[dt.date, dt.dat
     return None
 
 
-# ---------------------------------------------------------------- retain
 EXTRACT_SYSTEM = """You keep Rosie's long-term memory. Rosie is a personal assistant; the owner is {owner}.
 Extract only SIGNIFICANT facts worth remembering for months: the owner's personal info, people and relationships, preferences, habits,
 plans, goals, deadlines, decisions, projects, problems, skills, health or money only if the owner said it, and what Rosie did, found
@@ -289,8 +263,7 @@ MASCULINE = re.compile(r"\b(he|his|him|himself)\b", re.I)
 
 
 def neutral(text: str, owner: str | None = None, about_owner: bool = False) -> str:
-    """The model guesses the owner's gender despite the rule: in a memory about the owner (it starts with their name), "he/his/him"
-    become their name and "their/them". about_owner = the whole text is about the owner (the standing summary)."""
+    # board #746 quirk-owner-gender-guess
     owner = owner or _owner()
     if not text or not (about_owner or re.match(re.escape(owner) + r"\b", text.strip(), re.I)):
         return text
@@ -306,7 +279,6 @@ MAIL_SECTION = re.compile(r"^\*\*(?:E-?mail|Mail|Inbox)\*\*", re.I)
 
 
 def drop_mail(text: str) -> str:
-    """Her daily brief quotes mail under an **Email** heading (outside text): that heading and its bullet lines are left out."""
     out, skipping = [], False
     for line in (text or "").splitlines():
         if MAIL_SECTION.match(line.strip()):
@@ -320,7 +292,6 @@ def drop_mail(text: str) -> str:
 
 
 def queue(text: str, source: str, ref: str, context: str = "", mentioned_at: str | None = None) -> int | None:
-    """Add a conversation or note to the retain queue (her model reads it later, when she is idle). ref makes it idempotent."""
     text = drop_mail(text or "").strip()
     if len(text) < 20:
         return None
@@ -330,28 +301,25 @@ def queue(text: str, source: str, ref: str, context: str = "", mentioned_at: str
         return cur.lastrowid if cur.rowcount else None
 
 
-MAIL_TOOLS = {"check_email", "mail_cleanup_preview", "mail_cleanup", "mail_undo"}   # their results quote mail: outside text for her memory
+MAIL_TOOLS = {"check_email", "mail_cleanup_preview", "mail_cleanup", "mail_undo"}
 
 
 def outside_tools() -> set:
-    """Tools whose results are text from outside (web, mail, phone, files): a turn that used one keeps only the owner's words."""
     import agent
     return set(agent.UNTRUSTED) | MAIL_TOOLS
 
 
 def queue_turn(chat_id, user_text: str, reply: str, untrusted: bool = False, voice: bool = False):
-    """One chat exchange. When the turn read outside text (web pages, mail, the phone screen), only the owner's own words are kept,
-    so a page can never plant a memory through her reply."""
+    # board #746 safety-outside-text-no-memory
     try:
         owner = _owner()
         body = f"{owner}: {user_text.strip()}" + ("" if untrusted else f"\nRosie: {reply.strip()}")
         queue(body, "chat", f"chat:{chat_id}:{time.time_ns()}", context="a spoken chat with Rosie" if voice else "a chat with Rosie")
-    except Exception as e:                                   # memory must never break a chat
+    except Exception as e:
         state["last_error"] = f"queue_turn: {type(e).__name__}: {e}"[:300]
 
 
 def chunks(text: str, size: int = CHUNK_CHARS) -> list[str]:
-    """Pieces of at most `size` characters, cut at a line, then a sentence, then a word."""
     out, rest = [], text.strip()
     while len(rest) > size:
         cut = max(rest.rfind("\n", 0, size), rest.rfind(". ", 0, size) + 1, 0)
@@ -377,7 +345,6 @@ def _fact_text(f: dict) -> str:
 
 
 def extract(doc: dict, background: bool = True) -> list[dict]:
-    """The facts in one queued document (one model call per chunk)."""
     owner = _owner()
     when = dt.datetime.fromisoformat(doc["mentioned_at"])
     facts = []
@@ -395,7 +362,7 @@ def extract(doc: dict, background: bool = True) -> list[dict]:
             ents = [" ".join(str(e).split())[:80] for e in (f.get("entities") or []) if isinstance(e, (str, int)) and str(e).strip()]
             start = _parse_day(f.get("start")) if f.get("kind") == "event" else None
             end = (_parse_day(f.get("end")) or start) if start else None
-            mine = f.get("type") == "assistant" and not re.match(re.escape(owner) + r"\b", text, re.I)    # "{owner} decided ..." is the owner's fact
+            mine = f.get("type") == "assistant" and not re.match(re.escape(owner) + r"\b", text, re.I)
             facts.append({"text": text, "kind": "experience" if mine else "world", "entities": ents[:12],
                           "start": start.isoformat() if start else None, "end": end.isoformat() if end else None})
     return facts
@@ -411,7 +378,6 @@ def _embed_text(f: dict) -> str:
 
 
 def _entity_id(c, name: str, at: str) -> int:
-    """Same name (any case) = same entity; a close spelling ('Katherine' / 'Kathrine') too, when no number differs."""
     import difflib
     ln = name.lower()
     r = c.execute("SELECT id FROM entities WHERE lname=?", (ln,)).fetchone()
@@ -428,23 +394,22 @@ def _entity_id(c, name: str, at: str) -> int:
 
 
 def add_units(facts: list[dict], source: str, mentioned_at: str, doc_id: int | None = None, context: str = "") -> list[int]:
-    """Store extracted facts: embeddings, words for BM25, names, and links to similar and same-day facts."""
     if not facts:
         return []
     if doc_id is not None:
         with _db() as c:
             if not c.execute("SELECT 1 FROM docs WHERE id=?", (doc_id,)).fetchone():
-                return []                                     # its chat was deleted while she was reading it
+                return []
     vecs = embed([_embed_text(f) for f in facts])
     ids = []
     with _lock, _db() as c:
         if doc_id is not None and not c.execute("SELECT 1 FROM docs WHERE id=?", (doc_id,)).fetchone():
-            return []                                         # its chat was deleted while she was reading it (audit 2026-10-20)
+            return []
         old_ids, old_mat = _matrix(c, kinds=("world", "experience"))
         seen_ids, seen_mat = old_ids, old_mat
         for f, v in zip(facts, vecs):
             same = _same_fact(c, seen_ids, seen_mat, f["kind"], f["text"], v)
-            if same:                                          # said again: one fact, mentioned most recently now
+            if same:
                 c.execute("UPDATE units SET mentioned_at=MAX(mentioned_at, ?) WHERE id=?", (mentioned_at, same))
                 if same not in ids:
                     ids.append(same)
@@ -465,7 +430,7 @@ def add_units(facts: list[dict], source: str, mentioned_at: str, doc_id: int | N
             seen_ids = np.append(seen_ids, uid)
             seen_mat = v[None, :].astype(np.float32) if seen_mat is None else np.vstack([seen_mat, v])
         day = mentioned_at[:10]
-        for a in ids:                                         # same-conversation facts are linked in time
+        for a in ids:
             for b in ids:
                 if a != b:
                     c.execute("INSERT OR IGNORE INTO links(src, dst, type, weight) VALUES(?,?,?,?)", (a, b, "temporal", 1.0))
@@ -482,7 +447,6 @@ def _digits(text: str) -> list[str]:
 
 
 def _same_fact(c, ids_, mat, kind: str, text: str, v) -> int | None:
-    """The live fact this one only repeats (same kind, same numbers, nearly the same words), or None."""
     if mat is None or not len(ids_):
         return None
     sims = mat @ v
@@ -496,14 +460,12 @@ def _same_fact(c, ids_, mat, kind: str, text: str, v) -> int | None:
 
 
 def remember_now(text: str, source: str = "remember", kind: str = "world") -> int:
-    """A fact the owner (or Rosie, on their word) states outright: stored as-is, no model call."""
     names = re.findall(r"\b[A-Z][a-zA-Z0-9'-]{2,}(?:\s+[A-Z][a-zA-Z0-9'-]{2,})*", text)
     return add_units([{"text": " ".join(text.split())[:1000], "kind": kind if kind in ("world", "experience") else "world",
                        "entities": list(dict.fromkeys(names))[:8] + [_owner()], "start": None, "end": None}], source, _iso())[0]
 
 
 def retain_next(background: bool = True) -> bool:
-    """Read the oldest queued document into facts. True when one was handled."""
     with _db() as c:
         doc = c.execute("SELECT * FROM docs WHERE done_at IS NULL AND tries < 3 ORDER BY id LIMIT 1").fetchone()
     if not doc:
@@ -527,7 +489,6 @@ def retain_next(background: bool = True) -> bool:
     return True
 
 
-# ---------------------------------------------------------------- recall
 def _matrix(c, kinds=None):
     q = "SELECT id, emb FROM units WHERE invalidated_at IS NULL AND emb IS NOT NULL"
     args = []
@@ -541,7 +502,7 @@ def _matrix(c, kinds=None):
 
 
 def _all_vectors(c):
-    v = (str(DB), _ver(c))                                   # the path too: a fresh database starts its version count again
+    v = (str(DB), _ver(c))
     if _cache["ver"] != v or _cache["ids"] is None:
         _cache["ids"], _cache["mat"] = _matrix(c)
         _cache["ver"] = v
@@ -565,7 +526,6 @@ def _row(r, score=0.0, sim=None, arms=()) -> dict:
 
 
 def recall(query: str, k: int = 8, kinds=None, today: dt.date | None = None, qvec=None) -> list[dict]:
-    """Her memories that bear on `query`, best first: meaning + exact words + shared names/links + a named time window, fused by RRF."""
     query = (query or "").strip()[:1000]
     if not query:
         return []
@@ -626,7 +586,6 @@ def recall(query: str, k: int = 8, kinds=None, today: dt.date | None = None, qve
 
 
 def search_tool(query: str, when: str = "") -> dict:
-    """Rosie's memory_search tool."""
     q = f"{query} {when}".strip()
     got = recall(q, k=10)
     return {"query": q, "memories": [{"id": m["id"], "kind": m["kind"], "text": m["text"], "when": m["when"], "from": m["source"],
@@ -636,7 +595,6 @@ def search_tool(query: str, when: str = "") -> dict:
 
 
 def auto_context(text: str) -> str:
-    """What she remembers that is clearly about this message, for agent.chat to add to the turn (her own memory: not outside text)."""
     try:
         words = [w for w in re.findall(r"[a-z0-9']{3,}", (text or "").lower()) if w not in _STOP]
         if len(words) < 2:
@@ -660,7 +618,6 @@ def auto_context(text: str) -> str:
         return ""
 
 
-# ---------------------------------------------------------------- consolidate (facts -> observations)
 CONSOLIDATE_SYSTEM = """You keep Rosie's beliefs ("observations") up to date. Each observation sums up one facet (a person, a preference,
 a project, a decision, a count, a relationship) from the facts behind it.
 Rules:
@@ -688,7 +645,6 @@ CONSOLIDATE_SCHEMA = {"type": "object", "properties": {
 
 
 def consolidate_next(background: bool = True) -> bool:
-    """Fold the oldest new facts into observations (one model call per batch). True when a batch was handled."""
     with _db() as c:
         facts = [dict(r) for r in c.execute("SELECT id, text, occurred_start, occurred_end, mentioned_at FROM units WHERE kind IN ('world','experience') "
                                             "AND consolidated_at IS NULL AND failed_at IS NULL AND invalidated_at IS NULL ORDER BY id LIMIT ?", (CONSOLIDATE_BATCH,))]
@@ -709,7 +665,7 @@ def consolidate_next(background: bool = True) -> bool:
                                                                   "mentioned_at": o["mentioned_at"][:10]} for o in obs.values()]) if obs else "[]"))
         got = ask(CONSOLIDATE_SYSTEM, user, CONSOLIDATE_SCHEMA, background=background)
         if not _apply(got, {f["id"] for f in facts}, obs):
-            return True                                       # something it was shown was forgotten meanwhile: those facts are thought over again later
+            return True
         with _db() as c:
             c.executemany("UPDATE units SET consolidated_at=? WHERE id=?", [(_iso(), f["id"]) for f in facts])
         state["consolidated"] += len(facts)
@@ -726,7 +682,6 @@ def consolidate_next(background: bool = True) -> bool:
 
 
 def _apply(got: dict, fact_ids: set, obs: dict):
-    """Write the model's creates/updates/deletes, only for ids it was shown; proof = the number of distinct facts behind a belief."""
     now = _iso()
     with _lock, _db() as c:
         live = {r[0] for r in c.execute("SELECT id FROM units WHERE invalidated_at IS NULL AND id IN (%s)" % ",".join("?" * len(fact_ids)),
@@ -734,7 +689,7 @@ def _apply(got: dict, fact_ids: set, obs: dict):
         shown = [int(i) for i in obs]
         gone_obs = c.execute("SELECT COUNT(*) FROM units WHERE invalidated_at IS NOT NULL AND id IN (%s)" % ",".join("?" * len(shown)),
                              shown).fetchone()[0] if shown else 0
-        if live != set(fact_ids) or gone_obs:                 # forgotten while the model thought: none of its answer is used (audit 2026-10-20)
+        if live != set(fact_ids) or gone_obs:
             return False
 
         def srcs(lst):
@@ -781,7 +736,7 @@ def _apply(got: dict, fact_ids: set, obs: dict):
             if mat is not None and len(ids):
                 sims = mat @ v
                 j = int(np.argmax(sims))
-                if sims[j] >= DEDUP_MIN:                         # the same belief: add the evidence, keep one
+                if sims[j] >= DEDUP_MIN:
                     twin = int(ids[j])
                     r = c.execute("SELECT source_ids FROM units WHERE id=?", (twin,)).fetchone()
                     allsrc = sorted(set(json.loads(r["source_ids"] or "[]")) | set(s))
@@ -796,7 +751,6 @@ def _apply(got: dict, fact_ids: set, obs: dict):
     return True
 
 
-# ---------------------------------------------------------------- reflect and standing summaries
 REFLECT_SYSTEM = """You answer a question from Rosie's own memories ONLY: observations (beliefs built from many facts) and raw facts.
 Never use outside knowledge and never make up names, events or numbers. Reason from what is there: combine facts, notice patterns,
 and say how sure you are. When facts conflict on the same thing, the one with the later mentioned_at wins, unless the earlier one is
@@ -807,7 +761,6 @@ REFLECT_SCHEMA = {"type": "object", "properties": {"answer": {"type": "string"},
 
 
 def _top_observations(n: int = 15) -> list[dict]:
-    """Her best-supported beliefs, newest first among equals (for a standing summary that no single search would find)."""
     with _db() as c:
         rows = c.execute("SELECT id, kind, text, source, occurred_start, occurred_end, mentioned_at, proof_count FROM units WHERE kind='observation' "
                          "AND invalidated_at IS NULL ORDER BY proof_count DESC, mentioned_at DESC LIMIT ?", (n,)).fetchall()
@@ -815,7 +768,6 @@ def _top_observations(n: int = 15) -> list[dict]:
 
 
 def reflect(question: str, background: bool = False, broad: bool = False) -> dict:
-    """Think over everything she remembers to answer one question, citing what she used. broad = also her best-supported beliefs."""
     question = (question or "").strip()[:500]
     if not question:
         return {"error": "Ask a question."}
@@ -838,7 +790,6 @@ def reflect(question: str, background: bool = False, broad: bool = False) -> dic
 
 
 def refresh_models(background: bool = True, force: bool = False) -> bool:
-    """Refresh a standing summary when new beliefs arrived since it was written (at most every 6 hours). True when one was refreshed."""
     with _db() as c:
         top = c.execute("SELECT COALESCE(MAX(id), 0) m FROM units WHERE kind='observation'").fetchone()["m"]
         due = [dict(r) for r in c.execute("SELECT * FROM models")]
@@ -863,7 +814,6 @@ def refresh_models(background: bool = True, force: bool = False) -> bool:
 
 
 def about_owner(limit: int = 900) -> str:
-    """The standing summary about the owner, for the system prompts ('' until there is one)."""
     try:
         with _db() as c:
             r = c.execute("SELECT content, refreshed_at FROM models WHERE name='owner'").fetchone()
@@ -875,9 +825,7 @@ def about_owner(limit: int = 900) -> str:
         return ""
 
 
-# ---------------------------------------------------------------- the background worker and backfill
 def step(background: bool = True) -> str:
-    """One unit of background work: retain, else consolidate, else refresh a summary. Returns what it did ('' = nothing to do)."""
     if background:
         why = _wait_reason()
         if why:
@@ -908,7 +856,6 @@ def _work_loop():
 
 
 def start():
-    """Start the background worker (server start-up, via automations.start). Never under tests or in a sandbox copy."""
     import os
     if testguard.active() or os.environ.get("ROSIE_SANDBOX") or os.environ.get("ROSIE_MIND") == "off" or state["started"]:
         return
@@ -923,8 +870,6 @@ def start():
 
 
 def backfill() -> int:
-    """Queue what came before her mind existed, once: every saved chat (her own words and the owner's, never tool output) and the
-    notes kept with remember(). Returns how many documents were queued."""
     import chats
     import memory
     n = 0
@@ -936,7 +881,7 @@ def backfill() -> int:
         cc.row_factory = sqlite3.Row
         rows = cc.execute("SELECT chat_id, role, body, created FROM msgs ORDER BY chat_id, id").fetchall()
     by_chat: dict = {}
-    outside: set = set()                                     # (chat, day) where she read outside text: only the owner's words are kept
+    outside: set = set()
     for r in rows:
         try:
             m = json.loads(r["body"]) if str(r["body"]).startswith("{") else {"content": r["body"]}
@@ -971,8 +916,6 @@ def backfill() -> int:
 
 
 def repair_outside() -> int:
-    """Once: the first back-fill kept her replies on chat days where she read mail (the mail tools weren't counted as outside text
-    yet). Those memories are retired and the days are read again with only the owner's words. Returns how many days were redone."""
     import chats
     with _db() as c:
         if c.execute("SELECT 1 FROM meta WHERE k='repair_outside_v1'").fetchone():
@@ -1008,8 +951,6 @@ def repair_outside() -> int:
 
 
 def repair_briefs() -> int:
-    """Once: back-filled chats kept her daily brief's **Email** section (mail summaries). Those documents' memories are retired
-    and the documents read again without it. Returns how many were redone."""
     with _db() as c:
         if c.execute("SELECT 1 FROM meta WHERE k='repair_briefs_v1'").fetchone():
             return 0
@@ -1032,7 +973,6 @@ def repair_briefs() -> int:
 
 
 def repair_pronouns() -> int:
-    """Once: memories written before neutral() existed call the owner "he/his". Returns how many were rewritten."""
     owner = _owner()
     n = 0
     with _lock, _db() as c:
@@ -1054,7 +994,6 @@ def repair_pronouns() -> int:
 
 
 def _merge_fact(c, dup: int, keep: int):
-    """dup only repeats keep: dup is retired, keep takes its latest mention, its names, and its place behind beliefs."""
     d = c.execute("SELECT mentioned_at FROM units WHERE id=?", (dup,)).fetchone()
     c.execute("UPDATE units SET invalidated_at=?, invalid_reason=? WHERE id=?", (_iso(), f"the same as fact {keep}", dup))
     c.execute("UPDATE units SET mentioned_at=MAX(mentioned_at, ?) WHERE id=?", (d["mentioned_at"], keep))
@@ -1067,8 +1006,6 @@ def _merge_fact(c, dup: int, keep: int):
 
 
 def repair_duplicates() -> int:
-    """Once: the first back-fill read the same brief lines on many days, so one fact was stored many times (inflating the proof
-    behind beliefs). Repeats are merged into the oldest copy. Returns how many were merged."""
     merged = 0
     with _lock, _db() as c:
         if c.execute("SELECT 1 FROM meta WHERE k='repair_duplicates_v1'").fetchone():
@@ -1094,8 +1031,6 @@ def repair_duplicates() -> int:
 
 
 def repair_sprawl() -> int:
-    """Once: before OBS_MAX_CHARS, the model grew a few beliefs into run-on summaries of everything. They are retired and their
-    facts thought over again under the one-facet rule. Returns how many were retired."""
     with _lock, _db() as c:
         if c.execute("SELECT 1 FROM meta WHERE k='repair_sprawl_v1'").fetchone():
             return 0
@@ -1126,7 +1061,6 @@ def status() -> dict:
 
 
 def forget(unit_id: int, reason: str = "the owner asked") -> dict:
-    """Retire one memory (kept in the database, never used again). Beliefs built only on it are retired too."""
     with _db() as c:
         r = c.execute("SELECT id, text FROM units WHERE id=? AND invalidated_at IS NULL", (int(unit_id),)).fetchone()
         if not r:
@@ -1134,7 +1068,7 @@ def forget(unit_id: int, reason: str = "the owner asked") -> dict:
         c.execute("UPDATE units SET invalidated_at=?, invalid_reason=? WHERE id=?", (_iso(), reason[:200], r["id"]))
         for o in c.execute("SELECT id, source_ids FROM units WHERE kind='observation' AND invalidated_at IS NULL").fetchall():
             src = json.loads(o["source_ids"] or "[]")
-            if r["id"] in src:                                # a belief built on it is retired; its other facts are thought over again
+            if r["id"] in src:
                 c.execute("UPDATE units SET invalidated_at=?, invalid_reason='a fact behind it was forgotten' WHERE id=?", (_iso(), o["id"]))
                 rest = [s for s in src if s != r["id"]]
                 if rest:
@@ -1144,8 +1078,7 @@ def forget(unit_id: int, reason: str = "the owner asked") -> dict:
 
 
 def scrub(unit_ids: list, why: str):
-    """Gone means gone (audit 2026-10-20): these facts and every belief built on them lose their words, embedding, search entry, names,
-    links and history; names no other memory uses are dropped too. The rows stay (retired) so ids are never reused."""
+    # board #746 safety-gone-means-gone
     with _lock, _db() as c:
         ids, todo = set(), list(unit_ids)
         while todo:
@@ -1164,15 +1097,14 @@ def scrub(unit_ids: list, why: str):
             c.execute("DELETE FROM links WHERE src=? OR dst=?", (uid, uid))
             c.execute("DELETE FROM obs_history WHERE obs_id=?", (uid,))
         c.execute("DELETE FROM entities WHERE id NOT IN (SELECT entity_id FROM unit_entities)")
-        if ids:                                               # the standing summary of the owner is rebuilt without them
+        if ids:
             c.execute("UPDATE models SET content='', refreshed_at=NULL, seen_upto=0")
     _bump()
     return len(ids)
 
 
 def forget_chat(chat_id) -> int:
-    """The owner deleted a chat: what she hadn't read yet is dropped, and what she learned from it is retired and scrubbed. Returns facts retired."""
-    with _lock:                                                # a reading in progress can't add facts from it afterwards (add_units checks the doc)
+    with _lock:
         with _db() as c:
             refs = (f"chat:{chat_id}:%", f"backfill:chat:{chat_id}:%", f"backfill2:chat:{chat_id}:%")
             docs = [r["id"] for r in c.execute("SELECT id FROM docs WHERE ref LIKE ? OR ref LIKE ? OR ref LIKE ?", refs)]
@@ -1181,18 +1113,17 @@ def forget_chat(chat_id) -> int:
         for u in units:
             forget(u, "its chat was deleted")
         scrub(gone, "its chat was deleted")
-        with _db() as c:                                       # last, so a failure above can be retried (the lock keeps new facts out)
+        with _db() as c:
             c.execute("DELETE FROM docs WHERE ref LIKE ? OR ref LIKE ? OR ref LIKE ?", refs)
     return len(units)
 
 
 def forget_note(note_id: int, text: str = "") -> int:
-    """A memory note the owner deleted (memory.forget): the facts made from it go too, scrubbed."""
     with _lock:
         with _db() as c:
             docs = [r["id"] for r in c.execute("SELECT id FROM docs WHERE ref=?", (f"backfill:note:{note_id}",))]
             units = [r["id"] for r in c.execute("SELECT id FROM units WHERE source=?", (f"remember:{note_id}",))]
-            if text:                                          # notes saved before the id was kept with them
+            if text:
                 units += [r["id"] for r in c.execute("SELECT id FROM units WHERE source='remember' AND text=?", (" ".join(text.split())[:1000],))]
             if docs:
                 units += [r["id"] for r in c.execute("SELECT id FROM units WHERE doc_id IN (%s)" % ",".join("?" * len(docs)), docs)]
@@ -1203,7 +1134,6 @@ def forget_note(note_id: int, text: str = "") -> int:
 
 
 def recent(limit: int = 40) -> list[dict]:
-    """Her newest memories, for Settings > Memory (each can be forgotten there)."""
     with _db() as c:
         rows = c.execute("SELECT id, kind, text, source, occurred_start, occurred_end, mentioned_at, proof_count FROM units WHERE invalidated_at IS NULL "
                          "ORDER BY CASE kind WHEN 'observation' THEN 0 ELSE 1 END, id DESC LIMIT ?", (max(1, min(int(limit), 200)),)).fetchall()

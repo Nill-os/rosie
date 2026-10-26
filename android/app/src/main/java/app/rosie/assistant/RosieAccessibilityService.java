@@ -23,9 +23,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Pattern;
 
-/** Lets Rosie look at the screen and tap, type and scroll for you, with safety limits:
- *  banking, password, payment and security screens are off limits; password fields are never read or typed into; buttons like Send / Pay / Delete need your confirmation;
- *  a "Rosie is controlling your screen" notification with a Stop button is shown the whole time. */
 public class RosieAccessibilityService extends AccessibilityService {
     static volatile RosieAccessibilityService instance;
     static volatile long haltedUntil = 0;
@@ -44,7 +41,6 @@ public class RosieAccessibilityService extends AccessibilityService {
         return s != null && s.contains(c.getPackageName());
     }
 
-    /** Shows the "controlling your screen" notice (with Stop) and keeps it up while commands keep coming. */
     void indicator() {
         NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
         nm.createNotificationChannel(new NotificationChannel("screen", "Screen control", NotificationManager.IMPORTANCE_HIGH));
@@ -164,7 +160,6 @@ public class RosieAccessibilityService extends AccessibilityService {
         static String of(Context c, String pkg) { return RosieNotificationListener.label(c, pkg); }
     }
 
-    /** The Stop button on the notice. */
     public static class HaltReceiver extends android.content.BroadcastReceiver {
         @Override public void onReceive(Context c, Intent i) {
             haltedUntil = System.currentTimeMillis() + 60000;

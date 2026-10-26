@@ -16,7 +16,7 @@ _REAL_UNIT_RESULT = health._unit_result
 
 @pytest.fixture(autouse=True)
 def _no_real_units(monkeypatch):
-    monkeypatch.setattr(health, "_unit_result", lambda unit: "")           # never this PC's real backup / sync results
+    monkeypatch.setattr(health, "_unit_result", lambda unit: "")
 
 
 def test_summary_levels():
@@ -35,7 +35,7 @@ def test_a_crashing_check_becomes_a_red_row_not_a_crash(monkeypatch):
 
 
 def test_backup_check_levels(monkeypatch):
-    monkeypatch.setattr(health.plat, "IS_WIN", False)                  # the Linux backup jobs (Windows rows: test_windows_fixes)
+    monkeypatch.setattr(health.plat, "IS_WIN", False)
     for status, level in (({"exists": False}, "bad"),
                           ({"exists": True, "verified": False, "problems": ["x"], "age_hours": 1, "count": 1}, "bad"),
                           ({"exists": True, "verified": True, "age_hours": 50, "count": 3}, "bad"),
@@ -56,7 +56,7 @@ def test_phone_link_levels(monkeypatch):
 
 def test_login_ageing_warns_before_google_ends_it(tmp_path, monkeypatch):
     monkeypatch.setattr(health, "DATES", tmp_path / "dates.json")
-    assert health.login_age_days("google") == 0.0                      # first sighting starts the clock
+    assert health.login_age_days("google") == 0.0
     old = (dt.datetime.now() - dt.timedelta(days=6)).isoformat()
     (tmp_path / "dates.json").write_text(json.dumps({"google": old}))
     r = health._aging("Google Calendar", "google", "Calendar", "run login.sh")
@@ -73,7 +73,7 @@ def test_alerts_once_a_day_per_problem_and_only_for_real_problems():
             {"name": "Google Calendar", "level": "warn", "detail": "Calendar login is 6 days old; Google may end it at 7 days", "fix": "run login.sh"}, {"name": "Model", "level": "ok", "detail": "", "fix": ""}]
     health.alert(rows, now, add)
     assert [t for t, _ in sent] == ["Needs attention: Backup", "Needs attention: Google Calendar"]
-    assert sent[0][1] == "health:Backup:2026-10-04"                    # same key all day: the inbox shows it once
+    assert sent[0][1] == "health:Backup:2026-10-04"
 
 
 def test_disk_levels(monkeypatch):
@@ -85,7 +85,7 @@ def test_disk_levels(monkeypatch):
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Linux-only: the user bus, systemd timers or Unix sockets")
 def test_a_wayland_desktop_is_found_through_the_users_systemd(monkeypatch):
-    """gnome-shell on Wayland has no DISPLAY or WAYLAND_DISPLAY of its own: the session's environment comes from systemd --user."""
+    # board #865 quirk-gnome-wayland-env
     import subprocess
     import pc_tools
     seen = []
@@ -98,11 +98,11 @@ def test_a_wayland_desktop_is_found_through_the_users_systemd(monkeypatch):
     monkeypatch.setattr(pc_tools.subprocess, "run", run)
     env = pc_tools.gui_env()
     assert env["WAYLAND_DISPLAY"] == "wayland-0" and env["DISPLAY"] == ":0" and env["XDG_RUNTIME_DIR"].startswith("/run/user/")
-    assert "SECRET" not in env and "LANG" not in env                         # only the desktop's own variables
+    assert "SECRET" not in env and "LANG" not in env
     cmd, e = seen[-1]
     assert cmd == ["systemctl", "--user", "show-environment"] and e["DBUS_SESSION_BUS_ADDRESS"].endswith("/bus")
     monkeypatch.setattr(pc_tools.subprocess, "run", lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, "", ""))
-    assert pc_tools.gui_env() == {}                                         # no desktop session at all
+    assert pc_tools.gui_env() == {}
 
 
 def test_status_shows_her_chat_model_not_the_embedder(monkeypatch):
@@ -132,7 +132,7 @@ def test_containers_and_agent_zeros_line_are_checked(monkeypatch):
 
 
 def test_code_backup_and_backup_rows_follow_their_jobs_results(monkeypatch):
-    monkeypatch.setattr(health.plat, "IS_WIN", False)                  # the Linux backup jobs (Windows rows: test_windows_fixes)
+    monkeypatch.setattr(health.plat, "IS_WIN", False)
     import subprocess
     results = {"rosie-sync.service": "exit-code", "rosie-backup.service": "exit-code"}
 
@@ -163,10 +163,10 @@ def test_power_status_reaches_the_users_units(monkeypatch, tmp_path):
 
 
 def test_settings_voice_status_works_without_systemctl(monkeypatch):
-    """Windows has no systemctl: Settings' dictation status said HTTP 500 on the partner's PC (2026-10-23)."""
+    # board #865 quirk-windows-no-systemctl
     import hub
     import pc_tools
-    monkeypatch.setattr(pc_tools, "gui_env", lambda: {})         # what it gives on Windows (no user bus to ask)
+    monkeypatch.setattr(pc_tools, "gui_env", lambda: {})
 
     def no_systemctl(*a, **k):
         raise FileNotFoundError("systemctl")
@@ -179,7 +179,7 @@ def test_windows_updates_row_follows_the_launchers_state(monkeypatch, tmp_path):
     state = tmp_path / "state.json"
     monkeypatch.setattr(health.plat, "IS_WIN", True)
     monkeypatch.setattr(health, "LAUNCHER_STATE", state)
-    assert health.check_repo()["level"] == "off"                      # no state file: an install that is not from the launcher
+    assert health.check_repo()["level"] == "off"  # board #865 why-no-state-file-off
     def put(age_days, result, head="abcdef1234"):
         state.write_text(json.dumps({"active": "A", "heads": {"A": head}, "last_check": time.time() - age_days * 86400, "last_result": result}))
         return health.check_repo()

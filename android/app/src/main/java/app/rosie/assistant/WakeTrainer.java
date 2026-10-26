@@ -16,8 +16,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
 
-/** "Train my voice": you say "Hey Rosie" six times. It learns how the recogniser hears YOUR voice (accent, speed) and how loudly you speak,
- *  and then only wakes for phrases that match. Everything stays on the phone. */
+// board #694 safety-voice-training-local
 public class WakeTrainer {
     static volatile boolean running = false;
     static final int ROUNDS = 6;
@@ -56,7 +55,7 @@ public class WakeTrainer {
                     push(act, web, new JSONObject().put("step", i).put("of", ROUNDS).put("state", "heard").put("text", text.isEmpty() ? "(nothing heard)" : text).put("good", good));
                     Thread.sleep(700);
                 }
-                // learn: any short phrase heard at least twice becomes a way your voice says it; the loudness gate follows your quietest good attempt
+                // board #694 why-learn-phrase-twice
                 StringBuilder learned = new StringBuilder();
                 for (Map.Entry<String, Integer> e : heard.entrySet()) if (e.getValue() >= 2 && e.getKey().contains("r")) learned.append(e.getKey()).append("|");
                 double minPeak = 1; for (double p : peaks) minPeak = Math.min(minPeak, p);
@@ -82,10 +81,9 @@ public class WakeTrainer {
         act.runOnUiThread(() -> web.evaluateJavascript(js, null));
     }
 
-    /** Records one attempt: waits up to 6 s for you to speak, ends 0.9 s after you stop. Returns null if nothing was said. */
     static short[] capture(Context ctx, double[] peakOut) {
         int rate = 16000, frame = 1600;
-        MicRoute.acquire(ctx, true);                     // train on the same microphone you will really use (headset if you are wearing one)
+        MicRoute.acquire(ctx, true);  // board #694 why-train-on-real-mic
         AudioRecord mic = MicRoute.record(ctx, rate);
         if (mic.getState() != AudioRecord.STATE_INITIALIZED) { mic.release(); MicRoute.release(ctx); return null; }
         ArrayList<short[]> frames = new ArrayList<>();

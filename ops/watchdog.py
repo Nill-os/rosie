@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Runs every minute from a systemd timer, OUTSIDE both code slots. After a switch it watches the new version for 30 minutes; if it stops answering, it switches back by itself."""
+# board #817 why-watch-rolls-back
 import json
 import os
 import shutil
@@ -11,12 +11,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import slots  # noqa: E402
 
-os.environ.setdefault("ROSIE_AGENT", "watchdog")                  # its name on the agent board (a rollback post)
+os.environ.setdefault("ROSIE_AGENT", "watchdog")
 
 
 def publish_if_due(st: dict):
-    """A version that passed its watch goes to the public repo, for the Windows copies' updates (owner 2026-10-23). Only where
-    ~/rosie-ops/publish.conf exists; at most one try per version every 6 hours (ops/publish_public.py does the work)."""
+    # board #817 owner-publish-after-watch
     if not (slots.OPS / "publish.conf").exists() or not st.get("probation_until"):
         return
     try:
@@ -34,7 +33,7 @@ def publish_if_due(st: dict):
     script = live / "ops" / "publish_public.py"
     if script.exists():
         cmd = [str(live / ".venv" / "bin" / "python"), str(script)]
-        if shutil.which("systemd-run"):     # its own unit: systemd ends this oneshot's whole cgroup when it returns (it killed the publish)
+        if shutil.which("systemd-run"):  # board #817 fix-publish-own-unit
             cmd = ["systemd-run", "--user", "--collect", "--quiet", "--unit", f"rosie-publish-{int(time.time())}", f"--working-directory={live}", *cmd]
         subprocess.Popen(cmd, cwd=live, stdin=subprocess.DEVNULL, stdout=open(slots.OPS / "publish.log", "a"), stderr=subprocess.STDOUT,
                          start_new_session=True)
@@ -42,7 +41,7 @@ def publish_if_due(st: dict):
 
 def main():
     st = slots.load_state()
-    if (slots.OPS / "stopped").exists():                 # the owner stopped everything on purpose (power.sh stop): not a crash
+    if (slots.OPS / "stopped").exists():  # board #817 why-stopped-not-crash
         slots.save_state(wd_fails=0)
         return
     if time.time() >= st.get("probation_until", 0):
@@ -64,7 +63,7 @@ def main():
     if fails >= 3:
         res = slots.rollback(f"the new version stopped answering ({fails} checks in a row)")
         try:
-            if res.get("ok"):                                       # only say it went back when it did
+            if res.get("ok"):
                 subprocess.run(["notify-send", "-a", "Rosie", "Rosie went back to the previous version", "The new version stopped answering, so I switched back automatically."], timeout=5)
         except Exception:
             pass

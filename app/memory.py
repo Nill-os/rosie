@@ -1,4 +1,3 @@
-"""Long-term memory: facts about the user, ideas, projects, food notes. SQLite, local."""
 import datetime as dt
 import sqlite3
 from pathlib import Path
@@ -22,10 +21,10 @@ def remember(content: str, kind: str = "note", title: str = ""):
         cur = c.execute("INSERT INTO notes(kind,title,content,created) VALUES(?,?,?,?)",
                         (kind, title.strip(), content.strip(), dt.datetime.now().isoformat(timespec="minutes")))
         nid = cur.lastrowid
-    try:                                                     # her mind gets it too, as it is (no model call)
+    try:
         import mind
         mind.remember_now(f"{title.strip()}: {content.strip()}" if title.strip() else content.strip(), source=f"remember:{nid}")
-    except Exception:                                         # her model or embedder is down: she reads it later (forget_note knows this ref)
+    except Exception:  # board #745 why-note-kept-if-model-down
         try:
             mind.queue(f"The owner asked Rosie to remember ({kind}): {title.strip()} {content.strip()}", "remember", f"backfill:note:{nid}")
         except Exception:
@@ -47,7 +46,7 @@ def forget(note_id: int):
     with _db() as c:
         r = c.execute("SELECT title, content FROM notes WHERE id=?", (note_id,)).fetchone()
         c.execute("DELETE FROM notes WHERE id=?", (note_id,))
-    try:                                                     # her mind's copy of it goes too (audit 2026-10-20)
+    try:  # board #745 safety-audit-mind-copy-removed
         import mind
         if r:
             mind.forget_note(note_id, f"{r['title'].strip()}: {r['content'].strip()}" if (r["title"] or "").strip() else (r["content"] or "").strip())
@@ -57,7 +56,6 @@ def forget(note_id: int):
 
 
 def core_block(limit=1600):
-    """Always-in-context facts: who the user is and their food rules."""
     with _db() as c:
         rows = c.execute("SELECT kind,content FROM notes WHERE kind IN ('profile','food') ORDER BY id").fetchall()
     out, n = [], 0

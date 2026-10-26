@@ -1,6 +1,4 @@
-"""Morning Paper page in node + jsdom (tests/js/paper_ui.js) at a desktop width and at 360 px: the controls around the paper, the frame
-(the server-drawn paper, sandboxed, no scripts), the look switch, Print, "Add to my paper" and the settings. The answers come from a
-sandboxed app with a paper built from fake sources. ROSIE_JSDOM may point at jsdom's folder."""
+# board #875 safety-paper-frame-sandboxed
 import datetime as dt
 import hashlib
 import hmac
@@ -34,7 +32,7 @@ def ui(isolated, monkeypatch):
     c = TestClient(server.app)
     c.cookies.set("assistant_session", hmac.new(b"testkey-0123456789abcdef0123456789abcdef", b"assistant-ok", hashlib.sha256).hexdigest())
     now = dt.datetime.now(gcal.TZ).replace(hour=7, minute=0, second=0, microsecond=0)
-    monkeypatch.setattr(paper, "_now", lambda: now)                          # the API's "today" is the built paper's day, even past midnight
+    monkeypatch.setattr(paper, "_now", lambda: now)  # board #875 why-api-today-past-midnight
     kw = paper_fake.install(monkeypatch.setattr, now)
     answers = {"_empty": c.get("/api/paper").json()}
     paper.build(now.date(), now=now, model=paper_fake.FakeModel(), make_pdf=False, **kw)
@@ -62,7 +60,7 @@ def test_the_paper_page_renders_at_desktop_and_phone_width(ui):
     for name in ("desktop", "phone"):
         v = ui[name]
         assert v["errors"] == [], (name, v["errors"])
-        assert v["title"] == "Morning Paper" and "☀Morning" in v["nav"]      # Morning Paper is a tab of the Morning entry
+        assert v["title"] == "Morning Paper" and "☀Morning" in v["nav"]
         assert v["frame"]["src"] == f"/api/paper/view?day={ui['day']}&look=cyberdeck"
         assert "allow-scripts" not in v["frame"]["sandbox"] and "allow-same-origin" in v["frame"]["sandbox"]
         assert {"Print", "Email it to me", "Add to my paper", "Cyberdeck", "Newsprint", "Plain", "4 pages", "2 pages", "> THE ROSIE TIMES", "Blackletter"} <= set(v["buttons"])
