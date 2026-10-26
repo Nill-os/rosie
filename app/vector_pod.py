@@ -736,6 +736,11 @@ _voice_lock = threading.Lock()
 _talk_gen = 0
 
 
+def _end_followup():
+    global _followup_until
+    _followup_until = 0.0
+
+
 def interrupt_talk():
     global _talk_gen
     _talk_gen += 1
@@ -986,9 +991,12 @@ class Chipper(cgrpc.ChipperGrpcServicer):
         _guard(context, _esn(first.device_id))
         _loud()
         interrupt_talk()
+        followup = time.time() < _followup_until
         text = _hear(first, request_iterator, t0)
         was_sitting = sitting()
         out = route(text, t0)
+        if followup:
+            _end_followup()
         _result(text, out)
         if out[0] == "talk":
             out = _start_talk(text, t0)
@@ -1002,8 +1010,11 @@ class Chipper(cgrpc.ChipperGrpcServicer):
         first = next(request_iterator)
         _guard(context, _esn(first.device_id))
         _loud()
+        followup = time.time() < _followup_until
         text = _hear(first, request_iterator, t0)
         out = route(text, t0)
+        if followup:
+            _end_followup()
         _quiet_after(out)
         if out[0] == "say":
             _later(_say, out[1])

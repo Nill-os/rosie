@@ -756,6 +756,27 @@ def test_a_follow_up_waits_longer_for_you_to_start_talking(pod, monkeypatch):
     vector_pod._followup_until = 0.0
 
 
+def test_a_follow_up_window_is_used_once(pod, monkeypatch):
+    _opus_or_skip()
+    import numpy as np
+    seen = []
+    real = vector_pod.vector_audio.Endpointer
+
+    def spy(**kw):
+        seen.append(kw.get("no_speech_ms"))
+        return real(**kw)
+    monkeypatch.setattr(vector_pod.vector_audio, "Endpointer", spy)
+    monkeypatch.setattr(vector_pod, "tts", lambda text: (np.zeros(160, dtype=np.float32), 16000))
+    monkeypatch.setattr(vector_pod, "_followup_until", time.time() + 10)
+    pod.heard["text"] = "Why is that funny?"
+    _ask(pod.ch)
+    assert vector_pod._followup_until == 0.0
+    pod.heard["text"] = "What do you see?"
+    _ask(pod.ch)
+    assert seen[0] == vector_pod.FOLLOWUP_WAIT_MS and seen[1] != vector_pod.FOLLOWUP_WAIT_MS
+    vector_pod._followup_until = 0.0
+
+
 def test_backpack_patterns_become_cyan_and_purple_keeping_brightness_and_timing():
     streaming = {"onColors": [[0, 0.5, 0.5, 1], [0, 1, 1, 1], [0, 0.5, 0.5, 1]], "offColors": [[0, 0, 0, 1]] * 3,
                  "onPeriod_ms": [600, 600, 600], "offset": [0, 200, 400]}
