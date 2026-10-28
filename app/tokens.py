@@ -240,7 +240,7 @@ def _total(rows: list) -> dict:
             t[k] += r[k]
         for f in FAMILIES:
             t["fam"][f] += r["fam"][f]
-    t["main_share"] = round(100 * t["fam"]["opus"] / t["out"]) if t["out"] else 0
+    t["main_share"] = round(100 * t["main"] / t["out"]) if t["out"] else 0
     inp = t["in"] + t["cache_read"] + t["cache_write"]
     t["cache_ratio"] = round(100 * t["cache_read"] / inp) if inp else 0
     return t

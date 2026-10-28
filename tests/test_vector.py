@@ -570,6 +570,35 @@ def test_quiet_when_idle_gives_him_his_voice_for_the_answer_then_mutes_him(pod, 
     assert _wait(lambda: calls == ["MEDIUM_HIGH", "MUTE"]), calls
 
 
+def test_a_failed_volume_or_control_call_still_lets_him_mute_after(monkeypatch):
+    bot = vector_pod.vector_bot.Robot.__new__(vector_pod.vector_bot.Robot)
+    bot._quiet, bot._hold, bot._lock, bot._vlock, bot._talking = None, None, threading.Lock(), threading.Lock(), 0
+    bot.talk_volume = "MEDIUM_HIGH"
+    calls = []
+
+    def asleep(level):
+        calls.append(level)
+        if level != "MUTE":
+            raise TimeoutError("asleep")
+    bot.set_volume = asleep
+    real_timer = threading.Timer
+    monkeypatch.setattr(vector_pod.vector_bot.threading, "Timer", lambda secs, fn: real_timer(0.05, fn))
+    assert bot._speaking(lambda: "said", ctl=None) == "said"
+    assert bot._talking == 0
+    assert _wait(lambda: calls == ["MEDIUM_HIGH", "MUTE"]), calls
+
+    def no_control():
+        raise TimeoutError("Vector did not hand over control")
+    bot.borrow = no_control
+    calls.clear()
+    try:
+        bot._speaking(lambda: "said")
+    except TimeoutError:
+        pass
+    assert bot._talking == 0
+    assert _wait(lambda: calls == ["MEDIUM_HIGH", "MUTE"]), calls
+
+
 def test_a_review_of_a_cut_off_change_never_passes(monkeypatch):
     import claude_plan
     import selfdev

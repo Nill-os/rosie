@@ -134,9 +134,13 @@ class Robot:
     def _speaking(self, fn, ctl="borrow"):
         with self._vlock:
             self._talking += 1
-        self.loud()
-        own = self.borrow() if ctl == "borrow" else ctl
+        own = None
         try:
+            try:
+                self.loud()
+            except Exception:
+                pass
+            own = self.borrow() if ctl == "borrow" else ctl
             return fn()
         finally:
             if own is not None:
@@ -243,8 +247,8 @@ class Robot:
         req = messages_pb2.PlayAnimationTriggerRequest(animation_trigger=messages_pb2.AnimationTrigger(name=trigger), loops=1)
         return self._speaking(lambda: self.stub.PlayAnimationTrigger(req, timeout=30), ctl)
 
-    def states(self):
-        return self.stub.EventStream(shared_pb2.EventRequest(white_list=shared_pb2.FilterList(list=["robot_state"])))
+    def states(self, timeout=None):
+        return self.stub.EventStream(shared_pb2.EventRequest(white_list=shared_pb2.FilterList(list=["robot_state"])), timeout=timeout)
 
     def turn(self, degrees: float, speed_dps: float = 90.0):
         import math
@@ -267,16 +271,16 @@ class Robot:
         self.stub.SetHeadAngle(messages_pb2.SetHeadAngleRequest(angle_rad=math.radians(degrees), max_speed_rad_per_sec=3.0,
                                                                 accel_rad_per_sec2=10.0, num_retries=1, id_tag=next(_tags)), timeout=8)
 
-    def asleep(self) -> bool:
+    def asleep(self):
         try:
-            call = self.states()
+            call = self.states(timeout=3)
             for ev in call:
                 if ev.event.WhichOneof("event_type") == "robot_state":
                     call.cancel()
                     return bool(ev.event.robot_state.status & CALM_POWER_MODE)
         except Exception:
             pass
-        return False
+        return None
 
     def picture(self, high_res=False) -> bytes:
         # board #790 safety-no-camera-while-asleep

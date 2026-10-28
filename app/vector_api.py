@@ -47,13 +47,16 @@ def vector_status():
 @router.post("/api/vector/settings")
 def vector_settings(body: dict):
     cfg = config.load()
-    if "personality" in body:
+    if isinstance(body.get("personality"), str):
         cfg["vector_personality"] = str(body["personality"])[:2000]
-    if "host" in body:
+    if isinstance(body.get("host"), str):
         cfg["vector_host"] = str(body["host"]).strip()[:100]
     if "commands" in body:
         cmds = []
-        for c in body["commands"] or []:
+        raw = body["commands"] if isinstance(body["commands"], list) else []
+        for c in raw:
+            if not isinstance(c, dict) or not isinstance(c.get("phrases", []), list):
+                continue
             phrases = [str(p).strip() for p in c.get("phrases", []) if str(p).strip()][:20]
             if phrases and c.get("action") in ("hold", "release", "say"):
                 cmds.append({"phrases": phrases, "action": c["action"], "text": str(c.get("text", ""))[:500], "reply": str(c.get("reply", ""))[:300]})
@@ -64,11 +67,11 @@ def vector_settings(body: dict):
         cfg["vector_eyes"] = body["eyes"]
     if "followup" in body:
         cfg["vector_followup"] = bool(body["followup"])
-    if body.get("life") in vector_life.LEVELS:
+    if isinstance(body.get("life"), str) and body["life"] in vector_life.LEVELS:
         cfg["vector_life"] = body["life"]
     if "pad" in body:
         cfg["vector_pad"] = bool(body["pad"])
-    if body.get("pad_speed") in vector_pad.SPEEDS:
+    if isinstance(body.get("pad_speed"), str) and body["pad_speed"] in vector_pad.SPEEDS:
         cfg["vector_pad_speed"] = body["pad_speed"]
     if body.get("stt_model") in ("base.en", "small.en"):
         cfg["vector_stt_model"] = body["stt_model"]
@@ -82,7 +85,7 @@ def vector_settings(body: dict):
         except (TypeError, ValueError):
             pass
     if "face_panels" in body:
-        cfg["vector_face_panels"] = [p for p in body["face_panels"] or [] if p in vector_face.PANELS]
+        cfg["vector_face_panels"] = [p for p in (body["face_panels"] if isinstance(body["face_panels"], list) else []) if isinstance(p, str) and p in vector_face.PANELS]
     if "on" in body:
         cfg["vector_on"] = bool(body["on"])
     config.save(cfg)

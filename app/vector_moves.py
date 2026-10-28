@@ -38,7 +38,10 @@ def perform(bot, moves: list[str], sitting: bool = False):
             if name in allowed(sitting):
                 _MOVE[name](bot)
     except Exception:
-        pass  # board #797 why-words-play-anyway
+        try:
+            bot.stop_motors()
+        except Exception:
+            pass  # board #797 why-words-play-anyway
     finally:
         _busy.release()
 

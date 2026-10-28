@@ -58,6 +58,7 @@ class EyeSweep:
         self.step_s, self.idle_step_s, self.period_s = step_s, idle_step_s, period_s
         self._idle_i = 0
         self._stop = threading.Event()
+        self._asleep_at, self._asleep_val = -1e9, False
 
     def start(self):
         threading.Thread(target=self._run, daemon=True, name="vector-eyes").start()
@@ -66,12 +67,18 @@ class EyeSweep:
     def stop(self):
         self._stop.set()
 
+    def _asleep(self, now):
+        if now - self._asleep_at >= 15.0:
+            self._asleep_at = now
+            self._asleep_val = getattr(self.bot, "asleep", lambda: None)() is True
+        return self._asleep_val
+
     def _run(self):
         t0, last_saved = time.time(), 0.0
         while not self._stop.is_set():
             now = time.time()
             try:
-                if self.covered() or self.hot():
+                if self.covered() or self.hot() or self._asleep(now):
                     wait = min(self.idle_step_s, 5.0)
                 elif getattr(self.bot, "has_control", lambda: False)():
                     self.bot.eye_color(round(gradient_hue(now - t0, self.period_s), 4), 1.0)

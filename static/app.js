@@ -1992,7 +1992,7 @@ const tkFmt = (n) => n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e4 ? Math.rou
 VIEWS.tokens = async () => {
   setHeader('Tokens', []);
   const here = () => /^#\/tokens\/?$/.test(location.hash);
-  const FAM = [['opus', 'Opus (main)', 'var(--pur)'], ['sonnet', 'Sonnet', 'var(--acc)'], ['haiku', 'Haiku', 'var(--ok)'], ['other', 'Other', 'var(--mute)']];
+  const FAM = [['opus', 'Opus', 'var(--pur)'], ['sonnet', 'Sonnet', 'var(--acc)'], ['haiku', 'Haiku', 'var(--ok)'], ['other', 'Other', 'var(--mute)']];
   const draw = async () => {
     clearTimeout(tokensPollT);
     if (!here()) return;

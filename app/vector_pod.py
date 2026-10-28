@@ -593,7 +593,7 @@ def _do_command(cmd: dict, seq: int | None = None, voiced: bool = False):
 def _ask_brain(text: str) -> str:
     if brain is None:
         return "Rosie isn't connected to me yet."
-    return _speakable(brain(text) or "") or "Hmm. I don't have an answer for that."
+    return _speakable(vector_moves.split(brain(text) or "")[0]) or "Hmm. I don't have an answer for that."
 
 
 SEE_PROMPT = ("You are looking through the camera of Vector, the small desk robot you speak through. Answer the question about the "
@@ -709,6 +709,7 @@ def answer(text: str, t0: float, think_fn=None) -> str:
     box: dict = {}
     lock = threading.Lock()
     done = threading.Event()
+    gen = _talk_gen
 
     def think():
         try:
@@ -719,7 +720,7 @@ def answer(text: str, t0: float, think_fn=None) -> str:
             box["reply"] = reply
             late = box.get("late")
         done.set()
-        if late:
+        if late and gen == _talk_gen:
             speak(reply)
     threading.Thread(target=think, daemon=True, name="vector-brain").start()
     done.wait(max(0.0, VOICE_BUDGET_S - (time.time() - t0)))
@@ -742,8 +743,9 @@ def _end_followup():
 
 
 def interrupt_talk():
-    global _talk_gen
+    global _talk_gen, _speaking_until
     _talk_gen += 1
+    _speaking_until = time.time() + 2.0
 _followup_until = 0.0
 ONE_MOMENT_S = 3.0
 FILLERS = ("Hmm.", "One sec.", "Let me think.", "Ooh, good one.", "Hang on.")
@@ -867,7 +869,8 @@ def _converse(text: str, bot, ctl, look: bool = False):
         if ctl not in (None, "none"):
             ctl.stop()
         global _speaking_until
-        _speaking_until = time.time() + 2.0
+        if gen == _talk_gen:
+            _speaking_until = time.time() + 2.0
     if gen != _talk_gen:
         return
     if sitting():
@@ -1327,13 +1330,21 @@ def _start_life():
 
 
 def _to_bed():
+    end = time.time() + 4.0
+    while _speaking_until > time.time() and not _listening.is_set() and time.time() < end:
+        time.sleep(0.2)
     bot = robot()
-    if bot is not None and not sitting() and not vector_pad.status.get("driving"):
+    if getattr(_alive, "picked_at", 0):
+        return
+    if bot is not None and not sitting() and _life_can_talk() and bot.asleep() is False:
         bot.drive_on_charger()
 
 
 def _life_can_talk() -> bool:
-    return rosie_voice() and not busy() and not vector_pad.status.get("driving") and not _menu.open and robot() is not None
+    if not rosie_voice() or busy() or vector_pad.status.get("driving") or _menu.open:
+        return False
+    bot = robot()
+    return bot is not None and bot.asleep() is not True
 
 
 def _start() -> bool:
@@ -1344,6 +1355,9 @@ def _start() -> bool:
     addr = host()
     ep = bool(cfg.get("vector_escapepod"))
     if ep:
+        if addr.startswith("127.") and not cfg.get("vector_host"):
+            status.update(running=False, error="This PC has no network address yet, so the escape pod server can't start. Connect to your network and try again.")
+            raise OSError(status["error"])
         if not port_open_to_users(EP_PORT):
             status.update(running=False, error=f"Port 443 needs a one-time change on this PC. In a terminal, run: {PORT_RULE}")
             raise PermissionError(status["error"])
@@ -1464,6 +1478,8 @@ def connect(ip: str) -> str:
 
 def setup_robot(ip: str, esn: str = "") -> str:
     addr = host()
+    if not addr or addr.startswith("127."):
+        raise RuntimeError("this PC has no network address to give him; connect to your network and try again")
     cert = ensure_cert(addr)
     DIR.mkdir(parents=True, exist_ok=True)
     (DIR / "server_config.json").write_text(json.dumps(server_config(addr)))

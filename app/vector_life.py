@@ -84,6 +84,7 @@ class Life:
         self.events, self.to_bed = events, to_bed
         self.announced: set = set()
         self.bedtime_on = ""
+        self.bedtime_try = 0.0
         self.on_charger = True
         self.mood = mood or Mood()
         self.state_path = state_path
@@ -170,9 +171,11 @@ class Life:
             hour = time.localtime(now).tm_hour
             today = time.strftime("%Y-%m-%d", time.localtime(now))
             if (hour in BEDTIME_HOURS and not self.on_charger and not picked and self.bedtime_on != today
-                    and now - self.last_interaction > 600):
+                    and now - self.last_interaction > 600 and now - self.bedtime_try > 60):
+                self.bedtime_try = now
                 self.bedtime_on = today
-                self.react("bedtime", now, after=self.to_bed)
+                if not self.react("bedtime", now, after=self.to_bed):
+                    self.bedtime_on = ""
             if picked and not self.picked_at:
                 self.picked_at = now
                 self.react("picked_up", now, delay=REACT_AFTER_S, still=lambda: self.picked_at != 0)
@@ -258,15 +261,20 @@ class Life:
         self.last_kind[kind] = now
         self.mood.nudge({"greet": "greeted"}.get(kind, kind), now)
 
+        def bail():
+            if kind == "bedtime":
+                self.bedtime_on = ""
+                self.last_kind.pop(kind, None)
+
         def go():
             if delay:
                 time.sleep(delay)
             if not still() or not self.can_talk():
-                return
+                return bail()
             recent = [s for _, s in self.spoken[-8:]]
             words = self.line(WHAT[kind].format_map(_Blank(info)), self.mood.describe(), recent, info)
-            if not words:
-                return
+            if not words or not self.can_talk():
+                return bail()
             self.spoken.append((time.time(), words))
             self.last = {"at": time.strftime("%H:%M:%S"), "kind": kind, "said": words}
             self._save()

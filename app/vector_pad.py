@@ -197,6 +197,7 @@ class Driver:
 
     def __init__(self, pad: Pad):
         self.pad = pad
+        self._send_lock = threading.Lock()
         self.driving = False
         self.sent = (0.0, 0.0, 0.0, 0.0)
         self.want = (0.0, 0.0, 0.0, 0.0)
@@ -262,7 +263,10 @@ class Driver:
             t = targets(self.pad, TOP_SPEED * SPEEDS.get(self.cfg().get("vector_pad_speed") or "normal", 0.7))
             if any(t):
                 self.last_input = now
-            if not self.driving and abs(t[0]) + abs(t[1]) > TOP_SPEED * 0.5 and not vector_pod.sitting():
+            lifted = bool(getattr(vector_pod._alive, "picked_at", 0))
+            if lifted and self.driving:
+                self.set_driving(False)
+            if not self.driving and not lifted and abs(t[0]) + abs(t[1]) > TOP_SPEED * 0.5 and not vector_pod.sitting():
                 self.set_driving(True)
             if self.driving:
                 bot = vector_pod._robot_obj
@@ -279,20 +283,21 @@ class Driver:
         self.want = t
 
     def send(self):
-        t = self.want
-        if t == self.sent:
-            return
-        bot = self._bot()
-        try:
-            if t[:2] != self.sent[:2]:
-                bot.drive(t[0], t[1], DRIVE_ACCEL if any(t[:2]) else 0.0)
-            if t[2] != self.sent[2]:
-                bot.move_head(t[2])
-            if t[3] != self.sent[3]:
-                bot.move_lift(t[3])
-            self.sent = t
-        except Exception as e:
-            status["error"] = f"Drive: {type(e).__name__}"
+        with self._send_lock:
+            t = self.want
+            if not self.driving or t == self.sent:
+                return
+            bot = self._bot()
+            try:
+                if t[:2] != self.sent[:2]:
+                    bot.drive(t[0], t[1], DRIVE_ACCEL if any(t[:2]) else 0.0)
+                if t[2] != self.sent[2]:
+                    bot.move_head(t[2])
+                if t[3] != self.sent[3]:
+                    bot.move_lift(t[3])
+                self.sent = t
+            except Exception as e:
+                status["error"] = f"Drive: {type(e).__name__}"
 
     def set_driving(self, on: bool, release: bool = True):
         import vector_pod
@@ -311,13 +316,14 @@ class Driver:
             status.update(driving=True, error="")
             vector_pod._later(vector_pod.speak, "Driving mode.", bot, None)
             return
-        self.driving = False
-        status["driving"] = False
-        try:
-            bot.stop_motors()
-        except Exception:
-            pass
-        self.sent = self.want = (0.0, 0.0, 0.0, 0.0)
+        with self._send_lock:
+            self.driving = False
+            status["driving"] = False
+            try:
+                bot.stop_motors()
+            except Exception:
+                pass
+            self.sent = self.want = (0.0, 0.0, 0.0, 0.0)
         if release and bot.held and vector_pod._face is None:
             bot.release()
         elif bot.held and getattr(bot, "_priority", vector_bot.SIT_PRIORITY) != vector_bot.SIT_PRIORITY:
@@ -341,6 +347,8 @@ class Driver:
             vector_pod._later(vector_pod._menu.press if code == BTN_SOUTH else vector_pod._menu.close)
             return
         if code == BTN_MODE:
+            if not self.driving and getattr(vector_pod._alive, "picked_at", 0):
+                return
             self.set_driving(not self.driving)
         elif code == BTN_EAST:
             if vector_pod._face is not None:
