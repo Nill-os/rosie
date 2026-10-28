@@ -174,7 +174,7 @@ def test_the_job_refreshes_hourly_and_puts_one_inbox_item_a_day(home):
     write(home / "projects/-proj-a/s1.jsonl", line("r1", out=900_000))
     got = []
     add = lambda *a, **k: got.append((a, k))
-    now = dt.datetime.now().replace(microsecond=0)
+    now = dt.datetime.now().replace(hour=9, minute=0, second=0, microsecond=0)
     tokens.job(now, {}, add=add, background=False)
     assert len(got) == 1 and got[0][1]["key"] == f"tokens:{now:%Y-%m-%d}" and got[0][0][3] == "#/tokens" and got[0][1]["desktop"] is False
     tokens.job(now + dt.timedelta(minutes=30), {}, add=add, background=False)
