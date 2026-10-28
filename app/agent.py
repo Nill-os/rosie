@@ -1,6 +1,8 @@
 import datetime as dt
 import json
 import re
+import threading
+import time
 
 from pathlib import Path
 
@@ -16,6 +18,10 @@ import gcal
 import config
 import inbox
 import fastpath
+import loopguard
+import complexity
+import compress
+import traces
 import screenagent
 import mailclean
 import phone
@@ -822,10 +828,60 @@ WEATHER_READING = re.compile(r"\d+\s?°\s?[FC]")
 READ_TOOLS = {"get_schedule", "search_events", "find_free_time", "list_tasks", "what_now", "overdue_tasks", "find_task", "start_my_day"}
 
 
-TURN_OUTSIDE: dict = {}
+def finalize_reply(text: str, pending: list, bad: list, used, stalled: int, announces: bool, first_text: str, cut: dict | None) -> str:
+    if bad:
+        done = ", ".join(sorted(t for t in used if t in WRITE_TOOLS)) or "nothing"
+        text = f"I told you I did something I did not actually do, so it did NOT happen. What I really did this time: {done}. Tell me again and I will do it properly."
+    if stalled >= 2 and not pending and (not text.strip() or announces):
+        text = (text.strip() + "\n\n" if text.strip() else "") + "I did not get that done, so nothing was changed. Say it again, shorter, and I will do it."
+    if STUB.search(text) and first_text and not pending:
+        text = first_text
+    if pending:
+        text = "Ready: " + "; ".join(p["summary"].rstrip(".") for p in pending) + "."
+    if cut and not re.search(r"\b%d\b" % cut["total_results"], text):
+        text += "\n\n(Only %d of %d items fit, so this list is incomplete. Ask me to narrow it down.)" % (cut["results_shown"], cut["total_results"])
+    return text if pending else deoffer(text)
 
 
-def chat(history: list[dict], user_text: str, mode: str = "auto", voice: bool = False, max_steps=10, space: str | None = None, untrusted: bool = False, chat_id=None, _local=False,
+class TurnFlags(dict):
+    CAP = 500
+
+    def __init__(self, *a, **k):
+        super().__init__(*a, **k)
+        self._lock = threading.Lock()
+
+    def __getitem__(self, key):
+        with self._lock:
+            return super().__getitem__(key)
+
+    def __setitem__(self, key, value):
+        with self._lock:
+            super().pop(key, None)
+            super().__setitem__(key, value)
+            while len(self) > self.CAP:
+                super().__delitem__(next(iter(self)))
+
+    def __contains__(self, key):
+        with self._lock:
+            return super().__contains__(key)
+
+    def get(self, key, default=None):
+        with self._lock:
+            return super().get(key, default)
+
+    def pop(self, key, *default):
+        with self._lock:
+            return super().pop(key, *default)
+
+    def clear(self):
+        with self._lock:
+            super().clear()
+
+
+TURN_OUTSIDE = TurnFlags()
+
+
+def _chat(history: list[dict], user_text: str, mode: str = "auto", voice: bool = False, max_steps=10, space: str | None = None, untrusted: bool = False, chat_id=None, _local=False,
          _reading=None):
     phone.user_text = user_text
     fp = fastpath.try_fast(user_text)
@@ -834,6 +890,9 @@ def chat(history: list[dict], user_text: str, mode: str = "auto", voice: bool = 
     if ctxsize.running():
         reply = "I'm tuning my context window right now (2 to 5 minutes). Ask me again in a moment."
         return reply, [], history + [{"role": "user", "content": user_text}, {"role": "assistant", "content": reply}]
+    cx = complexity.score(user_text, history, voice)
+    history = compress.compress(history)
+    max_steps = cx["max_steps"] if max_steps == 10 else max_steps
     reading = _reading if _reading is not None else ("" if CHITCHAT.match(user_text.strip()) else corner_graph.recall(user_text))
     untrusted = untrusted or bool(reading)
     remembered = "" if CHITCHAT.match(user_text.strip()) else mind.auto_context(user_text)
@@ -852,7 +911,7 @@ def chat(history: list[dict], user_text: str, mode: str = "auto", voice: bool = 
         try:
             return a0.chat(history, user_text, voice, chat_id=chat_id, space=space, untrusted=untrusted, reading=remembered + reading)
         except a0.Unavailable as e:
-            reply, pending, new = chat(history, user_text, mode, voice, max_steps, space, untrusted, chat_id, _local=True, _reading=reading)
+            reply, pending, new = _chat(history, user_text, mode, voice, max_steps, space, untrusted, chat_id, _local=True, _reading=reading)
             note = "" if voice else f"(Agent Zero isn't answering, so my own model answered: {str(e)[:80]}) "
             return note + reply, pending, new
     skill = pick_skill(user_text, history) or SPACE_SKILL.get(space or "", "")
@@ -866,6 +925,7 @@ def chat(history: list[dict], user_text: str, mode: str = "auto", voice: bool = 
     active = select_groups(user_text, history, skill, space) | ({"corner"} if reading else set()) | ({"board"} if HEADER_RE.search(reading) else set())
     pending, used, retried, refused = [], set(), False, False
     tried, failed, err_nudged, stalled = set(), {}, False, 0
+    lg = loopguard.LoopGuard()
     forced_question = ""
     claim_nudged = read_nudged = weather_nudged = False
     first_text = ""
@@ -887,7 +947,7 @@ def chat(history: list[dict], user_text: str, mode: str = "auto", voice: bool = 
         try:
             r = httpx.post(OLLAMA, timeout=300, json={
                 "model": MODEL, "messages": clean(msgs), "tools": _schema(active), "stream": False, "think": False,
-                "keep_alive": "30m", "options": {**ctxsize.options(MODEL), "temperature": 0.2, "num_predict": 350 if voice else 2000}}).json()
+                "keep_alive": "30m", "options": {**ctxsize.options(MODEL), "temperature": 0.2, "num_predict": cx["num_predict"]}}).json()
         except httpx.HTTPError as e:
             return f"My language model is not answering right now ({type(e).__name__}). It usually comes back within a minute: please try again.", pending, saved()
         m = r.get("message")
@@ -939,17 +999,7 @@ def chat(history: list[dict], user_text: str, mode: str = "auto", voice: bool = 
                     claim_nudged = True
                     nudge(f"You said: \"{bad[0][:160]}\" but no tool did that. Do it now with the right tool (add_event, move_event, shift_day, add_task, set_reminder, phone_keep_note...), or say plainly that it did NOT happen. Never claim a change you did not make.")
                     continue
-                done = ", ".join(sorted(t for t in used if t in WRITE_TOOLS)) or "nothing"
-                text = f"I told you I did something I did not actually do, so it did NOT happen. What I really did this time: {done}. Tell me again and I will do it properly."
-            if stalled >= 2 and not pending and (not text.strip() or announces):
-                text = (text.strip() + "\n\n" if text.strip() else "") + "I did not get that done, so nothing was changed. Say it again, shorter, and I will do it."
-            if STUB.search(text) and first_text and not pending:
-                text = first_text
-            if pending:
-                text = "Ready: " + "; ".join(p["summary"].rstrip(".") for p in pending) + "."
-            if cut and not re.search(r"\b%d\b" % cut["total_results"], text):
-                text += "\n\n(Only %d of %d items fit, so this list is incomplete. Ask me to narrow it down.)" % (cut["results_shown"], cut["total_results"])
-            final = text if pending else deoffer(text)
+            final = finalize_reply(text, pending, bad, used, stalled, bool(announces), first_text, cut)
             if msgs[-1].get("role") == "assistant":
                 msgs[-1]["content"] = final
             return final, pending, saved()
@@ -966,6 +1016,9 @@ def chat(history: list[dict], user_text: str, mode: str = "auto", voice: bool = 
             if not blocked and name in TOOLS:
                 args = fix_duration(name, fix_dates(name, args, user_text), user_text)
                 blocked = call_problem(name, args, user_text, " ".join(str(x.get("content", "")) for x in history[-8:] if x.get("role") == "user") + " " + user_text)
+            if not blocked and name in TOOLS:
+                blocked = lg.check(name, args) or ""
+            traces.default.step("blocked" if blocked else "tool", name=name)
             if blocked:
                 msgs.append({"role": "tool", "tool_name": name, "content": json.dumps({"error": blocked})})
                 tried.add(name)
@@ -1005,3 +1058,14 @@ def chat(history: list[dict], user_text: str, mode: str = "auto", voice: bool = 
             msgs.append({"role": "assistant", "content": forced_question})
             return forced_question, pending, saved()
     return "I got stuck. Please rephrase.", pending, saved()
+
+
+def chat(*args, **kw):
+    traces.default.start(time.time_ns(), str(args[1] if len(args) > 1 else kw.get("user_text", "")))
+    reply = ""
+    try:
+        out = _chat(*args, **kw)
+        reply = str(out[0])
+        return out
+    finally:
+        traces.default.end(reply)

@@ -113,10 +113,11 @@ def _warm_up():
     try:
         stt.get_model("small.en")
         speak(Msg(text="Okay."))
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"Warm-up failed: {type(e).__name__}: {e}")
 SECRETS = STATIC.parent / "secrets"
 _fails: list[float] = []
+_fails_lock = threading.Lock()
 
 
 def _session_value():
@@ -173,8 +174,10 @@ class Code(BaseModel):
 @app.post("/api/login")
 def login(c: Code):
     now = time.time()
-    _fails[:] = [t for t in _fails if now - t < 300]
-    if len(_fails) >= 5:
+    with _fails_lock:
+        _fails[:] = [t for t in _fails if now - t < 300]
+        locked = len(_fails) >= 5
+    if locked:
         return JSONResponse({"error": "Too many tries. Wait 5 minutes."}, status_code=429)
     try:
         good = (SECRETS / "access_code").read_text().strip()
@@ -184,7 +187,8 @@ def login(c: Code):
     if len(good) < 4:  # board #771 safety-empty-code-file
         return JSONResponse({"error": "Login is not set up on this computer."}, status_code=503)
     if not _same(c.code.strip().upper().replace(" ", ""), good):
-        _fails.append(now)
+        with _fails_lock:
+            _fails.append(now)
         return JSONResponse({"error": "Wrong code"}, status_code=403)
     r = JSONResponse({"ok": True})
     r.set_cookie("assistant_session", _session_value(), max_age=365 * 86400, httponly=True, samesite="strict")
@@ -610,13 +614,13 @@ def delete_chat(chat_id: int):
     try:
         import mind
         mind.forget_chat(chat_id)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"Forgetting chat {chat_id} in mind failed: {type(e).__name__}: {e}")
     try:
         import a0
         a0.forget_chat(chat_id)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"Forgetting chat {chat_id} in Agent Zero failed: {type(e).__name__}: {e}")
     return {"ok": True}
 
 
@@ -760,8 +764,8 @@ async def term_ws(ws: WebSocket, name: str):
         task.cancel()
         try:
             loop.remove_reader(master)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"Terminal reader cleanup failed: {type(e).__name__}: {e}")
         proc.terminate()
         try:
             os.close(master)

@@ -11,6 +11,7 @@ import httpx
 import numpy as np
 
 import config
+import injectscan
 import testguard
 import timefmt
 
@@ -34,6 +35,7 @@ AUTO_SURE_SIM = 0.72
 AUTO_CHARS = 1200
 _transport = None
 _lock = threading.RLock()
+_migrated: set = set()
 _cache = {"ver": None, "ids": None, "mat": None}
 state = {"doing": "", "waiting": "", "last_error": "", "retained": 0, "consolidated": 0, "started": False}
 
@@ -41,7 +43,7 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS units (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL CHECK (kind IN ('world','experience','observation')),
   text TEXT NOT NULL, context TEXT NOT NULL DEFAULT '', source TEXT NOT NULL DEFAULT '', doc_id INTEGER, occurred_start TEXT, occurred_end TEXT,
   mentioned_at TEXT NOT NULL, created_at TEXT NOT NULL, emb BLOB, proof_count INTEGER NOT NULL DEFAULT 1, source_ids TEXT NOT NULL DEFAULT '[]',
-  consolidated_at TEXT, failed_at TEXT, invalidated_at TEXT, invalid_reason TEXT NOT NULL DEFAULT '');
+  consolidated_at TEXT, failed_at TEXT, invalidated_at TEXT, invalid_reason TEXT NOT NULL DEFAULT '', trust TEXT DEFAULT 'auto');
 CREATE VIRTUAL TABLE IF NOT EXISTS units_fts USING fts5(text, signals, tokenize='porter unicode61');
 CREATE TABLE IF NOT EXISTS entities (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, lname TEXT NOT NULL UNIQUE,
   mentions INTEGER NOT NULL DEFAULT 0, first_seen TEXT, last_seen TEXT);
@@ -70,6 +72,10 @@ def _db():
     c = sqlite3.connect(DB, timeout=30)
     c.row_factory = sqlite3.Row
     c.executescript(SCHEMA)
+    if str(DB) not in _migrated:
+        if "trust" not in {r[1] for r in c.execute("PRAGMA table_info(units)")}:
+            c.execute("ALTER TABLE units ADD COLUMN trust TEXT DEFAULT 'auto'")
+        _migrated.add(str(DB))
     for name, q in MODELS.items():
         c.execute("INSERT OR IGNORE INTO models(name, question) VALUES(?, ?)", (name, q))
     return c
@@ -414,9 +420,10 @@ def add_units(facts: list[dict], source: str, mentioned_at: str, doc_id: int | N
                 if same not in ids:
                     ids.append(same)
                 continue
-            uid = c.execute("INSERT INTO units(kind, text, context, source, doc_id, occurred_start, occurred_end, mentioned_at, created_at, emb) "
-                            "VALUES(?,?,?,?,?,?,?,?,?,?)", (f["kind"], f["text"], context[:300], source, doc_id, f.get("start"), f.get("end"),
-                                                             mentioned_at, _iso(), v.astype(np.float32).tobytes())).lastrowid
+            trust = "untrusted" if injectscan.scan(f["text"])["level"] == "high" else "auto"
+            uid = c.execute("INSERT INTO units(kind, text, context, source, doc_id, occurred_start, occurred_end, mentioned_at, created_at, emb, trust) "
+                            "VALUES(?,?,?,?,?,?,?,?,?,?,?)", (f["kind"], f["text"], context[:300], source, doc_id, f.get("start"), f.get("end"),
+                                                               mentioned_at, _iso(), v.astype(np.float32).tobytes(), trust)).lastrowid
             c.execute("INSERT INTO units_fts(rowid, text, signals) VALUES(?,?,?)", (uid, f["text"], " ".join(f.get("entities") or []) + " " + (f.get("start") or "")))
             for name in f.get("entities") or []:
                 c.execute("INSERT OR IGNORE INTO unit_entities(unit_id, entity_id) VALUES(?,?)", (uid, _entity_id(c, name, mentioned_at)))
@@ -490,7 +497,7 @@ def retain_next(background: bool = True) -> bool:
 
 
 def _matrix(c, kinds=None):
-    q = "SELECT id, emb FROM units WHERE invalidated_at IS NULL AND emb IS NOT NULL"
+    q = "SELECT id, emb FROM units WHERE invalidated_at IS NULL AND emb IS NOT NULL AND COALESCE(trust, 'auto') != 'untrusted'"
     args = []
     if kinds:
         q += " AND kind IN (%s)" % ",".join("?" * len(kinds))
@@ -535,7 +542,7 @@ def recall(query: str, k: int = 8, kinds=None, today: dt.date | None = None, qve
         if mat is None:
             return []
         rows = {r["id"]: r for r in c.execute("SELECT id, kind, text, source, occurred_start, occurred_end, mentioned_at, proof_count FROM units "
-                                              "WHERE invalidated_at IS NULL AND kind IN (%s)" % ",".join("?" * len(kinds)), kinds)}
+                                              "WHERE invalidated_at IS NULL AND COALESCE(trust, 'auto') != 'untrusted' AND kind IN (%s)" % ",".join("?" * len(kinds)), kinds)}
         qv = qvec if qvec is not None else embed([query], query=True)[0]
         sims = mat @ qv
         simof = {int(i): float(s) for i, s in zip(ids, sims)}
@@ -647,7 +654,7 @@ CONSOLIDATE_SCHEMA = {"type": "object", "properties": {
 def consolidate_next(background: bool = True) -> bool:
     with _db() as c:
         facts = [dict(r) for r in c.execute("SELECT id, text, occurred_start, occurred_end, mentioned_at FROM units WHERE kind IN ('world','experience') "
-                                            "AND consolidated_at IS NULL AND failed_at IS NULL AND invalidated_at IS NULL ORDER BY id LIMIT ?", (CONSOLIDATE_BATCH,))]
+                                            "AND consolidated_at IS NULL AND failed_at IS NULL AND invalidated_at IS NULL AND COALESCE(trust, 'auto') != 'untrusted' ORDER BY id LIMIT ?", (CONSOLIDATE_BATCH,))]
     if not facts:
         return False
     state["doing"] = f"Thinking over {len(facts)} new memories"
@@ -1133,8 +1140,15 @@ def forget_note(note_id: int, text: str = "") -> int:
         return scrub(sorted(set(units)), "the owner deleted the note") if units else 0
 
 
-def recent(limit: int = 40) -> list[dict]:
+def quarantined(limit: int = 50) -> list[dict]:
     with _db() as c:
         rows = c.execute("SELECT id, kind, text, source, occurred_start, occurred_end, mentioned_at, proof_count FROM units WHERE invalidated_at IS NULL "
+                         "AND trust = 'untrusted' ORDER BY id DESC LIMIT ?", (max(1, min(int(limit), 200)),)).fetchall()
+    return [_row(r) for r in rows]
+
+
+def recent(limit: int = 40) -> list[dict]:
+    with _db() as c:
+        rows = c.execute("SELECT id, kind, text, source, occurred_start, occurred_end, mentioned_at, proof_count FROM units WHERE invalidated_at IS NULL AND COALESCE(trust, 'auto') != 'untrusted' "
                          "ORDER BY CASE kind WHEN 'observation' THEN 0 ELSE 1 END, id DESC LIMIT ?", (max(1, min(int(limit), 200)),)).fetchall()
     return [_row(r) for r in rows]

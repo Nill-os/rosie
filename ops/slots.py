@@ -279,7 +279,7 @@ def smoke(idle: str) -> dict:
 def stage(with_eval=True):
     idle = other(active())
     if claimed(idle):
-        return {"ok": False, "error": claimed(idle), "claimed": True}
+        return {"ok": False, "error": claimed(idle) + " Release the claim first (the stage command runs as its own agent), then run stage again.", "claimed": True}
     commit("Self-update (staged)")
     flag = OPS / "staging"
     flag.parent.mkdir(parents=True, exist_ok=True)
@@ -301,17 +301,19 @@ def _stage(idle, with_eval):
     if with_eval and res["tests"]["ok"] and res["smoke"]["ok"] and (SLOT[idle] / "tests" / "model_eval.py").exists():
         import re
         base = int(load_state().get("eval_baseline", 12))
-        passed, total, runs = 0, 0, []
+        passed, total, runs, failed = 0, 0, [], []
         for _ in range(2):
             e = run([py, "tests/model_eval.py", chat_model()], cwd=SLOT[idle], timeout=1200)
             m = re.search(r"-> (\d+)/(\d+) correct", e.stdout)
             p1, t1 = (int(m.group(1)), int(m.group(2))) if m else (0, 0)
             runs.append(p1)
+            if p1 > passed or not failed:
+                failed = [ln.strip()[:90] for ln in e.stdout.splitlines() if ln.strip().startswith("FAIL")]
             if p1 > passed:
                 passed, total = p1, t1
             if total and passed >= min(base, total):
                 break
-        res["eval"] = {"ok": passed >= min(base, total) and total > 0, "score": f"{passed}/{total}", "needs": base}
+        res["eval"] = {"ok": passed >= min(base, total) and total > 0, "score": f"{passed}/{total}", "needs": base, "failed": failed}
     res["ok"] = res["tests"]["ok"] and res["smoke"]["ok"] and res["eval"]["ok"]
     res["finished"] = time.time()
     save_state(last_stage=res)

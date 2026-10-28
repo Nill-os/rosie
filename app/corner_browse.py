@@ -17,6 +17,7 @@ import corner
 import corner_groups
 import corner_layout
 import corner_pics
+import injectscan
 import web
 
 OLLAMA_CHAT = "http://127.0.0.1:11434/api/chat"
@@ -248,7 +249,12 @@ def fetch_page(url: str) -> dict | None:
     if re.search(r"(?is)<input[^>]+type=[\"']?password", h):
         corner.log("page", final, _title(h), status="skipped", detail="a login page")
         return None
-    return _got_page({"url": final, "title": _title(h) or corner.source_of(final), "text": _strip(h), "links": _links(h, final, extra),
+    text = _strip(h)
+    scanned = injectscan.scan(text)
+    if scanned["level"] == "high":
+        corner.log("blocked", final, status="injection", detail=", ".join(scanned["hits"]))
+        return None
+    return _got_page({"url": final, "title": _title(h) or corner.source_of(final), "text": text, "links": _links(h, final, extra),
                       "images": _images(h, final, extra)})
 
 
