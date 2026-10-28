@@ -19,7 +19,7 @@ def test_multi_step_analysis_is_complex():
 def test_voice_stays_short():
     r = complexity.score("First compare the two plans and explain why, then write a python script. Why? How?", voice=True)
     assert r["num_predict"] <= 350
-    assert complexity.score("hi", voice=True)["num_predict"] == 120
+    assert complexity.score("hi", voice=True)["num_predict"] == 300
 
 
 def test_long_history_raises_score():

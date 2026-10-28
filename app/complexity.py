@@ -1,9 +1,9 @@
 import re
 
 TIERS = ("trivial", "simple", "moderate", "complex")
-VOICE_PREDICT = (120, 200, 350, 350)
-TEXT_PREDICT = (300, 600, 1200, 2000)
-STEPS = (3, 5, 8, 10)
+VOICE_PREDICT = (300, 300, 350, 350)
+TEXT_PREDICT = (800, 1000, 1200, 2000)
+STEPS = (6, 8, 10, 10)
 
 GREETING = re.compile(r"^\s*(hi|hello|hey|yo|thanks|thank you|ok|okay|cool|good (morning|night|evening|afternoon)|how are you|what'?s up|bye|goodbye|yes|no|sure)\b[\s\w,.!?']{0,30}$", re.I)
 CODE = re.compile(r"```|\bdef \w+\(|\bfunction\b|\bclass \w+|\bimport \w+|\b(bug|stack ?trace|traceback|regex|sql|python|script|refactor|compile)\b", re.I)
