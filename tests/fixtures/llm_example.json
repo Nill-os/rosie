@@ -1,0 +1,9 @@
+{
+ "76d69835805d104c": {
+  "done": true,
+  "message": {
+   "content": "{\"city\": \"Chicago\"}",
+   "role": "assistant"
+  }
+ }
+}

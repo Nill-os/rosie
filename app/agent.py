@@ -1,9 +1,11 @@
 import datetime as dt
+import inspect
 import json
+import math
 import re
 import threading
 import time
-
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import httpx
@@ -25,6 +27,8 @@ import traces
 import screenagent
 import mailclean
 import phone
+import schedules
+import standing
 import selfdev
 import mailwatch
 import usertools
@@ -347,6 +351,13 @@ TOOLS = {
                        "people, projects or past conversations; it cites the memories it used, or says it doesn't know.", {"question": ("string", "the question")}),
     "memory_forget": (lambda memory_id: mind.forget(int(memory_id)), "Forget one memory by its id (from memory_search), when the owner says it is wrong.",
                       {"memory_id": ("integer", "the memory's id")}),
+    "schedule": (schedules.tool, "Create, list, pause, resume or remove owner-defined scheduled prompts. when examples: daily at 8am, every monday 9:00, weekdays 7:30, in 2 hours.",
+                 {"action": ("string", "add|list|remove|pause|resume"), "prompt": ("string", "what to do each time, for add"),
+                  "when": ("string", "when to run, for add"), "id": ("integer", "schedule id, for remove/pause/resume")}),
+    "standing": (standing.tool, "Standing reminder that fires when a mail or inbox item mentions given keywords. Use for 'tell me when a mail about X arrives'.",
+                 {"action": ("string", "add|list|remove"), "message": ("string", "what to tell the owner, for add"),
+                  "keywords": ("string", "comma-separated words to watch for, for add"), "source": ("string", "optional: mail|inbox|sms|calendar|chat|any"),
+                  "id": ("integer", "intent id, for remove")}),
     "plan_with_claude": (claude_plan.tool_plan, "Ask Claude for a plan for a big or many-step request (a day, a week, a project, a goal). Present the plan, then carry it out with your tools after the owner agrees. If it says Claude can't be used now, make the plan yourself.",
                          {"request": ("string", "what to plan, with the details the owner gave"),
                           "details": ("string", "optional: what you found so far (command output, file sizes)")}),
@@ -402,7 +413,7 @@ GROUPS.update({"search_notes": "notes"})
 GROUPS["corner_memory"] = "corner"
 GROUPS["plan_with_claude"] = "plan"
 GROUPS["verify_with_claude"] = GROUPS["ask_claude_to_solve"] = GROUPS["ask_other_ais"] = "plan"
-GROUPS.update({"memory_search": "core", "more_result": "core", "memory_reflect": "memory", "memory_forget": "memory"})
+GROUPS.update({"schedule": "schedule", "standing": "schedule", "memory_search": "core", "more_result": "core", "memory_reflect": "memory", "memory_forget": "memory"})
 HEADER_RE = re.compile(re.escape(agentboard.HEADER))
 GROUPS.update({n: "board" for n in ("board_read", "board_post", "board_claim", "board_release", "board_history")})
 GROUPS.update({n: "skills" for n in ("find_skills", "install_skill")})
@@ -427,6 +438,7 @@ GROUP_RE = {
     "notes": r"\b(notes?|meetings?|transcripts?|vault|discussed|decided|said|call|recording)\b",
     "term": r"\b(terminals?|claude|codex|gemini|opencode|agents?|sessions?|tmux|launch|spawn|shell|attach)\b",
     "board": agentboard.ASKS_BOARD.pattern,
+    "schedule": r"\b(every (?:day|morning|evening|night|week|monday|tuesday|wednesday|thursday|friday|saturday|sunday|weekday)|each (?:day|morning|week)|daily|weekly|recurring|remind me every|tell me when|let me know when|whenever|scheduled? (?:prompts?|tasks?|jobs?)|run (?:this )?(?:daily|weekly|every)|pause (?:my )?schedules?)\b",
     "plan": claude_plan.PLAN_RE.pattern,
     "lifequest": r"\b(life ?quest|xp|level(?:ed)? up|my stats|quests?|character sheet|log (?:a |my )?wins?|i (?:just )?(?:went (?:for|to)|ran|worked out|exercised|studied|meditated|practiced|finished|completed))\b",
     "projects": r"\b(projects?|milestones?|roadmap|plan\w*|finish line|next action|goal|areas?|weekly review)\b",
@@ -451,8 +463,63 @@ def select_groups(user_text, history, skill="", space=None):
     if skill == "meal-planning" and RECIPE_NOTE.search(t):
         on.add("phone")
     if len(on) == 1:
-        on |= {"calendar", "web"}
+        on |= set(rank_groups(user_text)) or {"calendar", "web"}
     return on
+
+
+_WORD = re.compile(r"[a-z0-9]{3,}")
+_STOP = frozenset("the and for you your with that this what when from have has are was can not but all any who how why get set use one two about into out its our his her their them they then than there here been being will would should could does did him she off per via yes".split())
+_GROUP_DOCS: dict = {}
+
+
+def _stem(w):
+    for suf in ("ing", "es", "ed", "s"):
+        if w.endswith(suf) and len(w) - len(suf) >= 3:
+            return w[:-len(suf)]
+    return w
+
+
+def _terms(text):
+    return [_stem(w) for w in _WORD.findall(text.lower()) if w not in _STOP]
+
+
+def _group_docs():
+    if _GROUP_DOCS.get("n") != len(TOOLS):
+        docs = {}
+        for name, (_, desc, params) in TOOLS.items():
+            g = GROUPS.get(name, "core")
+            if g in ("core", "internal", "selfdev", "build") or (g not in GROUP_RE and g not in ("calendar", "web")):
+                continue
+            docs.setdefault(g, []).extend(_terms(name.replace("_", " ") + " " + desc + " " + " ".join(d for _, d in params.values())))
+        _GROUP_DOCS.clear()
+        _GROUP_DOCS.update({"n": len(TOOLS), "docs": docs})
+    return _GROUP_DOCS["docs"]
+
+
+def rank_groups(user_text, top=3):
+    q = set(_terms(user_text))
+    docs = _group_docs()
+    if not q or not docs:
+        return []
+    avg = sum(len(d) for d in docs.values()) / len(docs)
+    df = {t: sum(1 for d in docs.values() if t in d) for t in q}
+    scores = {}
+    for g, d in docs.items():
+        tf = {}
+        for w in d:
+            if w in q:
+                tf[w] = tf.get(w, 0) + 1
+        sc = 0.0
+        for w, f in tf.items():
+            idf = math.log(1 + (len(docs) - df[w] + 0.5) / (df[w] + 0.5))
+            sc += idf * f * 2.2 / (f + 1.2 * (0.25 + 0.75 * len(d) / avg))
+        if sc > 0:
+            scores[g] = sc
+    ranked = sorted(scores, key=lambda g: -scores[g])
+    if not ranked:
+        return []
+    best = scores[ranked[0]]
+    return [g for g in ranked[:top] if scores[g] >= 0.5 * best]
 
 
 def _schema(groups=None):
@@ -591,7 +658,7 @@ def pick_skill(user_text: str, history: list[dict]) -> str:
 # board #701 safety-untrusted-content-confirm
 UNTRUSTED = {"corner_memory", "find_skills", "selfdev_read", "selfdev_search", "find_recipe", "phone_notifications", "phone_screen_do", "phone_read_messages", "search_notes", "web_search", "fetch_url", "search_email", "summarize_email", "draft_email_reply", "list_emails", "terminal_read"}
 UNTRUSTED |= {"board_read", "board_history", "plan_with_claude", "verify_with_claude", "ask_claude_to_solve", "ask_other_ais", "mail_cleanup_preview"}
-GUARDED = {"lessons", "remember", "forget", "memory_forget", "install_skill", "cancel_reminder", "selfdev_edit", "selfdev_write", "selfdev_agent", "selfdev_switch", "selfdev_rollback", "phone_screen_do", "phone_reply_notification", "phone_send_sms", "phone_call", "phone_keep_note", "build_tool", "run_user_tool", "run_command", "write_file", "open_on_desktop", "launch_agent", "terminal_start", "terminal_send", "terminal_stop"}
+GUARDED = {"schedule", "standing", "lessons", "remember", "forget", "memory_forget", "install_skill", "cancel_reminder", "selfdev_edit", "selfdev_write", "selfdev_agent", "selfdev_switch", "selfdev_rollback", "phone_screen_do", "phone_reply_notification", "phone_send_sms", "phone_call", "phone_keep_note", "build_tool", "run_user_tool", "run_command", "write_file", "open_on_desktop", "launch_agent", "terminal_start", "terminal_send", "terminal_stop"}
 
 
 def is_untrusted(name, args):
@@ -879,6 +946,393 @@ class TurnFlags(dict):
 
 
 TURN_OUTSIDE = TurnFlags()
+TURN_ASK = {}
+
+
+STALL_NUDGE = ("Do not ask and do not announce. I want this DONE now. Decide any missing details yourself (times, titles, which free slot, which project), "
+               "call the right tools, and then give a one-sentence result. Never move, shorten or delete an existing event or task that I did not ask you to change: if there is a clash, "
+               "choose the nearest free slot ON THE SAME DAY and say so. Only if something required truly cannot be guessed, ask ONE short question.")
+REFUSAL_NUDGE = ("Do not say you cannot or tell me to do it myself. You have run_command (shell on this PC: nvidia-smi, sensors, df, any program), "
+                 "get_weather, web_search, search_email, mail tools and build_tool (write your own small program). Pick the right one now, use it, and give me the real answer. "
+                 "Only if a real attempt fails, say what you tried.")
+READ_NUDGE = "Look it up with the right tool (get_schedule, find_free_time, list_tasks...) before you answer. Never answer calendar or task questions from memory or from earlier messages."
+WEATHER_NUDGE = "Call get_weather first (place from the user's words) and answer only from its result. Never state weather you did not look up."
+ANNOUNCE = re.compile(r"(i['’]ll|i will|let me|first,? i|i need to know|before i|now i['’]ll|next,? i)", re.I)
+ANNOUNCE_START = re.compile(r"(i['’]ll|i will|let me)\b", re.I)
+
+
+@dataclass
+class Turn:
+    msgs: list
+    history: list
+    user_text: str
+    active: set
+    cx: dict
+    tainted: bool
+    chat_id: object = None
+    pending: list = field(default_factory=list)
+    used: set = field(default_factory=set)
+    tried: set = field(default_factory=set)
+    failed: dict = field(default_factory=dict)
+    nudged: set = field(default_factory=set)
+    lg: loopguard.LoopGuard = field(default_factory=loopguard.LoopGuard)
+    stalled: int = 0
+    forced_question: str = ""
+    first_text: str = ""
+    cut: dict | None = None
+    deadline: float = 0.0
+    result: tuple | None = None
+
+    def left(self):
+        return self.deadline - time.monotonic() if self.deadline else 1e9
+
+    def nudge(self, text):
+        if self.msgs and self.msgs[-1].get("role") == "assistant":
+            self.msgs[-1]["_internal"] = True
+        self.msgs.append({"role": "user", "content": text, "_internal": True})
+
+    def clean(self):
+        return [{k: v for k, v in x.items() if k != "_internal"} for x in self.msgs]
+
+    def saved(self):
+        return [x for x in self.msgs[1:] if not x.get("_internal")]
+
+    def once(self, key):
+        if key in self.nudged:
+            return False
+        self.nudged.add(key)
+        return True
+
+    def ask(self, question):
+        self.msgs.append({"role": "assistant", "content": question})
+        return question, self.pending, self.saved()
+
+
+@dataclass
+class Reply:
+    text: str
+    small_talk: bool
+    last: str = ""
+    announces: bool = False
+    bad: list = field(default_factory=list)
+
+
+def _nudge_stall(t, r):
+    if not t.pending and not r.small_talk and t.stalled < 2 and (not r.text.strip() or r.last.rstrip(" *_").endswith("?") or r.announces):
+        t.stalled += 1
+        return STALL_NUDGE
+
+
+def _nudge_refusal(t, r):
+    if REFUSAL.search(r.text) and not t.tried and "refusal" not in t.nudged and not r.small_talk and not OUTSIDE_WORLD.search(t.user_text):
+        t.nudged.add("refusal")
+        t.active = set(GROUP_RE) | {"build"}
+        return REFUSAL_NUDGE
+
+
+def _nudge_failed(t, r):
+    if not t.failed or t.pending:
+        return None
+    names = ", ".join(t.failed)
+    if t.once("error"):
+        return (f"Careful: {names} did NOT succeed ({'; '.join(t.failed.values())}). Fix it yourself NOW without asking: use the free_slots in the result (or find_free_time / get_schedule / search_events for a real id) and call the tool again. Only if it truly cannot be done, say in one sentence that it did NOT happen and why. Never say it was done unless it was.")
+    if not re.search(r"(not |n't |couldn't|could not|failed|didn't|unable|overlap|conflict|error|no change)", r.text, re.I):
+        r.text += f"\n\n⚠️ That did NOT happen: {names} failed ({'; '.join(t.failed.values())}). Nothing was changed."
+
+
+def _nudge_read(t, r):
+    if not t.pending and "read" not in t.nudged and READ_QUESTION.search(t.user_text) and READ_SUBJECT.search(t.user_text) and not (t.tried & READ_TOOLS):
+        t.nudged.add("read")
+        return READ_NUDGE
+
+
+def _nudge_weather(t, r):
+    if not t.pending and "weather" not in t.nudged and (WEATHER_TALK.search(t.user_text) or WEATHER_READING.search(r.text)) and "get_weather" not in t.tried:
+        t.nudged.add("weather")
+        return WEATHER_NUDGE
+
+
+def _nudge_claim(t, r):
+    r.bad = unbacked_claims(r.text, t.used) if not t.pending else []
+    if r.bad and t.once("claim"):
+        return f"You said: \"{r.bad[0][:160]}\" but no tool did that. Do it now with the right tool (add_event, move_event, shift_day, add_task, set_reminder, phone_keep_note...), or say plainly that it did NOT happen. Never claim a change you did not make."
+
+
+NUDGES = (_nudge_stall, _nudge_refusal, _nudge_failed, _nudge_read, _nudge_weather, _nudge_claim)
+
+
+def _build_turn(history, user_text, mode, voice, space, skill, remembered, reading, untrusted, cx, chat_id):
+    sp = system_prompt(mode, voice) + lessons.block(user_text)
+    fb = chats.pending_feedback(chat_id) if chat_id else ""
+    if fb:
+        sp += "\n" + fb
+    if space:
+        sp += f"\nThis conversation lives in the user's '{space}' space; keep that context in mind."
+    if skill:
+        sp += (f"\nACTIVE SKILL for this message: '{skill}'. Follow these steps (adapted to a "
+               f"{'spoken' if voice else 'text'} reply):\n{skills.use_skill(skill)['instructions']}")
+    msgs = [{"role": "system", "content": sp + ("\n\n" + remembered if remembered else "") + ("\n\n" + reading if reading else "")}] + history + [{"role": "user", "content": user_text}]
+    active = select_groups(user_text, history, skill, space) | ({"corner"} if reading else set()) | ({"board"} if HEADER_RE.search(reading) else set())
+    tainted = untrusted or any(m.get("role") == "tool" and (m.get("tool_name") in UNTRUSTED or (m.get("tool_name") == "read_file" and "[untrusted]" in str(m.get("content", ""))))
+                               for m in history)
+    return Turn(msgs, history, user_text, active, cx, tainted, chat_id)
+
+
+def _call_model(t):
+    try:
+        r = httpx.post(OLLAMA, timeout=max(20.0, min(300.0, t.left())), json={
+            "model": MODEL, "messages": t.clean(), "tools": _schema(t.active), "stream": False, "think": False,
+            "keep_alive": "30m", "options": {**ctxsize.options(MODEL), "temperature": 0.2, "num_predict": t.cx["num_predict"]}}).json()
+    except httpx.HTTPError as e:
+        return None, (f"My language model is not answering right now ({type(e).__name__}). It usually comes back within a minute: please try again.", t.pending, t.saved())
+    m = r.get("message")
+    if not m:
+        return None, (f"The language model did not answer ({str(r.get('error', 'no reply'))[:120]}). Try again in a moment.", t.pending, t.saved())
+    return m, None
+
+
+def _read_reply(t, text):
+    last = re.split(r"(?<=[.!?])\s+|\n+", text.strip())[-1] if text.strip() else ""
+    announces = bool(ANNOUNCE.match(last.strip()) or last.rstrip().endswith(":") or ANNOUNCE_START.match(text.strip()))
+    return Reply(text, bool(CHITCHAT.match(t.user_text.strip())), last, announces)
+
+
+def _answer(t, m):
+    text = m.get("content", "").strip()
+    if t.forced_question and not t.pending:
+        return t.ask(t.forced_question)
+    if not t.first_text and not t.tried and text and not STUB.search(text):
+        t.first_text = text
+    r = _read_reply(t, text)
+    for rule in NUDGES:
+        n = rule(t, r)
+        if n:
+            t.nudge(n)
+            return None
+    final = finalize_reply(r.text, t.pending, r.bad, t.used, t.stalled, r.announces, t.first_text, t.cut)
+    if t.msgs[-1].get("role") == "assistant":
+        t.msgs[-1]["content"] = final
+    return final, t.pending, t.saved()
+
+
+def _blocked_reason(t, name, args):
+    user_text = t.user_text
+    blocked = ""
+    if name in CHANGE_TOOLS and not CHANGE_INTENT.search(user_text):
+        blocked = "The user did not ask you to move, change or delete existing items. Do not touch them. Find a free slot with find_free_time, or tell the user about the clash."
+    elif name in CREATE_TOOLS and (READ_QUESTION.search(user_text) or QUESTION_START.search(user_text)) and not WRITE_VERB.search(user_text):
+        blocked = "The user only asked a question. Do not create or change anything. Look things up and just answer."
+    if not blocked and name in TOOLS:
+        args = fix_duration(name, fix_dates(name, args, user_text), user_text)
+        blocked = call_problem(name, args, user_text, " ".join(str(x.get("content", "")) for x in t.history[-8:] if x.get("role") == "user") + " " + user_text)
+    if not blocked and name in TOOLS:
+        blocked = t.lg.check(name, args) or ""
+    return blocked, args
+
+
+_TYPE_OK = {
+    "string": lambda v: isinstance(v, (str, int, float)) and not isinstance(v, bool),
+    "integer": lambda v: (isinstance(v, int) and not isinstance(v, bool)) or (isinstance(v, float) and v == int(v)) or (isinstance(v, str) and re.fullmatch(r"\s*-?\d+\s*", v) is not None),
+    "number": lambda v: (isinstance(v, (int, float)) and not isinstance(v, bool)) or (isinstance(v, str) and re.fullmatch(r"\s*-?\d+(\.\d+)?\s*", v) is not None),
+    "boolean": lambda v: isinstance(v, bool) or (isinstance(v, str) and v.strip().lower() in ("true", "false")),
+}
+
+
+def tool_signature(name):
+    params = TOOLS[name][2]
+    return f"{name}(" + ", ".join(f"{k}: {t}" + ("" if _is_required(name, k) else " (optional)") for k, (t, _) in params.items()) + ")"
+
+
+def _is_required(name, k):
+    fn, _, params = TOOLS[name]
+    if "optional" in params[k][1] or "default" in params[k][1]:
+        return False
+    try:
+        p = inspect.signature(fn).parameters.get(k)
+    except (TypeError, ValueError):
+        return True
+    return p is None or p.default is inspect.Parameter.empty
+
+
+def arg_feedback(name, args):
+    if name not in TOOLS or not isinstance(args, dict):
+        return ""
+    params = TOOLS[name][2]
+    missing = [k for k in params if _is_required(name, k) and (k not in args or args[k] is None)]
+    wrong = [f"{k} must be {params[k][0]} but got {type(v).__name__}" for k, v in args.items()
+             if k in params and v is not None and params[k][0] in _TYPE_OK and not _TYPE_OK[params[k][0]](v)]
+    try:
+        takes_any = any(q.kind is inspect.Parameter.VAR_KEYWORD for q in inspect.signature(TOOLS[name][0]).parameters.values())
+    except (TypeError, ValueError):
+        takes_any = True
+    extra = [] if takes_any else [k for k in args if k not in params]
+    if not (missing or wrong or extra):
+        return ""
+    bits = []
+    if missing:
+        bits.append("missing required: " + ", ".join(missing))
+    if wrong:
+        bits.append("wrong type: " + "; ".join(wrong))
+    if extra:
+        bits.append("unknown arguments: " + ", ".join(extra))
+    return f"Bad arguments for {name} ({' | '.join(bits)}). Signature: {tool_signature(name)}. Call it again with the correct arguments."
+
+
+def _execute(name, args, held):
+    try:
+        if name not in TOOLS:
+            return {"error": f"There is no tool named '{name}'. Do NOT give up: pick one of these real tools, or build_tool a new one. Available: {', '.join(sorted(TOOLS))}"}, None
+        bad = "" if held else arg_feedback(name, args)
+        if bad:
+            return {"error": bad}, held
+        return (held if held else TOOLS[name][0](**args)), held
+    except gcal.LoginExpired as e:
+        return {"error": str(e)}, held
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {e}"}, held
+
+
+def _run_call(t, call):
+    name, args = call["function"]["name"], call["function"]["arguments"]
+    args = {k: v for k, v in (args or {}).items() if not str(k).startswith("_")}
+    held = guard(name, args, t.tainted)
+    phone.force_ask = t.tainted
+    blocked, args = _blocked_reason(t, name, args)
+    traces.default.step("blocked" if blocked else "tool", name=name)
+    if blocked:
+        t.msgs.append({"role": "tool", "tool_name": name, "content": json.dumps({"error": blocked})})
+        t.tried.add(name)
+        return
+    result, held = _execute(name, args, held)
+    if isinstance(result, dict) and result.get("status") == "needs_confirmation":
+        t.pending.append({"token": result["token"], "summary": result["summary"], **({"risk_text": result["risk_text"]} if result.get("risk_text") else {}), **({"auto": True} if result.get("auto") else {})})
+    t.tried.add(name)
+    if isinstance(result, dict) and result.get("ask_user"):
+        t.forced_question = result.get("question", "Which one?")
+        if t.chat_id is not None:
+            TURN_ASK[t.chat_id] = chats.ask_card(t.forced_question, result.get("options") or [])
+    good = not (isinstance(result, dict) and (result.get("error") or result.get("status") in ("error", "conflict", "nothing", "nothing_to_move", "refused")))
+    if good:
+        t.used.add(name)
+        t.failed.pop(name, None)
+    elif name in WRITE_TOOLS and not t.forced_question:
+        t.failed[name] = str(result.get("error") or result.get("message"))[:200]
+    if not held and is_untrusted(name, args):
+        t.tainted = True
+        if t.chat_id is not None:
+            TURN_OUTSIDE[t.chat_id] = True
+        if name == "read_file" and isinstance(result, dict) and "content" in result:
+            result = {**result, "content": "[untrusted] " + str(result["content"])}
+    c = _cap(result)
+    if isinstance(c, dict) and "total_results" in c:
+        t.cut = c
+    t.msgs.append({"role": "tool", "tool_name": name, "content": c if isinstance(c, str) else json.dumps(c, default=str)})
+
+
+RESERVE_S = 45.0
+FINISH_PROMPT = ("Time or steps are up. Do not call any tool. Using only what the tools already returned in this conversation, give the best answer you can right now. "
+                 "Say plainly what you could not finish. Never claim an action succeeded unless a tool result shows it did.")
+_inbox_lock = threading.Lock()
+_inbox: dict = {}
+
+
+def begin(chat_id):
+    with _inbox_lock:
+        _inbox.setdefault(chat_id, [])
+
+
+def queue_message(chat_id, text):
+    with _inbox_lock:
+        if chat_id not in _inbox:
+            return False
+        _inbox[chat_id].append(text)
+        return True
+
+
+def drain(chat_id):
+    with _inbox_lock:
+        out, _inbox[chat_id] = list(_inbox.get(chat_id, [])), []
+        return out
+
+
+def end(chat_id):
+    with _inbox_lock:
+        return _inbox.pop(chat_id, [])
+
+
+def running(chat_id):
+    with _inbox_lock:
+        return chat_id in _inbox
+
+
+def _inject(t):
+    if t.chat_id is None:
+        return False
+    got = drain(t.chat_id)
+    for text in got:
+        t.msgs.append({"role": "user", "content": f"The owner sent this while you were working. Take it into account and continue: {text}"})
+    return bool(got)
+
+
+def _deadline_s(t):
+    cfg = config.load().get("turn_deadline_s")
+    return float(cfg) if isinstance(cfg, (int, float)) and cfg > 0 else float(t.cx.get("deadline_s", 0) or 0)
+
+
+def _finish(t):
+    msgs = t.clean() + [{"role": "user", "content": FINISH_PROMPT}]
+    try:
+        r = httpx.post(OLLAMA, timeout=90, json={
+            "model": MODEL, "messages": msgs, "stream": False, "think": False,
+            "keep_alive": "30m", "options": {**ctxsize.options(MODEL), "temperature": 0.2, "num_predict": t.cx["num_predict"]}}).json()
+        text = ((r.get("message") or {}).get("content") or "").strip()
+    except (httpx.HTTPError, ValueError, AttributeError):
+        text = ""
+    if not text:
+        return None
+    final = finalize_reply(text, t.pending, [], t.used, 0, False, "", t.cut)
+    t.msgs.append({"role": "assistant", "content": final})
+    return final, t.pending, t.saved()
+
+
+def budget_note(t, steps_left):
+    return (f"Budget notice: you have {steps_left} step{'s' if steps_left != 1 else ''} left"
+            + (f" and about {int(max(t.left(), 0))} seconds" if t.deadline else "")
+            + ". Finish now, or reply with a short summary of what you found and what is still open. Do not start new work.")
+
+
+def _loop(t, max_steps):
+    for step in range(max_steps):
+        if t.left() <= RESERVE_S:
+            break
+        if step > 0 and ((max_steps - step <= 2 and max_steps > 2) or (t.deadline and t.left() <= RESERVE_S + 30)) and t.once("budget"):
+            t.nudge(budget_note(t, max_steps - step))
+        _inject(t)
+        m, early = _call_model(t)
+        if early:
+            return early
+        t.msgs.append(m)
+        if not m.get("tool_calls"):
+            out = _answer(t, m)
+            if out:
+                if _inject(t):
+                    continue
+                return out
+            continue
+        for call in m["tool_calls"]:
+            _run_call(t, call)
+        if t.forced_question and not t.pending:
+            return t.ask(t.forced_question)
+    return _finish(t) or ("I got stuck. Please rephrase.", t.pending, t.saved())
+
+
+def _run_turn(t, max_steps):
+    if t.result is not None:
+        return t.result
+    secs = _deadline_s(t)
+    t.deadline = time.monotonic() + secs if secs else 0.0
+    t.result = _loop(t, max_steps)
+    return t.result
 
 
 def _chat(history: list[dict], user_text: str, mode: str = "auto", voice: bool = False, max_steps=10, space: str | None = None, untrusted: bool = False, chat_id=None, _local=False,
@@ -915,149 +1369,8 @@ def _chat(history: list[dict], user_text: str, mode: str = "auto", voice: bool =
             note = "" if voice else f"(Agent Zero isn't answering, so my own model answered: {str(e)[:80]}) "
             return note + reply, pending, new
     skill = pick_skill(user_text, history) or SPACE_SKILL.get(space or "", "")
-    sp = system_prompt(mode, voice) + lessons.block(user_text)
-    if space:
-        sp += f"\nThis conversation lives in the user's '{space}' space; keep that context in mind."
-    if skill:
-        sp += (f"\nACTIVE SKILL for this message: '{skill}'. Follow these steps (adapted to a "
-               f"{'spoken' if voice else 'text'} reply):\n{skills.use_skill(skill)['instructions']}")
-    msgs = [{"role": "system", "content": sp + ("\n\n" + remembered if remembered else "") + ("\n\n" + reading if reading else "")}] + history + [{"role": "user", "content": user_text}]
-    active = select_groups(user_text, history, skill, space) | ({"corner"} if reading else set()) | ({"board"} if HEADER_RE.search(reading) else set())
-    pending, used, retried, refused = [], set(), False, False
-    tried, failed, err_nudged, stalled = set(), {}, False, 0
-    lg = loopguard.LoopGuard()
-    forced_question = ""
-    claim_nudged = read_nudged = weather_nudged = False
-    first_text = ""
-    cut = None
-
-    def nudge(text):
-        if msgs and msgs[-1].get("role") == "assistant":
-            msgs[-1]["_internal"] = True
-        msgs.append({"role": "user", "content": text, "_internal": True})
-
-    def clean(ms):
-        return [{k: v for k, v in x.items() if k != "_internal"} for x in ms]
-
-    def saved():
-        return [x for x in msgs[1:] if not x.get("_internal")]
-    tainted = untrusted or any(m.get("role") == "tool" and (m.get("tool_name") in UNTRUSTED or (m.get("tool_name") == "read_file" and "[untrusted]" in str(m.get("content", ""))))
-                  for m in history)
-    for _ in range(max_steps):
-        try:
-            r = httpx.post(OLLAMA, timeout=300, json={
-                "model": MODEL, "messages": clean(msgs), "tools": _schema(active), "stream": False, "think": False,
-                "keep_alive": "30m", "options": {**ctxsize.options(MODEL), "temperature": 0.2, "num_predict": cx["num_predict"]}}).json()
-        except httpx.HTTPError as e:
-            return f"My language model is not answering right now ({type(e).__name__}). It usually comes back within a minute: please try again.", pending, saved()
-        m = r.get("message")
-        if not m:
-            return f"The language model did not answer ({str(r.get('error', 'no reply'))[:120]}). Try again in a moment.", pending, saved()
-        msgs.append(m)
-        if not m.get("tool_calls"):
-            text = m.get("content", "").strip()
-            if forced_question and not pending:
-                msgs.append({"role": "assistant", "content": forced_question})
-                return forced_question, pending, saved()
-            if not first_text and not tried and text and not STUB.search(text):
-                first_text = text
-            last = re.split(r"(?<=[.!?])\s+|\n+", text.strip())[-1] if text.strip() else ""
-            announces = re.match(r"(i['’]ll|i will|let me|first,? i|i need to know|before i|now i['’]ll|next,? i)", last.strip(), re.I) or last.rstrip().endswith(":") or re.match(r"(i['’]ll|i will|let me)\b", text.strip(), re.I)
-            small_talk = bool(CHITCHAT.match(user_text.strip()))
-            if not pending and not small_talk and stalled < 2 and (not text.strip() or last.rstrip(" *_").endswith("?") or announces):
-                stalled += 1
-                nudge("Do not ask and do not announce. I want this DONE now. Decide any missing details yourself (times, titles, which free slot, which project), "
-                      "call the right tools, and then give a one-sentence result. Never move, shorten or delete an existing event or task that I did not ask you to change: if there is a clash, "
-                      "choose the nearest free slot ON THE SAME DAY and say so. Only if something required truly cannot be guessed, ask ONE short question.")
-                continue
-            if REFUSAL.search(text) and not tried and not refused and not small_talk and not OUTSIDE_WORLD.search(user_text):
-                refused = True
-                active = set(GROUP_RE) | {"build"}
-                nudge("Do not say you cannot or tell me to do it myself. You have run_command (shell on this PC: nvidia-smi, sensors, df, any program), "
-                             "get_weather, web_search, search_email, mail tools and build_tool (write your own small program). Pick the right one now, use it, and give me the real answer. "
-                             "Only if a real attempt fails, say what you tried.")
-                continue
-            if failed and not pending:
-                names = ", ".join(failed)
-                if not err_nudged:
-                    err_nudged = True
-                    nudge(f"Careful: {names} did NOT succeed ({'; '.join(failed.values())}). Fix it yourself NOW without asking: use the free_slots in the result (or find_free_time / get_schedule / search_events for a real id) and call the tool again. Only if it truly cannot be done, say in one sentence that it did NOT happen and why. Never say it was done unless it was.")
-                    continue
-                if not re.search(r"(not |n't |couldn't|could not|failed|didn't|unable|overlap|conflict|error|no change)", text, re.I):
-                    text += f"\n\n⚠️ That did NOT happen: {names} failed ({'; '.join(failed.values())}). Nothing was changed."
-            if not pending and not read_nudged and READ_QUESTION.search(user_text) and READ_SUBJECT.search(user_text) and not (tried & READ_TOOLS):
-                read_nudged = True
-                nudge("Look it up with the right tool (get_schedule, find_free_time, list_tasks...) before you answer. Never answer calendar or task questions from memory or from earlier messages.")
-                continue
-            if not pending and not weather_nudged and (WEATHER_TALK.search(user_text) or WEATHER_READING.search(text)) and "get_weather" not in tried:
-                weather_nudged = True
-                nudge("Call get_weather first (place from the user's words) and answer only from its result. Never state weather you did not look up.")
-                continue
-            bad = unbacked_claims(text, used) if not pending else []
-            if bad:
-                if not claim_nudged:
-                    claim_nudged = True
-                    nudge(f"You said: \"{bad[0][:160]}\" but no tool did that. Do it now with the right tool (add_event, move_event, shift_day, add_task, set_reminder, phone_keep_note...), or say plainly that it did NOT happen. Never claim a change you did not make.")
-                    continue
-            final = finalize_reply(text, pending, bad, used, stalled, bool(announces), first_text, cut)
-            if msgs[-1].get("role") == "assistant":
-                msgs[-1]["content"] = final
-            return final, pending, saved()
-        for call in m["tool_calls"]:
-            name, args = call["function"]["name"], call["function"]["arguments"]
-            args = {k: v for k, v in (args or {}).items() if not str(k).startswith("_")}
-            held = guard(name, args, tainted)
-            phone.force_ask = tainted
-            blocked = ""
-            if name in CHANGE_TOOLS and not CHANGE_INTENT.search(user_text):
-                blocked = "The user did not ask you to move, change or delete existing items. Do not touch them. Find a free slot with find_free_time, or tell the user about the clash."
-            elif name in CREATE_TOOLS and (READ_QUESTION.search(user_text) or QUESTION_START.search(user_text)) and not WRITE_VERB.search(user_text):
-                blocked = "The user only asked a question. Do not create or change anything. Look things up and just answer."
-            if not blocked and name in TOOLS:
-                args = fix_duration(name, fix_dates(name, args, user_text), user_text)
-                blocked = call_problem(name, args, user_text, " ".join(str(x.get("content", "")) for x in history[-8:] if x.get("role") == "user") + " " + user_text)
-            if not blocked and name in TOOLS:
-                blocked = lg.check(name, args) or ""
-            traces.default.step("blocked" if blocked else "tool", name=name)
-            if blocked:
-                msgs.append({"role": "tool", "tool_name": name, "content": json.dumps({"error": blocked})})
-                tried.add(name)
-                continue
-            try:
-                if name not in TOOLS:
-                    result = {"error": f"There is no tool named '{name}'. Do NOT give up: pick one of these real tools, or build_tool a new one. Available: {', '.join(sorted(TOOLS))}"}
-                    held = None
-                fn = TOOLS[name][0] if name in TOOLS else None
-                result = result if name not in TOOLS else (held if held else fn(**args))
-            except gcal.LoginExpired as e:
-                result = {"error": str(e)}
-            except Exception as e:
-                result = {"error": f"{type(e).__name__}: {e}"}
-            if isinstance(result, dict) and result.get("status") == "needs_confirmation":
-                pending.append({"token": result["token"], "summary": result["summary"], **({"auto": True} if result.get("auto") else {})})
-            tried.add(name)
-            if isinstance(result, dict) and result.get("ask_user"):
-                forced_question = result.get("question", "Which one?")
-            good = not (isinstance(result, dict) and (result.get("error") or result.get("status") in ("error", "conflict", "nothing", "nothing_to_move", "refused")))
-            if good:
-                used.add(name)
-                failed.pop(name, None)
-            elif name in WRITE_TOOLS and not forced_question:
-                failed[name] = str(result.get("error") or result.get("message"))[:200]
-            if not held and is_untrusted(name, args):
-                tainted = True
-                if chat_id is not None:
-                    TURN_OUTSIDE[chat_id] = True
-                if name == "read_file" and isinstance(result, dict) and "content" in result:
-                    result = {**result, "content": "[untrusted] " + str(result["content"])}
-            c = _cap(result)
-            if isinstance(c, dict) and "total_results" in c:
-                cut = c
-            msgs.append({"role": "tool", "tool_name": name, "content": c if isinstance(c, str) else json.dumps(c, default=str)})
-        if forced_question and not pending:
-            msgs.append({"role": "assistant", "content": forced_question})
-            return forced_question, pending, saved()
-    return "I got stuck. Please rephrase.", pending, saved()
+    turn = _build_turn(history, user_text, mode, voice, space, skill, remembered, reading, untrusted, cx, chat_id)
+    return _run_turn(turn, max_steps)
 
 
 def chat(*args, **kw):

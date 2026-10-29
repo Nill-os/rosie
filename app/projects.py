@@ -6,6 +6,7 @@ from pathlib import Path
 
 import tasks
 import workflows
+import util
 
 DB = Path(__file__).resolve().parent.parent / "data" / "projects.db"
 STATUSES = ("idea", "active", "paused", "done")
@@ -26,8 +27,7 @@ def _db():
     return c
 
 
-def _now():
-    return dt.datetime.now().isoformat(timespec="seconds")
+_now = util.now_iso
 
 
 def _slug(name):

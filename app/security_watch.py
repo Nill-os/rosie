@@ -18,6 +18,7 @@ import httpx
 import config
 import corner
 import testguard
+import util
 
 ROOT = Path(__file__).resolve().parent.parent
 STATE = ROOT / "data" / "security_watch.json"
@@ -95,8 +96,7 @@ def save(d: dict):
     tmp.replace(STATE)
 
 
-def _now() -> dt.datetime:
-    return dt.datetime.now().astimezone()
+_now = util.now_dt
 
 
 def _iso(t: dt.datetime | None = None) -> str:

@@ -35,6 +35,8 @@ import automations
 import briefs
 import chats
 import config
+import schedules
+import standing
 import corner
 import corner_api
 import hub
@@ -197,6 +199,29 @@ _whisper = None
 _voice = None
 _tts_lock = threading.Lock()
 _tts_cache: "collections.OrderedDict[str, bytes]" = collections.OrderedDict()
+_tts_lock = threading.Lock()
+
+
+def _pty_write(fd, data):
+    view = memoryview(data)
+    while view:
+        n = os.write(fd, view)
+        view = view[n:]
+
+
+def _reap(proc):
+    try:
+        proc.terminate()
+    except OSError:
+        pass
+
+    def wait():
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+    threading.Thread(target=wait, daemon=True, name="reap").start()
 VOICE_DIR = STATIC.parent / "data" / "voices"
 VOICE_NAME = "af_heart"
 
@@ -241,20 +266,33 @@ def _resolve_chat(chat_id, space=None):
 
 def _run_turn(chat_id, text, mode="auto", voice=False, shown=None, space=None, untrusted=False):
     cid = _resolve_chat(chat_id, space)
+    if chat_id and not voice and not untrusted and agent.queue_message(cid, text):
+        return {"reply": "Got it. I will work that into what I am doing now.", "pending": [], "chat_id": cid, "title": chats.title_of(cid), "space": chats.space_of(cid), "queued": True}
     hist = chats.history(cid, 12 if voice else 30)
+    agent.begin(cid)
     try:
         reply, pending, new = agent.chat(hist, text, mode, voice, space=chats.space_of(cid), untrusted=untrusted, chat_id=cid)
     except gcal.LoginExpired as e:
         reply, pending, new = str(e), [], hist + [{"role": "user", "content": text}, {"role": "assistant", "content": str(e)}]
     except Exception as e:
         reply, pending, new = f"Something broke: {type(e).__name__}: {e}", [], hist + [{"role": "user", "content": text}, {"role": "assistant", "content": f"Something broke: {type(e).__name__}: {e}"}]
+    leftover = agent.end(cid)
     chats.add_msgs(cid, new[len(hist):], first_user_shown=shown)
     import mind
     outside = untrusted or agent.TURN_OUTSIDE.pop(cid, False) or any(m.get("role") == "tool" and m.get("tool_name") in mind.outside_tools() for m in new[len(hist):])
     mind.queue_turn(cid, shown if shown is not None else text, reply, untrusted=outside, voice=voice)
     if pending:
         reply = "Ready: " + "; ".join(p["summary"] for p in pending) + ". Tap Yes to do it."
-    return {"reply": reply, "pending": pending, "chat_id": cid, "title": chats.title_of(cid), "space": chats.space_of(cid)}
+    if leftover:
+        return _run_turn(cid, "\n".join(leftover), mode, voice, space=space, untrusted=untrusted)
+    ask = getattr(agent, "TURN_ASK", {}).pop(cid, None)
+    out = {"reply": reply, "pending": pending, "chat_id": cid, "title": chats.title_of(cid), "space": chats.space_of(cid)}
+    sug = [] if pending or voice else chats.suggest(reply)
+    if sug:
+        out["suggestions"] = sug
+    if isinstance(ask, dict) and ask.get("question") and ask.get("options"):
+        out["ask"] = {"question": ask["question"], "options": ask["options"]}
+    return out
 
 
 def _save_exchange(chat_id, user_text, reply, space=None):
@@ -540,7 +578,10 @@ def healthz():
 
 @app.get("/api/android-version")
 def android_version():
-    g = (STATIC.parent / "android" / "app" / "build.gradle").read_text()
+    try:
+        g = (STATIC.parent / "android" / "app" / "build.gradle").read_text()
+    except OSError:
+        return JSONResponse({"error": "Android build file not found."}, status_code=404)
     m1, m2 = re.search(r"versionCode (\d+)", g), re.search(r"versionName '([^']+)'", g)
     return {"code": int(m1.group(1)) if m1 else 0, "name": m2.group(1) if m2 else "?"}
 
@@ -578,6 +619,20 @@ def phone_online():
     return {"online": phone.online()}
 
 
+class React(BaseModel):
+    value: int
+    msg_id: int | None = None
+
+
+@app.post("/api/chats/{chat_id}/react")
+def react_chat(chat_id: int, r: React):
+    if not chats.exists(chat_id):
+        return JSONResponse({"error": "not found"}, status_code=404)
+    if not chats.react(chat_id, r.value, r.msg_id):
+        return JSONResponse({"error": "nothing to react to"}, status_code=400)
+    return {"ok": True}
+
+
 @app.post("/api/chat")
 def chat(m: Msg):
     return _run_turn(m.chat_id, m.text, m.mode, m.voice, space=m.space)
@@ -586,6 +641,46 @@ def chat(m: Msg):
 @app.get("/api/chats")
 def list_chats():
     return {"chats": chats.list_chats(), "spaces": config.load()["spaces"]}
+
+
+@app.get("/api/chats/all")
+def all_chats(q: str = "", space: str = ""):
+    return {"chats": chats.list_all(q.strip()[:200], space or None), "spaces": config.load()["spaces"], "db": "data/chats.db"}
+
+
+@app.get("/api/schedules")
+def schedules_list():
+    return schedules.api_list()
+
+
+@app.post("/api/schedules")
+def schedules_add(body: dict):
+    return schedules.api_add(body)
+
+
+@app.post("/api/schedules/remove")
+def schedules_remove(body: dict):
+    return schedules.api_remove(body)
+
+
+@app.post("/api/schedules/pause")
+def schedules_pause(body: dict):
+    return schedules.api_pause(body)
+
+
+@app.get("/api/standing")
+def standing_list():
+    return standing.api_list()
+
+
+@app.post("/api/standing")
+def standing_add(body: dict):
+    return standing.api_add(body)
+
+
+@app.post("/api/standing/remove")
+def standing_remove(body: dict):
+    return standing.api_remove(body)
 
 
 @app.post("/api/chats")
@@ -684,17 +779,20 @@ def speak(m: Msg):
     import soundfile as sf
     from fastapi.responses import Response
     key = " ".join(m.text.split())
-    if key in _tts_cache:
-        _tts_cache.move_to_end(key)
-        from fastapi.responses import Response as _R
-        return _R(_tts_cache[key], media_type="audio/wav")
+    with _tts_lock:
+        hit = _tts_cache.get(key)
+        if hit is not None:
+            _tts_cache.move_to_end(key)
+    if hit is not None:
+        return Response(hit, media_type="audio/wav")
     audio, sr = _synth(m.text)
     buf = io.BytesIO()
     sf.write(buf, audio, sr, format="WAV")
     if len(key) <= 120:
-        _tts_cache[key] = buf.getvalue()
-        while len(_tts_cache) > 80:
-            _tts_cache.popitem(last=False)
+        with _tts_lock:
+            _tts_cache[key] = buf.getvalue()
+            while len(_tts_cache) > 80:
+                _tts_cache.popitem(last=False)
     return Response(buf.getvalue(), media_type="audio/wav")
 
 
@@ -750,7 +848,7 @@ async def term_ws(ws: WebSocket, name: str):
             if msg.get("bytes"):
                 corner.owner_active(True)
                 corner.owner_active(False)
-                os.write(master, msg["bytes"])
+                await asyncio.to_thread(_pty_write, master, msg["bytes"])
             elif msg.get("text"):
                 try:
                     ctl = json.loads(msg["text"])
@@ -766,7 +864,7 @@ async def term_ws(ws: WebSocket, name: str):
             loop.remove_reader(master)
         except Exception as e:
             print(f"Terminal reader cleanup failed: {type(e).__name__}: {e}")
-        proc.terminate()
+        _reap(proc)
         try:
             os.close(master)
         except OSError:

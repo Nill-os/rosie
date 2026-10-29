@@ -19,6 +19,7 @@ import memory  # noqa: E402
 import phone  # noqa: E402
 import tasks  # noqa: E402
 import workflows  # noqa: E402
+import eval_metrics  # noqa: E402
 
 TMP = Path(tempfile.mkdtemp(prefix="rosie-eval-"))
 LIVE_CTX = config.load().get("ctx") or {}  # board #835 owner-tuned-context
@@ -189,7 +190,7 @@ def run_model(model):
         clean = asks or not (OFFER.search(reply) or reply.strip().endswith("?"))
         for p in pending:
             actions.cancel(p["token"])
-        rows.append({"prompt": prompt, "ok": bool(ok), "clean": clean, "secs": round(dt_s, 1), "calls": names(calls), "reply": reply[:90].replace("\n", " ")})
+        rows.append({"prompt": prompt, "ok": bool(ok), "clean": clean, "secs": round(dt_s, 1), "calls": names(calls), "metrics": eval_metrics.score_row(prompt, calls), "reply": reply[:90].replace("\n", " ")})
     return rows, total_s
 
 
@@ -202,6 +203,13 @@ if __name__ == "__main__":
             print(f"  {'PASS' if r['ok'] else 'FAIL'} {'clean' if r['clean'] else 'ASKS '} {r['secs']:5.1f}s  {r['prompt'][:46]:46} {r['calls']}", flush=True)
         passed, clean = sum(r["ok"] for r in rows), sum(r["clean"] for r in rows)
         summary.append((model, passed, clean, len(rows), total))
+        counts = eval_metrics.summarize(rows)
+        print(eval_metrics.format_counts(counts), flush=True)
+        try:
+            eval_metrics.append_history(Path(__file__).resolve().parent.parent / "data" / "eval_history.jsonl", model, passed, clean, len(rows), counts, total,
+                                        dt.datetime.now().isoformat(timespec="seconds"))
+        except OSError:
+            pass
         print(f"  -> {passed}/{len(rows)} correct, {clean}/{len(rows)} without needless questions, {total:.0f}s total", flush=True)
     print("\n===== summary =====")
     for m, p, c, n, t in summary:

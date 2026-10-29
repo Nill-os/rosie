@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 import config
 import pchealth
 import testguard
+import util
 
 DIR = Path(__file__).resolve().parent.parent / "data" / "corner"
 
@@ -184,8 +185,7 @@ def disk_low() -> bool:
     return disk_free() < DISK_MIN_FREE
 
 
-def _now() -> dt.datetime:
-    return dt.datetime.now().astimezone()
+_now = util.now_dt
 
 
 def _iso(t: dt.datetime | None = None) -> str:

@@ -13,6 +13,7 @@ import config
 import gmail
 import inbox
 import proposals
+import standing
 import testguard
 import workflows
 
@@ -282,6 +283,10 @@ def check(now=None, max_per_run=15, query="in:inbox newer_than:2d") -> dict:
                 t = {"importance": "normal", "label": "", "needs_reply": False, "suspicious": False, "tasks": [], "events": [],
                      "reason": "Couldn't sort this one automatically.", "summary": str(msg.get("snippet") or "")[:140]}
             _store(a["name"], msg, t)
+            try:
+                standing.check_event("mail", f"{msg.get('from', '')} {msg.get('subject', '')} {msg.get('snippet', '')}")
+            except Exception:
+                pass
             stats["new"] += 1
             stats["suspicious"] += int(t["suspicious"])
             recent = now_ts - msg["ts"] < 12 * 3600

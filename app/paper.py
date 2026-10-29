@@ -959,8 +959,8 @@ def front(s, today: dt.date, deliv: dict, weather_fn=None) -> dict:
         n = len(proposals.list_())
         if n:
             out["look"].append({"who": "Rosie", "text": f"{n} suggestion{'s' if n != 1 else ''} waiting for your OK in the Inbox.", "tag": "FYI", "link": "#/inbox"})
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"paper proposals count failed: {type(e).__name__}: {e}")
     out["headline"], out["dek"] = day_headline(todays, today_tasks, od, deliv, out["weather"], out["calendar_note"])
     return out
 

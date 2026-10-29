@@ -4,6 +4,7 @@ TIERS = ("trivial", "simple", "moderate", "complex")
 VOICE_PREDICT = (300, 300, 350, 350)
 TEXT_PREDICT = (800, 1000, 1200, 2000)
 STEPS = (6, 8, 10, 10)
+DEADLINES = (90, 180, 360, 600)
 
 GREETING = re.compile(r"^\s*(hi|hello|hey|yo|thanks|thank you|ok|okay|cool|good (morning|night|evening|afternoon)|how are you|what'?s up|bye|goodbye|yes|no|sure)\b[\s\w,.!?']{0,30}$", re.I)
 CODE = re.compile(r"```|\bdef \w+\(|\bfunction\b|\bclass \w+|\bimport \w+|\b(bug|stack ?trace|traceback|regex|sql|python|script|refactor|compile)\b", re.I)
@@ -57,4 +58,4 @@ def score(text: str, history: list[dict] | None = None, voice: bool = False) -> 
     else:
         value = round(min(raw(t, history), 1.0), 3)
         i = tier_for(value)
-    return {"score": value, "tier": TIERS[i], "num_predict": (VOICE_PREDICT if voice else TEXT_PREDICT)[i], "max_steps": STEPS[i]}
+    return {"score": value, "tier": TIERS[i], "num_predict": (VOICE_PREDICT if voice else TEXT_PREDICT)[i], "max_steps": STEPS[i], "deadline_s": DEADLINES[i]}

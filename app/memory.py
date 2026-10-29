@@ -50,8 +50,8 @@ def forget(note_id: int):
         import mind
         if r:
             mind.forget_note(note_id, f"{r['title'].strip()}: {r['content'].strip()}" if (r["title"] or "").strip() else (r["content"] or "").strip())
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"forget note in mind failed: {type(e).__name__}: {e}")
     return {"status": "forgotten", "id": note_id}
 
 

@@ -30,6 +30,7 @@ def world(tmp_path, monkeypatch):
     sh("git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "v1", cwd=a)
     monkeypatch.setattr(slots, "OPS", ops)
     monkeypatch.setattr(slots, "STATE", ops / "state.json")
+    monkeypatch.setattr(slots, "NOTES_LOG", ops / "notes" / "Rosie update log.md")
     monkeypatch.setattr(slots, "SLOT", {"A": a, "B": b})
     monkeypatch.setattr(slots, "restart_service", lambda: True)
     monkeypatch.setattr(slots, "healthz", lambda port=None, timeout=3: {"ok": True, "slot": slots.active()})
@@ -174,3 +175,23 @@ def test_the_update_check_uses_the_model_rosie_chats_with(world):
     assert slots.chat_model() == "qwen3.5:9b"
     (world["a"] / "data" / "config.json").write_text(json.dumps({"chat_model": "huihui_ai/qwen3.5-abliterated:9b"}))
     assert slots.chat_model() == "huihui_ai/qwen3.5-abliterated:9b"  # board #896 why-chat-uses-settings-model
+
+
+def _res(head, score, ok=True, failed=()):
+    return {"slot": "B", "head": head, "ok": ok, "tests": {"ok": True, "summary": "10 passed"}, "smoke": {"ok": True},
+            "eval": {"ok": ok, "score": score, "failed": list(failed)}}
+
+
+def test_update_log_records_each_stage_and_compares_with_the_last_good_one(world):
+    slots.record_update(_res("aaa1111", "12/13", failed=["FAIL clean 7.0s laundry"]), [5.0, 7.0, 3.0])
+    slots.record_update(_res("bbb2222", "13/13"), [4.0, 4.0, 2.0])
+    rows = slots.update_log_entries()
+    assert rows[0]["vs_previous"] is None and rows[0]["median_s"] == 5.0
+    assert rows[1]["vs_previous"] == {"head": "aaa1111", "score_change": 1, "median_change_s": -1.0}
+    text = slots.NOTES_LOG.read_text()
+    assert "aaa1111" in text and "bbb2222" in text and "+1 score, -1.0 s median vs aaa1111" in text
+
+
+def test_update_log_handles_a_stage_without_eval_timings(world):
+    slots.record_update(_res("ccc3333", "skipped"), [])
+    assert slots.update_log_entries()[0]["median_s"] is None

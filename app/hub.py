@@ -53,7 +53,7 @@ def mind_status():
 @router.delete("/api/mind/{unit_id}")
 def mind_forget(unit_id: int):
     import mind
-    r = mind.forget(unit_id, "the owner forgot it in Settings")
+    r = mind.forget(unit_id, "the owner forgot it in Settings", force=True)
     if r.get("error"):
         return err(r["error"], 404)
     return r

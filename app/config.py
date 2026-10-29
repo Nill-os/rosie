@@ -1,3 +1,4 @@
+import copy
 import json
 import threading
 from pathlib import Path
@@ -115,14 +116,41 @@ DEFAULTS = {
 }
 
 
+_cache = {"sig": None, "data": None}
+_cache_lock = threading.Lock()
+
+
+def _read_file():
+    try:
+        st = PATH.stat()
+    except OSError:
+        return None, None
+    sig = (str(PATH), st.st_mtime_ns, st.st_size)
+    with _cache_lock:
+        if _cache["sig"] == sig:
+            return sig, _cache["data"]
+    try:
+        data = json.loads(PATH.read_text())
+    except ValueError:
+        return sig, None
+    with _cache_lock:
+        _cache["sig"] = sig
+        _cache["data"] = data
+    return sig, data
+
+
+def invalidate():
+    with _cache_lock:
+        _cache["sig"] = None
+        _cache["data"] = None
+
+
 def load():
     cfg = dict(DEFAULTS)
-    if PATH.exists():
-        try:
-            cfg.update(json.loads(PATH.read_text()))
-        except ValueError:  # board #718 why-guard-half-written-file
-            pass
-    return cfg
+    _, data = _read_file()
+    if data is not None:
+        cfg.update(data)
+    return copy.deepcopy(cfg)
 
 
 _lock = threading.Lock()
@@ -138,3 +166,4 @@ def save(cfg):
             except ValueError:
                 atomic.write_text(PATH.with_name(PATH.name + ".broken"), PATH.read_text(errors="replace"))
         atomic.write_text(PATH, json.dumps(cfg, indent=2), 0o600)
+        invalidate()

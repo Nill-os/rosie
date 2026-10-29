@@ -66,7 +66,28 @@ def _summary(older: list[dict], summarize) -> str:
     return fallback(older)
 
 
+SOFT_CAP = 1500
+KEEP_TOOLS = 3
+STUB = "[old tool result trimmed: {n} chars]"
+
+
+def prune(history: list[dict], keep_tools: int = KEEP_TOOLS, soft_cap: int = SOFT_CAP) -> list[dict]:
+    idx = [i for i, m in enumerate(history) if m.get("role") == "tool"]
+    fresh = set(idx[-keep_tools:]) if keep_tools > 0 else set()
+    out, changed = [], False
+    for i, m in enumerate(history):
+        text = _text(m)
+        if m.get("role") == "tool" and i not in fresh and len(text) > soft_cap and not text.startswith(STUB[:20]):
+            m = {**m, "content": STUB.format(n=len(text)) + " " + _first_line(text, 200)}
+            changed = True
+        out.append(m)
+    return out if changed else history
+
+
 def compress(history: list[dict], keep_recent: int = 8, max_chars: int = 12000, summarize=None) -> list[dict]:
+    if _chars(history) <= max_chars:
+        return history
+    history = prune(history)
     if _chars(history) <= max_chars:
         return history
     i = _boundary(history, keep_recent)

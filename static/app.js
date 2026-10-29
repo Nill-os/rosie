@@ -98,7 +98,7 @@ const NAV = [['-', 'My day'], ['home', '⌂', 'Home'], ['inbox', '🔔', 'Inbox'
   ['-', 'Rosie and helpers'], ['agentzero', '🧠', 'Agent Zero'], ['corner', '❀', "Rosie's corner"], ['memory', '◈', 'Memory'], ['skills', '✦', 'Skills'], ['vector', '🤖', 'Vector'],
   ['-', 'System'], ['deck', '◫', 'System'],
   ['-', ''], ['settings', '⚙', 'Settings']];
-const TABS = { brief: [['brief', 'Daily Brief'], ['paper', 'Morning Paper']], memory: [['memory', 'Memory'], ['graph', 'Memory graph']],
+const TABS = { home: [['home', 'Home'], ['chats', 'Chats']], brief: [['brief', 'Daily Brief'], ['paper', 'Morning Paper']], memory: [['memory', 'Memory'], ['graph', 'Memory graph']],
   deck: [['deck', 'Agent Deck'], ['servers', 'Servers'], ['tokens', 'Tokens'], ['terminal', 'Terminal']] };
 const TAB_GROUP = {}; for (const [g, list] of Object.entries(TABS)) for (const [k] of list) TAB_GROUP[k] = g;
 let menuLayout = [];
@@ -1742,16 +1742,39 @@ function newChat(space) {
   classicOnce = !!space;
   resetLog(); setChatHeader(); go('#/chat'); setTimeout(() => t.focus(), 50);
 }
+function replyExtras(r) {
+  if (r.ask) askCard(r.ask);
+  if (r.suggestions && r.suggestions.length) suggestChips(r.suggestions);
+  if (r.reply && !(r.pending || []).length) reactBar();
+}
+function dropExtras() { document.querySelectorAll('.chips,.react,.askcard').forEach((x) => x.remove()); }
+function suggestChips(list) {
+  const d = h('div', { class: 'chips' }, ...list.map((s) => h('button', { type: 'button', class: 'chip', onclick: () => { dropExtras(); send(s); } }, s)));
+  log.appendChild(d); log.scrollTop = log.scrollHeight;
+}
+function askCard(a) {
+  const d = h('div', { class: 'askcard' }, h('b', {}, a.question), h('div', { class: 'b' }, ...(a.options || []).map((o) => h('button', { type: 'button', onclick: () => { d.remove(); send(o); } }, o))));
+  log.appendChild(d); log.scrollTop = log.scrollHeight;
+}
+function reactBar() {
+  if (!chatId) return;
+  const cid = chatId;
+  const mk = (v, label, tip) => h('button', { type: 'button', class: 'rx', title: tip, 'aria-label': tip, onclick: async (e) => {
+    try { await api('/api/chats/' + cid + '/react', { value: v }); d.querySelectorAll('.rx').forEach((x) => x.classList.remove('on')); e.currentTarget.classList.add('on'); } catch (x) {}
+  } }, label);
+  const d = h('div', { class: 'react' }, mk(1, '\u{1F44D}', 'Good reply'), mk(-1, '\u{1F44E}', 'Bad reply'));
+  log.appendChild(d); log.scrollTop = log.scrollHeight;
+}
 function confirmBox(p) {
-  const d = h('div', { class: 'conf' }, h('b', {}, 'Please confirm'), h('div', {}, p.summary), h('div', { class: 'b' },
+  const d = h('div', { class: 'conf' }, h('b', {}, 'Please confirm'), h('div', {}, p.summary), p.risk_text ? h('div', { class: 'muted' }, p.risk_text) : null, h('div', { class: 'b' },
     h('button', { class: 'yes', type: 'button', onclick: async () => { try { const r = await api('/api/confirm', { token: p.token }); d.remove(); add(r.status === 'done' ? '✅ Done.' : '⚠️ ' + (r.message || 'Failed'), 'bot'); } catch (e) { add('⚠️ Could not reach the server. The card is still here: try again.', 'bot'); } } }, 'Yes, do it'),
     h('button', { class: 'no', type: 'button', onclick: async () => { try { await api('/api/cancel', { token: p.token }); d.remove(); add('Cancelled. Nothing changed.', 'bot'); } catch (e) { add('⚠️ Could not reach the server. The card is still here: try again.', 'bot'); } } }, 'No')));
   log.appendChild(d); log.scrollTop = log.scrollHeight;
 }
 async function send(text) {
   if (text.trim().startsWith('/')) return handleSlash(text.trim());
-  add(text, 'me'); const w = add('Thinking…', 'bot dim');
-  try { const r = await api('/api/chat', { text, mode: 'auto', voice: false }); w.remove(); add(r.reply || '(no answer)', 'bot'); (r.pending || []).forEach(confirmBox); }
+  dropExtras(); add(text, 'me'); const w = add('Thinking…', 'bot dim');
+  try { const r = await api('/api/chat', { text, mode: 'auto', voice: false }); w.remove(); add(r.reply || '(no answer)', 'bot'); (r.pending || []).forEach(confirmBox); replyExtras(r); }
   catch (e) { w.remove(); add(DOWN, 'bot'); }
 }
 async function whatnow() { const w = add('Checking…', 'bot dim'); try { const r = await J('/api/whatnow'); w.remove(); add(r.text, 'bot'); } catch (e) { w.remove(); add(DOWN, 'bot'); } }
@@ -1986,6 +2009,34 @@ VIEWS.servers = async () => {
   };
   show(h('div', { class: 'muted' }, 'Checking your servers…'));
   draw(true);
+};
+VIEWS.chats = async () => {
+  setHeader('Chats', [btn('＋ New chat', 'sm pur', () => newChat())]);
+  let q = '', space = '', timer = null;
+  const list = h('div', {}), count = h('span', { class: 'muted' });
+  const search = h('input', { type: 'search', placeholder: 'Search every chat…', 'aria-label': 'Search chats', style: 'flex:1;min-width:160px' });
+  const pick = h('select', { 'aria-label': 'Filter by space' });
+  const draw = async () => {
+    const r = await J('/api/chats/all?q=' + encodeURIComponent(q) + '&space=' + encodeURIComponent(space));
+    pick.replaceChildren(h('option', { value: '' }, 'All spaces'), h('option', { value: '__none__' }, 'Inbox (no space)'), ...(r.spaces || []).map((s) => h('option', { value: s }, s)));
+    pick.value = space;
+    count.textContent = `${r.chats.length} chat${r.chats.length === 1 ? '' : 's'} · saved in ${r.db}`;
+    let day = '';
+    list.replaceChildren(...(r.chats.length ? r.chats.flatMap((c) => {
+      const d = c.updated.slice(0, 10), out = [];
+      if (d !== day) { day = d; out.push(h('div', { class: 'dayhead' }, d)); }
+      out.push(h('div', { class: 'card', style: 'display:flex;gap:10px;align-items:center;margin-top:6px' },
+        h('div', { style: 'flex:1;min-width:0;cursor:pointer', role: 'link', tabindex: '0', onclick: () => go('#/chat/' + c.id), onkeydown: (e) => { if (e.key === 'Enter') go('#/chat/' + c.id); } },
+          h('div', {}, c.title || 'New chat', c.space ? h('span', { class: 'muted' }, '  [' + c.space + ']') : ''),
+          h('div', { class: 'muted', style: 'white-space:nowrap;overflow:hidden;text-overflow:ellipsis' }, `${c.count} message${c.count === 1 ? '' : 's'} · ${c.updated.slice(11, 16)}` + (c.last ? ' · ' + c.last : ''))),
+        btn('🗑', 'sm bad', async () => { if (!confirm('Delete this chat for good?')) return; await del('/api/chats/' + c.id); refreshSide(); keepScroll(draw); })));
+      return out;
+    }) : [h('div', { class: 'muted', style: 'margin-top:12px' }, q || space ? 'No chat matches.' : 'No chats yet.')]));
+  };
+  search.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(() => { q = search.value; draw(); }, 250); });
+  pick.addEventListener('change', () => { space = pick.value; draw(); });
+  show(h('div', { class: 'pagehead' }, h('h2', {}, 'Chats'), count), h('div', { style: 'display:flex;gap:8px;flex-wrap:wrap' }, search, pick), list);
+  await draw();
 };
 let tokensPollT = null;
 const tkFmt = (n) => n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e4 ? Math.round(n / 1e3) + 'k' : n >= 1e3 ? (n / 1e3).toFixed(1) + 'k' : String(Math.round(n));

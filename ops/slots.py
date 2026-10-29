@@ -83,6 +83,48 @@ def log_event(kind: str, **kw):
         f.write(json.dumps({"t": time.strftime("%Y-%m-%dT%H:%M:%S"), "kind": kind, **kw}) + "\n")
 
 
+NOTES_LOG = Path.home() / "Documents" / "Notes" / "Rosie update log.md"
+
+
+def update_log_entries() -> list:
+    try:
+        return [json.loads(l) for l in (OPS / "update_log.jsonl").read_text().splitlines() if l.strip()]
+    except OSError:
+        return []
+
+
+def record_update(res: dict, secs: list):
+    import statistics
+    ev = res.get("eval", {})
+    entry = {"at": time.strftime("%Y-%m-%d %H:%M"), "slot": res["slot"], "head": res["head"], "ok": res["ok"],
+             "tests": res["tests"]["summary"][:90], "smoke": res["smoke"]["ok"], "eval": ev.get("score", "skipped"),
+             "failed": [f[:70] for f in ev.get("failed", [])],
+             "median_s": round(statistics.median(secs), 1) if secs else None, "mean_s": round(statistics.mean(secs), 1) if secs else None,
+             "slowest_s": round(max(secs), 1) if secs else None}
+    prev = [e for e in update_log_entries() if e.get("ok") and e.get("eval") != "skipped"]
+    entry["vs_previous"] = None
+    if prev and secs:
+        last = prev[-1]
+        a, b = int(str(entry["eval"]).split("/")[0]), int(str(last["eval"]).split("/")[0])
+        entry["vs_previous"] = {"head": last["head"], "score_change": a - b,
+                                "median_change_s": round(entry["median_s"] - last["median_s"], 1) if last.get("median_s") is not None else None}
+    OPS.mkdir(parents=True, exist_ok=True)
+    with (OPS / "update_log.jsonl").open("a") as f:
+        f.write(json.dumps(entry) + "\n")
+    try:
+        NOTES_LOG.parent.mkdir(parents=True, exist_ok=True)
+        if not NOTES_LOG.exists():
+            NOTES_LOG.write_text("# Rosie update log\n\nOne row per stage check. Better means a higher eval score, a lower median time, and no new failed cases.\n\n"
+                                 "| When | Slot | Commit | Result | Eval | Median s | Slowest s | vs previous | Failed cases |\n|---|---|---|---|---|---|---|---|---|\n")
+        v = entry["vs_previous"]
+        change = "first row" if v is None else f"{v['score_change']:+d} score, {v['median_change_s']:+} s median vs {v['head']}" if v["median_change_s"] is not None else f"{v['score_change']:+d} score vs {v['head']}"
+        with NOTES_LOG.open("a") as f:
+            f.write(f"| {entry['at']} | {entry['slot']} | {entry['head']} | {'passed' if entry['ok'] else 'FAILED'} | {entry['eval']} | "
+                    f"{entry['median_s'] if entry['median_s'] is not None else 'n/a'} | {entry['slowest_s'] if entry['slowest_s'] is not None else 'n/a'} | {change} | {'; '.join(entry['failed']) or 'none'} |\n")
+    except OSError:
+        pass
+
+
 def events(n=10) -> list:
     try:
         return [json.loads(l) for l in (OPS / "events.jsonl").read_text().splitlines()[-n:]]
@@ -298,6 +340,7 @@ def _stage(idle, with_eval):
     res["tests"] = {"ok": t.returncode == 0, "summary": last}
     res["smoke"] = smoke(idle) if res["tests"]["ok"] else {"ok": False, "skipped": "tests failed"}
     res["eval"] = {"ok": True, "skipped": True}
+    secs = []
     if with_eval and res["tests"]["ok"] and res["smoke"]["ok"] and (SLOT[idle] / "tests" / "model_eval.py").exists():
         import re
         base = int(load_state().get("eval_baseline", 12))
@@ -307,6 +350,8 @@ def _stage(idle, with_eval):
             m = re.search(r"-> (\d+)/(\d+) correct", e.stdout)
             p1, t1 = (int(m.group(1)), int(m.group(2))) if m else (0, 0)
             runs.append(p1)
+            if p1 > passed or not secs:
+                secs = [float(x) for x in re.findall(r"^\s*(?:PASS|FAIL)\s+\S+\s+([\d.]+)s", e.stdout, re.M)]
             if p1 > passed or not failed:
                 failed = [ln.strip()[:90] for ln in e.stdout.splitlines() if ln.strip().startswith("FAIL")]
             if p1 > passed:
@@ -317,6 +362,7 @@ def _stage(idle, with_eval):
     res["ok"] = res["tests"]["ok"] and res["smoke"]["ok"] and res["eval"]["ok"]
     res["finished"] = time.time()
     save_state(last_stage=res)
+    record_update(res, secs if with_eval else [])
     log_event("stage", slot=idle, head=res["head"], ok=res["ok"])
     _board_call("post", f"stage check of slot {idle} ({res['head']}) {'passed' if res['ok'] else 'FAILED'}: tests {res['tests']['summary'][:80]}, "
                 f"smoke {'ok' if res['smoke']['ok'] else 'failed'}, eval {res['eval'].get('score', 'skipped')}", "done" if res["ok"] else "blocked")

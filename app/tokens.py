@@ -364,8 +364,8 @@ def job(now, cfg, add=None, background=True):
                 day = now.strftime("%Y-%m-%d")
                 add("system", "Claude token use: " + rep["flags"][0]["text"].split(":")[0][:100], "\n".join(f["text"] for f in rep["flags"])[:580], "#/tokens",
                     key=f"tokens:{day}", now=now, desktop=False)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"token flag inbox post failed: {type(e).__name__}: {e}")
     if not background:
         run()
         return None

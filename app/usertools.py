@@ -6,11 +6,13 @@ import sys
 import time
 from pathlib import Path
 
+import policy
+
 ROOT = Path(__file__).resolve().parent.parent
 DIR = ROOT / "data" / "user_tools"
 SITE = DIR / "site"  # board #787 why-packages-kept-apart
 TIMEOUT = 120
-FORBIDDEN = re.compile(r"(\.ssh|\.gnupg|\.aws|\.kube|\.password-store|\.mozilla|google-chrome|chromium|keyrings|\.claude|\.codex|\.gemini|\.config[/\\](gcloud|gh)|[/\\]secrets\b|appdata[/\\]|session_key|access_code|google_token|google_client|gmail_\w+\.json|id_rsa|id_ed25519|\.netrc|\.git-credentials|\.env\b|wallet)", re.I)
+FORBIDDEN = policy.matcher("code")
 NAME = re.compile(r"^[a-z][a-z0-9_]{2,40}$")
 PKG = re.compile(r"^[A-Za-z0-9_.\-\[\]=<>~! ,]{1,120}$")
 

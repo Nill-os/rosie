@@ -2,19 +2,16 @@ import os
 import re
 from pathlib import Path
 
+import policy
+
 ROOT = Path(__file__).resolve().parent.parent
 HOME = Path(os.environ.get("ASSISTANT_MCP_HOME") or Path.home()).resolve()
 MAX_BYTES = 200_000
 
 # board #729 safety-credential-paths-blocked
-DENY_PARTS = {".ssh", ".gnupg", ".aws", ".kube", ".azure", ".docker", ".password-store", ".mozilla", ".thunderbird", ".pki", ".claude", ".codex", ".gemini", ".opencode",
-              ".gcloud", ".keyrings", "keyrings", "brave-browser", "braveSoftware", "google-chrome", "chromium", "signal", "slack", "discord", "1password", "bitwarden", ".trash",
-              "secrets", "agent-zero"}
-DENY_PREFIXES = ("appdata", ".config", ".local/share",
-                 ".config/discord", ".config/Slack", ".local/share/keyrings", "snap/firefox", ".cache", ".mozilla")
-DENY_NAME = re.compile(r"^(id_(rsa|dsa|ecdsa|ed25519)(\..*)?|.*\.(pem|key|p12|pfx|kdbx|keystore|jks|ppk|gpg|asc)|\.env(\..*)?|\.netrc|\.npmrc|\.pypirc|\.git-credentials|"
-                       r"\.(bash|zsh|python|psql|mysql|node_repl)_history|\.lesshst|credentials(\.json)?|.*(token|secret|apikey|api_key)s?.*\.(json|txt|env|ini|yaml|yml)|id\.json|"
-                       r"wallet.*|access_code|session_key|google_client\.json|cookies\.sqlite|login data|logins\.json|key[34]\.db|\.claude\.json(\.backup.*)?)$", re.I)
+DENY_PARTS = policy.DENY_PARTS
+DENY_PREFIXES = policy.DENY_PREFIXES
+DENY_NAME = policy.DENY_NAME
 SECRET_PATTERNS = [(re.compile(r"://[^/\s:@]+:[^@\s/]{3,}@"), "://[REDACTED url credentials]@"), (re.compile(r"AIza[0-9A-Za-z_\-]{30,}"), "[REDACTED google key]"), (re.compile(r"\bsk-[A-Za-z0-9_\-]{20,}"), "[REDACTED api key]"),
                    (re.compile(r"\bgh[pousr]_[A-Za-z0-9]{30,}"), "[REDACTED github token]"), (re.compile(r"\bxox[abprs]-[A-Za-z0-9\-]{10,}"), "[REDACTED slack token]"),
                    (re.compile(r"\bAKIA[0-9A-Z]{16}\b"), "[REDACTED aws key]"), (re.compile(r"\bya29\.[A-Za-z0-9_\-]{20,}"), "[REDACTED google oauth]"),

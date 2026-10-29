@@ -5,6 +5,7 @@ import secrets
 import time
 
 import gcal
+import policy
 from config import load
 
 _pending: dict[str, dict] = {}  # board #700 why-pending-lost-on-restart
@@ -32,7 +33,9 @@ PENDING_SECONDS = 600  # board #700 safety-card-expires
 def _queue(kind, summary, payload):
     token = secrets.token_urlsafe(8)
     _pending[token] = {"kind": kind, "summary": summary, "payload": payload, "at": time.time()}
-    return {"status": "needs_confirmation", "token": token, "summary": summary}
+    tool = payload.get("name", kind) if isinstance(payload, dict) else kind
+    label = policy.risk("exec", summary, tool)
+    return {"status": "needs_confirmation", "token": token, "summary": summary, "risk": label, "risk_text": f"{label['level']} risk: {label['reason']}"}
 
 
 _executors: dict = {}

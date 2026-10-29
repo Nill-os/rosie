@@ -488,3 +488,14 @@ html[data-theme="aurora"] .pp-wrap,html[data-theme="aurora"] .gstage{border-radi
 .mg-btns .btn:focus-visible,.mg-name input:focus-visible,.mg-btns select:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
 .mg-empty{padding:8px;border:1px dashed var(--line);border-radius:6px}
 .mg-foot{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:4px}
+.chips,.react{align-self:flex-start;display:flex;flex-wrap:wrap;gap:8px;max-width:94%}
+.chip{border:1px solid var(--line);background:var(--card);color:var(--acc);border-radius:999px;min-height:34px;padding:0 14px;font-size:calc(13px*var(--ts,1));cursor:pointer;backdrop-filter:blur(8px);transition:background .12s,color .12s}
+.chip:hover{background:var(--acc);color:#000}
+.react .rx{border:1px solid var(--line);background:transparent;border-radius:999px;min-width:34px;min-height:30px;font-size:calc(14px*var(--ts,1));cursor:pointer;opacity:.6;transition:opacity .12s,background .12s}
+.react .rx:hover,.react .rx.on{opacity:1;background:var(--card)}
+.react .rx.on{border-color:var(--acc)}
+.askcard{align-self:stretch;max-width:100%;background:var(--card);border:1px solid var(--acc);border-radius:10px;padding:14px;backdrop-filter:blur(10px)}
+.askcard>b{color:var(--acc)}
+.askcard .b{display:flex;flex-wrap:wrap;gap:10px;margin-top:12px}
+.askcard .b button{flex:1 1 120px;min-height:40px;border:2px solid var(--acc);background:var(--bg);color:var(--acc);border-radius:6px;font-weight:700;cursor:pointer}
+.askcard .b button:hover{background:var(--acc);color:#000}

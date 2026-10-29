@@ -9,12 +9,13 @@ from pathlib import Path
 
 import config
 import pc_tools
+import policy
 
 HOME = Path.home()
 SOCK = "assistant"
 CONF = Path(__file__).resolve().parent.parent / "data" / "tmux.conf"
 TMUX = shutil.which("tmux") or str(HOME / ".local" / "bin" / "tmux")
-FORBIDDEN = re.compile(r"(--dangerously[\w-]*|--yolo\b|(?<!\w)-y(?!\w)|--full-auto\b|--auto-approve\b|bypass[-_ ]?permissions|--approval-mode[= ]+yolo|--no-sandbox\b|--sandbox[= ]+danger-full-access)", re.I)
+FORBIDDEN = policy.matcher("exec")
 AGENT_BINS = ("claude", "codex", "gemini", "opencode")
 
 

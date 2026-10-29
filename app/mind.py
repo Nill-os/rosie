@@ -14,6 +14,7 @@ import config
 import injectscan
 import testguard
 import timefmt
+import util
 
 ROOT = Path(__file__).resolve().parent.parent
 DB = ROOT / "data" / "mind.db"
@@ -26,6 +27,7 @@ LINK_MIN = 0.7
 DEDUP_MIN = 0.97
 OBS_MAX_CHARS = 400
 FACT_SAME_MIN = 0.98
+TOKEN_SAME_MIN = 0.92
 CONSOLIDATE_BATCH = 6
 MAX_PREDICT = 2048
 ROUND_S = 30
@@ -75,14 +77,17 @@ def _db():
     if str(DB) not in _migrated:
         if "trust" not in {r[1] for r in c.execute("PRAGMA table_info(units)")}:
             c.execute("ALTER TABLE units ADD COLUMN trust TEXT DEFAULT 'auto'")
+        if "pinned" not in {r[1] for r in c.execute("PRAGMA table_info(units)")}:
+            c.execute("ALTER TABLE units ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0")
+        if "recalls" not in {r[1] for r in c.execute("PRAGMA table_info(units)")}:
+            c.execute("ALTER TABLE units ADD COLUMN recalls INTEGER NOT NULL DEFAULT 0")
         _migrated.add(str(DB))
     for name, q in MODELS.items():
         c.execute("INSERT OR IGNORE INTO models(name, question) VALUES(?, ?)", (name, q))
     return c
 
 
-def _now() -> dt.datetime:
-    return dt.datetime.now().astimezone()
+_now = util.now_dt
 
 
 def _iso(t: dt.datetime | None = None) -> str:
@@ -416,7 +421,7 @@ def add_units(facts: list[dict], source: str, mentioned_at: str, doc_id: int | N
         for f, v in zip(facts, vecs):
             same = _same_fact(c, seen_ids, seen_mat, f["kind"], f["text"], v)
             if same:
-                c.execute("UPDATE units SET mentioned_at=MAX(mentioned_at, ?) WHERE id=?", (mentioned_at, same))
+                c.execute("UPDATE units SET mentioned_at=MAX(mentioned_at, ?), recalls=recalls+1 WHERE id=?", (mentioned_at, same))
                 if same not in ids:
                     ids.append(same)
                 continue
@@ -453,9 +458,35 @@ def _digits(text: str) -> list[str]:
     return sorted(re.findall(r"\d+", text or ""))
 
 
+def _tokens(text: str) -> frozenset:
+    return frozenset(re.findall(r"[a-z0-9]+", (text or "").lower()))
+
+
+def token_similarity(a: str, b: str) -> float:
+    x, y = _tokens(a), _tokens(b)
+    if not x or not y:
+        return 0.0
+    return len(x & y) / len(x | y)
+
+
+def _same_text(c, kind: str, text: str) -> int | None:
+    want = _tokens(text)
+    if len(want) < 3 or FACT_SAME_MIN > 1:
+        return None
+    best, best_id = 0.0, None
+    for r in c.execute("SELECT id, text FROM units WHERE kind=? AND invalidated_at IS NULL", (kind,)):
+        have = _tokens(r["text"])
+        if not have or len(have) < len(want) * 0.5 or len(have) > len(want) * 2:
+            continue
+        sim = len(want & have) / len(want | have)
+        if sim > best and _digits(r["text"]) == _digits(text):
+            best, best_id = sim, r["id"]
+    return best_id if best >= TOKEN_SAME_MIN else None
+
+
 def _same_fact(c, ids_, mat, kind: str, text: str, v) -> int | None:
     if mat is None or not len(ids_):
-        return None
+        return _same_text(c, kind, text)
     sims = mat @ v
     for j in np.argsort(-sims)[:3]:
         if sims[j] < FACT_SAME_MIN:
@@ -463,7 +494,7 @@ def _same_fact(c, ids_, mat, kind: str, text: str, v) -> int | None:
         r = c.execute("SELECT kind, text FROM units WHERE id=? AND invalidated_at IS NULL", (int(ids_[j]),)).fetchone()
         if r and r["kind"] == kind and _digits(r["text"]) == _digits(text):
             return int(ids_[j])
-    return None
+    return _same_text(c, kind, text)
 
 
 def remember_now(text: str, source: str = "remember", kind: str = "world") -> int:
@@ -532,7 +563,7 @@ def _row(r, score=0.0, sim=None, arms=()) -> dict:
             "proof": r["proof_count"], "score": round(score, 5), "sim": None if sim is None else round(float(sim), 3), "arms": list(arms)}
 
 
-def recall(query: str, k: int = 8, kinds=None, today: dt.date | None = None, qvec=None) -> list[dict]:
+def recall(query: str, k: int = 8, kinds=None, today: dt.date | None = None, qvec=None, count: bool = True) -> list[dict]:
     query = (query or "").strip()[:1000]
     if not query:
         return []
@@ -589,7 +620,20 @@ def recall(query: str, k: int = 8, kinds=None, today: dt.date | None = None, qve
         s *= (1 + 0.2 * (recency - 0.5)) * (1 + 0.1 * (proof - 0.5))
         out.append(_row(r, s, simof.get(i), hits[i]))
     out.sort(key=lambda x: -x["score"])
-    return out[:k]
+    out = out[:k]
+    if count:
+        _count_recalls([o["id"] for o in out])
+    return out
+
+
+def _count_recalls(ids: list):
+    if not ids:
+        return
+    try:
+        with _lock, _db() as c:
+            c.execute("UPDATE units SET recalls=recalls+1 WHERE id IN (%s)" % ",".join("?" * len(ids)), ids)
+    except sqlite3.Error:
+        pass
 
 
 def search_tool(query: str, when: str = "") -> dict:
@@ -661,7 +705,7 @@ def consolidate_next(background: bool = True) -> bool:
     try:
         pool = {}
         for f in facts:
-            for m in recall(f["text"], k=4, kinds=("observation",)):
+            for m in recall(f["text"], k=4, kinds=("observation",), count=False):
                 pool[m["id"]] = m
         with _db() as c:
             obs = {r["id"]: dict(r) for r in c.execute("SELECT id, text, proof_count, mentioned_at, source_ids FROM units WHERE id IN (%s)"
@@ -940,7 +984,7 @@ def repair_outside() -> int:
     for cid, day in sorted(days):
         with _db() as c:
             doc = c.execute("SELECT * FROM docs WHERE ref=?", (f"backfill:chat:{cid}:{day}",)).fetchone()
-            units = [u["id"] for u in c.execute("SELECT id FROM units WHERE doc_id=? AND invalidated_at IS NULL", (doc["id"],))] if doc else []
+            units = [u["id"] for u in c.execute("SELECT id FROM units WHERE doc_id=? AND invalidated_at IS NULL AND pinned=0", (doc["id"],))] if doc else []
         if not doc or "\nRosie: " not in "\n" + doc["text"]:
             continue
         for u in units:
@@ -967,7 +1011,7 @@ def repair_briefs() -> int:
         if drop_mail(doc["text"]) == doc["text"]:
             continue
         with _db() as c:
-            units = [u["id"] for u in c.execute("SELECT id FROM units WHERE doc_id=? AND invalidated_at IS NULL", (doc["id"],))]
+            units = [u["id"] for u in c.execute("SELECT id FROM units WHERE doc_id=? AND invalidated_at IS NULL AND pinned=0", (doc["id"],))]
         for u in units:
             forget(u, "it came from a brief's mail section")
         with _db() as c:
@@ -1067,11 +1111,22 @@ def status() -> dict:
             "last_error": state["last_error"], "about_owner_refreshed": m["refreshed_at"] if m else None, "line": line}
 
 
-def forget(unit_id: int, reason: str = "the owner asked") -> dict:
+def pin(unit_id: int, on: bool = True) -> dict:
     with _db() as c:
         r = c.execute("SELECT id, text FROM units WHERE id=? AND invalidated_at IS NULL", (int(unit_id),)).fetchone()
         if not r:
             return {"error": "No such memory."}
+        c.execute("UPDATE units SET pinned=? WHERE id=?", (1 if on else 0, r["id"]))
+    return {"status": "pinned" if on else "unpinned", "id": r["id"], "text": r["text"]}
+
+
+def forget(unit_id: int, reason: str = "the owner asked", force: bool = False) -> dict:
+    with _db() as c:
+        r = c.execute("SELECT id, text, pinned FROM units WHERE id=? AND invalidated_at IS NULL", (int(unit_id),)).fetchone()
+        if not r:
+            return {"error": "No such memory."}
+        if r["pinned"] and not force:
+            return {"error": "That memory is pinned.", "pinned": True, "id": r["id"]}
         c.execute("UPDATE units SET invalidated_at=?, invalid_reason=? WHERE id=?", (_iso(), reason[:200], r["id"]))
         for o in c.execute("SELECT id, source_ids FROM units WHERE kind='observation' AND invalidated_at IS NULL").fetchall():
             src = json.loads(o["source_ids"] or "[]")
@@ -1116,7 +1171,7 @@ def forget_chat(chat_id) -> int:
             refs = (f"chat:{chat_id}:%", f"backfill:chat:{chat_id}:%", f"backfill2:chat:{chat_id}:%")
             docs = [r["id"] for r in c.execute("SELECT id FROM docs WHERE ref LIKE ? OR ref LIKE ? OR ref LIKE ?", refs)]
             units = [r["id"] for r in c.execute("SELECT id FROM units WHERE invalidated_at IS NULL AND doc_id IN (%s)" % ",".join("?" * len(docs)), docs)] if docs else []
-            gone = [r["id"] for r in c.execute("SELECT id FROM units WHERE doc_id IN (%s)" % ",".join("?" * len(docs)), docs)] if docs else []
+            gone = [r["id"] for r in c.execute("SELECT id FROM units WHERE pinned=0 AND doc_id IN (%s)" % ",".join("?" * len(docs)), docs)] if docs else []
         for u in units:
             forget(u, "its chat was deleted")
         scrub(gone, "its chat was deleted")
@@ -1129,11 +1184,11 @@ def forget_note(note_id: int, text: str = "") -> int:
     with _lock:
         with _db() as c:
             docs = [r["id"] for r in c.execute("SELECT id FROM docs WHERE ref=?", (f"backfill:note:{note_id}",))]
-            units = [r["id"] for r in c.execute("SELECT id FROM units WHERE source=?", (f"remember:{note_id}",))]
+            units = [r["id"] for r in c.execute("SELECT id FROM units WHERE pinned=0 AND source=?", (f"remember:{note_id}",))]
             if text:
-                units += [r["id"] for r in c.execute("SELECT id FROM units WHERE source='remember' AND text=?", (" ".join(text.split())[:1000],))]
+                units += [r["id"] for r in c.execute("SELECT id FROM units WHERE pinned=0 AND source='remember' AND text=?", (" ".join(text.split())[:1000],))]
             if docs:
-                units += [r["id"] for r in c.execute("SELECT id FROM units WHERE doc_id IN (%s)" % ",".join("?" * len(docs)), docs)]
+                units += [r["id"] for r in c.execute("SELECT id FROM units WHERE pinned=0 AND doc_id IN (%s)" % ",".join("?" * len(docs)), docs)]
             c.execute("DELETE FROM docs WHERE ref=?", (f"backfill:note:{note_id}",))
         for u in set(units):
             forget(u, "the owner deleted the note")

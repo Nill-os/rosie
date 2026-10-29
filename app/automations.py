@@ -319,6 +319,30 @@ def job_tokens(now, cfg):
 
 
 JOBS.insert(JOBS.index(job_mail), job_tokens)
+
+
+def job_schedules(now, cfg):
+    import schedules
+    schedules.job(now, cfg)
+
+
+_standing = {"seen": None}
+
+
+def job_standing(now, cfg):
+    import standing
+    items = inbox.list_items(60)
+    top = max((i["id"] for i in items), default=0)
+    if _standing["seen"] is None:
+        _standing["seen"] = top
+        return
+    for i in sorted((i for i in items if i["id"] > _standing["seen"] and i["kind"] != "standing"), key=lambda i: i["id"]):
+        standing.check_event("mail" if i["kind"] == "mail" else "inbox", f"{i['title']} {i['body']}", now)
+    _standing["seen"] = max(_standing["seen"], top)
+
+
+JOBS.insert(JOBS.index(job_mail), job_schedules)
+JOBS.insert(JOBS.index(job_mail), job_standing)
 JOBS.insert(0, job_model)
 
 

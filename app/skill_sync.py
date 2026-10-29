@@ -381,8 +381,8 @@ def _tell_owner(name: str, src: dict, digest: str):
         inbox.add("system", f"Skill waiting for your OK: {name}", f"From {src['origin'].split(':')[0]} (read it first: {where}). It reaches Claude Code only "
                   f"after you approve this exact version: python3 ~/assistant/app/skill_sync.py approve {name} {digest}", "#/skills",
                   key=f"skill-ok:{name}:{digest}", desktop=False)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"skill approval inbox post failed: {type(e).__name__}: {e}")
 
 
 def approve(name: str, version: str = "") -> dict:
