@@ -55,6 +55,7 @@ def fresh(monkeypatch, tmp_path):
     monkeypatch.setattr(cg, "state", {"on": False, "why": "", "checked": 0.0, "waiting": "", "doing": "", "added": 0, "last_add": None,
                                       "last_error": "", "secs_per": None})
     monkeypatch.setattr(cg, "_graph", {"g": None})
+    monkeypatch.setattr(cg, "FAST", False)
     monkeypatch.setattr(cg, "_counts", {"t": 0.0, "v": None})
     monkeypatch.setattr(cg, "_ollama_transport", httpx.MockTransport(lambda r: httpx.Response(500, text="no model in tests")))
     assert tmp_path in cg.SECRET.parents
@@ -641,3 +642,84 @@ def test_a_board_post_that_keeps_crashing_the_database_is_left(graph, monkeypatc
     graph.fail = ConnectionRefusedError("gone")
     ag.step()
     assert tried and "stopped while adding" in tried[0]
+
+
+@pytest.fixture
+def fast(graph, monkeypatch):
+    import graph_batch
+    monkeypatch.setattr(cg, "FAST", True)
+    graph.driver = object()
+    wrote, asked = [], []
+
+    async def load_names(self):
+        self.names = {}
+
+    async def write(self, it, ext):
+        wrote.append((it["key"], ext))
+        return f"ep-{it['key']}"
+
+    monkeypatch.setattr(graph_batch.Writer, "load_names", load_names)
+    monkeypatch.setattr(graph_batch.Writer, "write", write)
+    monkeypatch.setattr(graph_batch, "_writer", {"w": None, "driver": None})
+    graph.wrote, graph.asked = wrote, asked
+    return graph
+
+
+def _answer(batch_text, drop=()):
+    keys = re.findall(r"### key: (\S+)", batch_text)
+    return json.dumps({"pieces": [{"key": k, "entities": [{"name": "A", "summary": "s"}], "facts": []} for k in keys if k not in drop]})
+
+
+def test_fast_path_adds_a_whole_batch_with_one_model_call(fast, monkeypatch):
+    _seed()
+    calls = []
+
+    async def chat(messages, fmt, predict=0, temperature=0.0, limit=0):
+        calls.append((fmt, predict, limit))
+        return _answer(messages[-1]["content"])
+
+    monkeypatch.setattr(cg, "ollama_chat", chat)
+    added = cg.step()
+    assert added == len(fast.wrote) >= 2
+    assert len(calls) == 1 and calls[0][0]["required"] == ["pieces"] and calls[0][2] >= 4096
+    assert fast.added == []
+    with cg._db() as db:
+        assert db.execute("SELECT COUNT(*) FROM graph_items WHERE done_at IS NOT NULL").fetchone()[0] == added
+
+
+def test_fast_path_splits_a_batch_whose_answer_is_not_json(fast, monkeypatch):
+    _seed()
+    sizes = []
+
+    async def chat(messages, fmt, predict=0, temperature=0.0, limit=0):
+        n = len(re.findall(r"### key:", messages[-1]["content"]))
+        sizes.append(n)
+        if n > 1:
+            return "{not json"
+        return _answer(messages[-1]["content"])
+
+    monkeypatch.setattr(cg, "ollama_chat", chat)
+    added = cg.step()
+    assert added == len(fast.wrote) >= 2
+    assert sizes[0] > 1 and sizes[-1] == 1
+
+
+def test_fast_path_charges_a_try_for_a_piece_the_model_left_out(fast, monkeypatch):
+    _seed()
+    first = cg.pending(1)[0]["key"]
+
+    async def chat(messages, fmt, predict=0, temperature=0.0, limit=0):
+        return _answer(messages[-1]["content"], drop=(first,))
+
+    monkeypatch.setattr(cg, "ollama_chat", chat)
+    cg.step()
+    with cg._db() as db:
+        row = db.execute("SELECT tries, done_at FROM graph_items WHERE key=?", (first,)).fetchone()
+    assert row["tries"] == 1 and not row["done_at"]
+    assert first not in [k for k, _ in fast.wrote]
+
+
+def test_fast_path_waits_when_the_gpu_is_busy(fast, monkeypatch):
+    _seed()
+    monkeypatch.setattr(cg, "wait_reason", lambda now=None: "The GPU is busy.")
+    assert cg.step() == 0 and cg.state["waiting"] == "The GPU is busy." and fast.wrote == []

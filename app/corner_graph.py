@@ -29,6 +29,7 @@ EMBED_DIM = 768
 MAX_PREDICT = 2048
 RUNAWAY_SPACES = 100
 RETRY_TEMPERATURE = 0.4
+FAST = os.environ.get("ROSIE_GRAPH_FAST", "on") != "off"
 BATCH = 4
 ROUND_S = 60
 BACKLOG_ROUND_S = 5
@@ -108,14 +109,14 @@ def _one_at_a_time() -> asyncio.Semaphore:
     return s
 
 
-async def ollama_chat(messages: list[dict], fmt, predict: int = MAX_PREDICT, temperature: float = 0.0) -> str:
+async def ollama_chat(messages: list[dict], fmt, predict: int = MAX_PREDICT, temperature: float = 0.0, limit: int = MAX_PREDICT) -> str:
     import corner_browse as cb
     async with _one_at_a_time():
         why = wait_reason()
         if why:
             raise OwnerBusy(why)
         body = {"model": cb.MODEL, "stream": True, "think": False, "format": fmt, "keep_alive": cb.KEEP_ALIVE,
-                "options": {**ctxsize.options(cb.MODEL), "temperature": temperature, "num_predict": int(min(predict or MAX_PREDICT, MAX_PREDICT))},
+                "options": {**ctxsize.options(cb.MODEL), "temperature": temperature, "num_predict": int(min(predict or MAX_PREDICT, limit))},
                 "messages": messages}
         asked, text = time.time(), ""
         async with httpx.AsyncClient(transport=_ollama_transport, timeout=httpx.Timeout(600, connect=5)) as c:
@@ -492,6 +493,9 @@ def _text_type():
 
 
 def step(now: dt.datetime | None = None) -> int:
+    if FAST:
+        import graph_batch
+        return graph_batch.step(now)
     if not ready():
         return 0
     added = 0
@@ -544,7 +548,7 @@ def _work_loop():
             added = step()
         except Exception as e:
             state["last_error"] = f"{type(e).__name__}: {_clip(e, 200)}"
-        time.sleep(BACKLOG_ROUND_S if added >= BATCH else ROUND_S)
+        time.sleep(BACKLOG_ROUND_S if added >= (3 if FAST else BATCH) else ROUND_S)
 
 
 def start():
