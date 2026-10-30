@@ -908,13 +908,16 @@ def foot_problems(pdf, page: int, answers: bool) -> list[str]:
     return out
 
 
+PINNED_NOW = dt.datetime(2026, 10, 29, 7, 0, 0, tzinfo=gcal.TZ)
+
+
 @pytest.mark.parametrize("kind,pages", [("busy", 4), ("quiet", 4), ("busy", 2), ("quiet", 2)])
 def test_every_column_is_filled_on_a_busy_and_a_quiet_day_in_real_chrome(monkeypatch, kind, pages):
     if not paper.chrome_path() or not shutil.which("pdftoppm"):
         pytest.skip("Chrome or pdftoppm (poppler-utils) isn't installed")
-    kw = (paper_fake.install_busy if kind == "busy" else paper_fake.install_quiet)(monkeypatch.setattr, NOW)
+    kw = (paper_fake.install_busy if kind == "busy" else paper_fake.install_quiet)(monkeypatch.setattr, PINNED_NOW)
     paper.save_settings({"pages": pages})
-    p = paper.build(NOW.date(), now=NOW, model=paper_fake.FakeModel(), make_pdf=True, **kw)
+    p = paper.build(PINNED_NOW.date(), now=PINNED_NOW, model=paper_fake.FakeModel(), make_pdf=True, **kw)
     st = p["status"]
     assert st["pages"] == pages and st["pdf"] == "paper.pdf" and paper.pdf_pages(paper.DIR / p["day"] / "paper.pdf") == pages
     fill = st["fill"]
