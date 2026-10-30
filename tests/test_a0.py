@@ -364,3 +364,8 @@ def test_the_step_cap_extension_ships_with_the_app_and_matches_the_setup_copy():
     from pathlib import Path
     root = Path(a0.__file__).resolve().parent.parent
     assert (root / "app/agent_zero_ext/message_loop_start/_20_step_cap.py").read_text() == (root / "ops/agent-zero/step_cap.py").read_text()
+
+
+def test_rules_keep_corner_notes_apart_from_facts_about_the_owner():
+    assert 'only "query"' in a0.RULES and "never state an owner's device" in a0.RULES
+    assert "no tool result behind it" in a0.RULES

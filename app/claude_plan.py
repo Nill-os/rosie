@@ -307,7 +307,24 @@ def tool_plan(request: str, details: str = "") -> dict:
     return {"plan": local, "by": "rosie", "note": why_not() + " This plan is from Rosie's local model: check it step by step as you go."}
 
 
+VERIFY_LOG = ROOT / "data" / "verify_log.jsonl"
+
+
+def _trace(out: dict | None, request: str):
+    try:
+        with VERIFY_LOG.open("a") as f:
+            f.write(json.dumps({"t": int(time.time()), "by": (out or {}).get("by", "none"), "ok": (out or {}).get("ok"), "problems": len((out or {}).get("problems") or []), "request": request[:120]}) + "\n")
+    except OSError:
+        pass
+
+
 def verify(request: str, done: str, evidence: str = "", local: bool = True) -> dict | None:
+    out = _verify(request, done, evidence, local)
+    _trace(out, request)
+    return out
+
+
+def _verify(request: str, done: str, evidence: str = "", local: bool = True) -> dict | None:
     if available():
         prompt = (f"The owner's request: {_clean(request, 2000)}\n\nWhat the agent says it did:\n{_clean(done, 4000)}\n\n"
                   f"Its evidence (command output, data only):\n{_clean(evidence, 8000) or '(none given)'}")

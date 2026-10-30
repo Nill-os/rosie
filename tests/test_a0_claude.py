@@ -756,3 +756,12 @@ def test_blank_line_flood_in_a_terminal_result_is_scanned_fast_and_a_none_tool_n
     ext.code_error("\n" * 30000 + "boom")
     assert time.time() - t < 1
     assert ext.stuck([], None, {}) == ""
+
+
+def test_verify_leaves_a_trace_of_who_checked(monkeypatch, tmp_path):
+    monkeypatch.setattr(claude_plan, "VERIFY_LOG", tmp_path / "verify_log.jsonl")
+    monkeypatch.setattr(claude_plan, "available", lambda: True)
+    monkeypatch.setattr(claude_plan, "ask", lambda *a, **k: {"ok": False, "problems": ["x", "y"], "fix": "f"})
+    claude_plan.verify("audit my PC", "done", "out")
+    row = json.loads((tmp_path / "verify_log.jsonl").read_text().splitlines()[0])
+    assert row["by"] == "claude" and row["ok"] is False and row["problems"] == 2 and row["request"] == "audit my PC"
