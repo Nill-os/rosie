@@ -90,16 +90,20 @@ WRITE_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["t
 
 def _state() -> dict:
     try:
-        return json.loads(STATE.read_text())
+        st = json.loads(STATE.read_text())
     except (OSError, ValueError):
         return {}
+    return st if isinstance(st, dict) else {}
 
 
 def _save(**kw):
     st = {**_state(), **kw}
     testguard.check(STATE)
-    STATE.parent.mkdir(parents=True, exist_ok=True)
-    STATE.write_text(json.dumps(st))
+    try:
+        STATE.parent.mkdir(parents=True, exist_ok=True)
+        STATE.write_text(json.dumps(st))
+    except OSError:
+        pass
 
 
 def binary() -> str:
@@ -161,7 +165,10 @@ def _run(cmd: list, prompt: str, timeout: int) -> subprocess.CompletedProcess:
 def ask(prompt: str, schema: dict | None = None, timeout: int = TIMEOUT_S, system: str | None = None):
     if not available():
         return None
-    WORKDIR.mkdir(parents=True, exist_ok=True)
+    try:
+        WORKDIR.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return None
     cmd = [binary(), "-p", "--model", MODEL, "--setting-sources", "project", "--strict-mcp-config", "--tools", "", "--no-session-persistence",
            "--system-prompt", system or RULES, "--output-format", "json"] + (["--json-schema", json.dumps(schema)] if schema else [])
     _save(last_used=time.time())
@@ -228,7 +235,7 @@ def context(days: int = 7) -> str:
 
 def _clean(text: str, n: int) -> str:
     import fsguard
-    return fsguard.redact(str(text or "")[:n])[0]
+    return fsguard.redact(str(text or ""))[0][:n]
 
 
 def plan_for_agent(request: str, found: str = "") -> dict | None:

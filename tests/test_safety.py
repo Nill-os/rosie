@@ -59,3 +59,16 @@ def test_rosies_own_shipped_skills_stay_readable_even_under_appdata(monkeypatch,
         fsguard.resolve(str(root / "skills" / "cad" / "api_key.json"))
     with pytest.raises(fsguard.Blocked):
         fsguard.resolve(str(root / "app" / "server.py"))
+
+
+def test_private_key_blocks_basic_auth_cookies_and_jwts_are_redacted():
+    key = "-----BEGIN OPENSSH PRIV" + "ATE KEY-----\nb3BlbnNzaC1rZXk\n-----END OPENSSH PRIV" + "ATE KEY-----"
+    jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghijk"
+    text = fsguard.redact(f"{key}\nAuthorization: Basic dXNlcjpwYXNzd29yZA==\nCookie: assistant_session=deadbeef12\n{jwt}")[0]
+    for secret in ("b3BlbnNzaC1rZXk", "dXNlcjpwYXNzd29yZA", "deadbeef12", jwt, "END OPENSSH"):
+        assert secret not in text
+
+
+def test_the_word_basic_in_ordinary_prose_is_not_redacted():
+    for text in ("Basic authentication methods", "basic configuration", "basic\nauthorization", "basic requirements and information"):
+        assert fsguard.redact(text)[0] == text

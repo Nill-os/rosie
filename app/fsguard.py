@@ -18,6 +18,10 @@ SECRET_PATTERNS = [(re.compile(r"://[^/\s:@]+:[^@\s/]{3,}@"), "://[REDACTED url 
                    (re.compile(r"(?i)(?<![A-Za-z0-9])[\w.-]{0,40}(password|passwd|secret|token|api[_-]?key)\w{0,20}\s*[:=]\s*['\"]?[^\s'\"]{8,}"), "[REDACTED credential]"),
                    (re.compile(r'(?i)"[^"\n]{0,40}(?:password|passwd|secret|token|api[_-]?key|authorization)[^"\n]{0,40}"\s*:\s*"[^"\n]{8,}"'), '"[REDACTED credential]": "[REDACTED]"'),
                    (re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=\-]{16,}"), "Bearer [REDACTED]"),
+                   (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)"), "[REDACTED private key]"),
+                   (re.compile(r"(?i)\bbasic[ \t]+(?=[A-Za-z0-9+/]*[0-9+/=])[A-Za-z0-9+/=]{12,}"), "Basic [REDACTED]"),
+                   (re.compile(r"assistant_session=\S+"), "assistant_session=[REDACTED]"),
+                   (re.compile(r"\beyJ[\w-]{10,}\.[\w-]{10,}\.[\w-]{10,}"), "[REDACTED jwt]"),
                    (re.compile(r"\b[1-9A-HJ-NP-Za-km-z]{80,90}\b"), "[REDACTED possible private key]"),
                    (re.compile(r"\b(?:[a-z]{3,8} ){11}[a-z]{3,8}\b(?=.{0,300}\bseed\b)", re.I), "[REDACTED possible seed phrase]")]
 PRIVATE_BLOCK = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")

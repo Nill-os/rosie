@@ -255,6 +255,7 @@ def test_rosies_notes_for_agent_zero_fit_its_prompt_budget_and_are_rewritten_onl
     assert len(text) < 7000 and "rosie.call" in text and "waiting_for_owner" in text  # board #838 why-file-token-cap
     detail = a0.tools_text()
     assert len(detail) < 7000 and "add_event(" in detail and "list_tasks(" in detail and "phone_call(" not in detail
+    assert "never as a tool of its own" in text
     a0.write_include()
     first = a0.INCLUDE.stat().st_mtime_ns
     a0.write_include()
@@ -321,3 +322,45 @@ def test_rosies_own_model_gets_the_corner_reading_too(monkeypatch):
     assert sent[0]["messages"][0]["content"].endswith("[From your corner reading: ...]\n- a page\n")
     assert "corner_memory" in {t["function"]["name"] for t in sent[0]["tools"]}
     assert not any("corner reading" in str(m.get("content")) for m in new)
+
+
+def test_the_big_memory_blocks_never_push_the_prompt_file_over_its_cap(monkeypatch):
+    import memory
+    import mind
+    import workflows
+    monkeypatch.setattr(memory, "core_block", lambda: "m" * 1600)
+    monkeypatch.setattr(workflows, "memfile_block", lambda: "w" * 1400)
+    monkeypatch.setattr(mind, "about_owner", lambda: "l" * 900)
+    assert len(a0.include_text()) <= a0.INCLUDE_CHARS and "ll" in a0.include_text()
+
+
+def test_a_memory_error_does_not_stop_the_prompt_files_or_the_extension_install(monkeypatch, tmp_path):
+    import sqlite3
+    import memory
+    seen = []
+    monkeypatch.setattr(memory, "core_block", lambda: (_ for _ in ()).throw(sqlite3.OperationalError("database is locked")))
+    monkeypatch.setattr(a0, "install_extensions", lambda: seen.append(1))
+    for name in ("INCLUDE", "INCLUDE_TOOLS", "INCLUDE_CLAUDE"):
+        monkeypatch.setattr(a0, name, tmp_path / getattr(a0, name).name)
+    a0.write_include()
+    assert seen == [1] and (tmp_path / "claude.promptinclude.md").exists()
+
+
+def test_a_corrupt_installed_extension_does_not_stop_the_other_extensions(monkeypatch, tmp_path):
+    src = tmp_path / "src" / "tool_execute_before"
+    src.mkdir(parents=True)
+    (src / "_05_a.py").write_text("a = 1\n")
+    (src / "_30_b.py").write_text("b = 2\n")
+    dst = tmp_path / "dst"
+    (dst / "tool_execute_before").mkdir(parents=True)
+    (dst / "tool_execute_before" / "_05_a.py").write_bytes(b"\xff\xfe\x00bad")
+    monkeypatch.setattr(a0, "EXT_SRC", tmp_path / "src")
+    monkeypatch.setattr(a0, "EXT_DIR", dst)
+    a0.install_extensions()
+    assert (dst / "tool_execute_before" / "_30_b.py").read_text() == "b = 2\n"
+
+
+def test_the_step_cap_extension_ships_with_the_app_and_matches_the_setup_copy():
+    from pathlib import Path
+    root = Path(a0.__file__).resolve().parent.parent
+    assert (root / "app/agent_zero_ext/message_loop_start/_20_step_cap.py").read_text() == (root / "ops/agent-zero/step_cap.py").read_text()

@@ -691,3 +691,68 @@ def test_claude_names_only_agent_zeros_real_tools_and_agent_zero_asks_its_corner
     assert "rosie.call" in sent[0]
     assert "always first when the owner asks what you read, found or learned in your corner" in a0.RULES
     assert "never Python imports" in a0.RULES
+
+
+def test_a_helper_agent_is_stopped_on_a_missing_tool_and_a_dead_remote_terminal(ext, monkeypatch):
+    routes(monkeypatch, ext)
+    logs = [item("user", "read my corner memory"), step("corner_memory"),
+            item("tool", "Tool corner_memory not found. Available tools: ...")]
+    with pytest.raises(Repairable) as e:
+        asyncio.run(ext.ClaudeLoop(a0_agent(logs, number=1)).execute(tool_name="corner_memory", tool_args={"query": "x"}))
+    assert "rosie.call" in str(e.value) and "corner_memory" in str(e.value)
+    dead = "code_execution_remote: no CLI client connected to Agent Zero. Make sure the CLI is connected to this instance."
+    logs = [item("user", "read my corner memory")]
+    for _ in range(3):
+        logs += [step("code_execution_remote"), item("code_exe", dead)]
+    with pytest.raises(Repairable) as e:
+        asyncio.run(ext.ClaudeLoop(a0_agent(logs, number=1)).execute(tool_name="code_execution_remote", tool_args={"code": "x"}))
+    assert "code_execution_tool" in str(e.value) and "no CLI client" in str(e.value)
+
+
+def test_a_helper_agents_answer_is_not_checked_but_its_turn_is_not_planned_either(ext, monkeypatch):
+    routes(monkeypatch, ext)
+    ag = a0_agent([item("user", "read my corner memory " * 5), item("agent", "x")], number=1, iteration=5)
+    asyncio.run(ext.ClaudeLoop(ag).execute(tool_name="response", tool_args={"text": "all done"}))
+    asyncio.run(ext.ClaudeLoop(ag).execute(tool_name="memory_load", tool_args={"query": "q"}))
+    assert ag.warnings == [] and "rosie_planned" not in ag.loop_data.params_persistent
+
+
+
+def test_a_helper_agent_never_gets_the_owner_answer_check_or_a_plan(ext, monkeypatch):
+    calls = routes(monkeypatch, ext, check={"ok": False, "problems": ["x"], "fix": "y"}, plan={"plan": "1. do it"})
+    logs = [item("user", "read my corner memory and tell me everything you learned " * 3)] + [step("memory_load"), item("code_exe", "out")] * 4
+    ag = a0_agent(logs, number=2, iteration=6)
+    args = {"text": "done"}
+    asyncio.run(ext.ClaudeLoop(ag).execute(tool_name="response", tool_args=args))
+    asyncio.run(ext.ClaudeLoop(ag).execute(tool_name="code_execution_tool", tool_args={"code": "x"}))
+    assert calls == [] and args == {"text": "done"} and ag.warnings == []
+
+
+def test_the_stuck_guard_leaves_real_work_and_odd_logs_alone(ext, monkeypatch):
+    routes(monkeypatch, ext)
+    other = [item("user", "q"), step("memory_load"), item("tool", "Tool corner_memory not found. Available tools: x")]
+    asyncio.run(ext.ClaudeLoop(a0_agent(other, number=1)).execute(tool_name="memory_load", tool_args={}))
+    quoted = [item("user", "q"), step("corner_memory"), item("tool", "I noted that Tool corner_memory not found earlier")]
+    asyncio.run(ext.ClaudeLoop(a0_agent(quoted, number=1)).execute(tool_name="corner_memory", tool_args={}))
+    varied = [item("user", "q")]
+    for n in range(3):
+        varied += [step("memory_load"), item("tool", f"result {n}")]
+    asyncio.run(ext.ClaudeLoop(a0_agent(varied, number=1)).execute(tool_name="memory_load", tool_args={}))
+    odd = [item("user", None), item("agent", None, kvps=None), item("code_exe", None, kvps=None), item("tool", None), item("warning", "x", kvps="s")]
+    for name, a in (("code_execution_remote", None), ("corner_memory", "str"), ("", {}), ("rosie.call", {"tool": None})):
+        asyncio.run(ext.ClaudeLoop(a0_agent(odd, number=1)).execute(tool_name=name, tool_args=a))
+
+
+def test_a_rosie_call_that_is_down_is_not_told_to_use_rosie_call_again(ext, monkeypatch):
+    routes(monkeypatch, ext)
+    logs = [item("user", "q"), step("rosie.call", "get_schedule"), item("tool", "Tool rosie.call not found. Available tools: x")]
+    asyncio.run(ext.ClaudeLoop(a0_agent(logs, number=1)).execute(tool_name="rosie.call", tool_args={"tool": "get_schedule"}))
+    assert ext.NO_SUCH_TOOL.match("Tool corner_memory not found.").group(1) == "corner_memory"
+
+
+def test_blank_line_flood_in_a_terminal_result_is_scanned_fast_and_a_none_tool_name_is_safe(ext):
+    import time
+    t = time.time()
+    ext.code_error("\n" * 30000 + "boom")
+    assert time.time() - t < 1
+    assert ext.stuck([], None, {}) == ""

@@ -24,7 +24,9 @@ WORKDIR, JOBS = "/a0/usr/workdir/", "/a0/usr/workdir/jobs/"  # board #703 safety
 TEXT_FILES = (".md", ".txt", ".csv", ".json", ".yaml", ".yml", ".html")
 WORK_PATH = re.compile(r"/a0/usr/workdir/[\w./-]+")
 MATERIAL_CHARS, FILE_CHARS = 40000, 20000
-ERROR_LINE = re.compile(r"^\W*(\w*(?:Error|Exception)\b.*|.*: (?:command not found|No such file or directory|Permission denied))$", re.M)
+ERROR_LINE = re.compile(r"^[^\w\n]*(\w*(?:Error|Exception)\b.*|.*: (?:command not found|No such file or directory|Permission denied)|.*no CLI client connected.*)$", re.M)
+NO_SUCH_TOOL = re.compile(r"^Tool (\S+) not found")
+CODE_TOOLS = {"code_execution_tool", "code_execution_remote"}
 
 
 def _rosie(route: str) -> tuple[str, str]:
@@ -121,12 +123,16 @@ def stuck_code(items) -> str:
 
 
 def stuck(items, tool_name: str, tool_args) -> str:
-    name = _key(tool_name, tool_args)
-    if name == "code_execution_tool":
+    name = _key(tool_name or "", tool_args)
+    if name in CODE_TOOLS:
         return stuck_code(items)
     if not name:
         return ""
-    last = results(items)[-SAME_RESULTS:]
+    seen = results(items)
+    gone = NO_SUCH_TOOL.match(seen[-1][1]) if seen and seen[-1][0] == name else None
+    if gone and gone.group(1) in name.split(":") and gone.group(1) != "rosie.call":
+        return seen[-1][1]
+    last = seen[-SAME_RESULTS:]
     if len(last) < SAME_RESULTS or any(t != name for t, _ in last) or len({r for _, r in last}) != 1:
         return ""
     return last[0][1]
@@ -216,18 +222,29 @@ def written_note(w: dict, saved: str) -> str:
 
 class ClaudeLoop(Extension):
     async def execute(self, tool_name: str = "", tool_args: dict | None = None, **kwargs):
-        if not self.agent or getattr(self.agent, "number", 0) != 0:
+        if not self.agent:
             return
+        main = getattr(self.agent, "number", 0) == 0
         loop = self.agent.loop_data
         request, items = turn_items(self.agent.context.log.logs)
         if "[Spoken turn" in request:
             return
         if tool_name == "response":
-            await self.check(loop, request, items, tool_args)
+            if main:
+                await self.check(loop, request, items, tool_args)
             return
         same = stuck(items, tool_name, tool_args)
         if same:
-            if tool_name == "code_execution_tool":
+            if NO_SUCH_TOOL.match(same):
+                raise RepairableException(
+                    f"{same[:200]}\nThat name is not a tool of its own. Rosie's tools (corner_memory, memory_search, get_schedule, ...) are "
+                    'called through the one MCP tool rosie.call: {"tool_name": "rosie.call", "tool_args": {"tool": "corner_memory", '
+                    '"args": {"query": "..."}}}. Use that now.')
+            if "no CLI client connected" in same:
+                raise RepairableException(
+                    f"{same}\nThe remote terminal (code_execution_remote, text_editor remote) has no client and will not get one: stop using "
+                    "it. Run commands in your own terminal (code_execution_tool) and call Rosie's tools through rosie.call.")
+            if tool_name in CODE_TOOLS:
                 raise RepairableException(
                     f"Your last {SAME_RESULTS} terminal runs all ended with the same error:\n{same}\n{STUCK_MARK}: running the same idea "
                     "again won't change it. Change approach: read the error, use the tool made for the job (memory_load for your memory, "
@@ -235,7 +252,7 @@ class ClaudeLoop(Extension):
             raise RepairableException(
                 f"Your last {SAME_RESULTS} calls of this tool all returned the same thing:\n{same}\n{STUCK_MARK}. "
                 "Change approach: another tool (your own terminal for commands), ask_other_ais for a fact you lack, or ask_claude_to_solve.")
-        if tool_name not in CLAUDE_TOOLS and loop.iteration + 1 >= PLAN_AT and not loop.params_persistent.get(PLANNED):
+        if main and tool_name not in CLAUDE_TOOLS and loop.iteration + 1 >= PLAN_AT and not loop.params_persistent.get(PLANNED):
             await self.plan(loop, request, items)
 
     async def plan(self, loop, request, items):

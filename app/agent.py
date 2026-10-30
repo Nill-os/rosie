@@ -679,12 +679,13 @@ def is_untrusted(name, args):
 
 def describe_call(name, a):
     g = lambda k, n=60: str(a.get(k, ""))[:n]
+    full = lambda k: (lambda v: v if len(v) <= 400 else v[:400] + f" (+{len(v) - 400} more characters)")(str(a.get(k, "")))
     if name == "phone_keep_note":
         return f"Save a Keep note called '{g('title') or g('text', 40)}'"
     if name == "phone_reply_notification":
         return f"Reply to that notification: \"{g('text', 90)}\""
     if name == "run_command":
-        return f"Run this command: {g('command', 90)}"
+        return f"Run this command: {full('command')}"
     if name == "write_file":
         return f"Write the file {g('path', 80)}"
     if name == "open_on_desktop":
@@ -694,7 +695,7 @@ def describe_call(name, a):
     if name == "phone_screen_do":
         return f"Do this on your phone: {g('goal', 90)}"
     if name in ("terminal_start", "terminal_send", "terminal_stop"):
-        return {"terminal_start": "Start a terminal session", "terminal_send": "Type into a terminal session", "terminal_stop": "Stop a terminal session"}[name] + (f": {g('command') or g('text')}" if (a.get("command") or a.get("text")) else "")
+        return {"terminal_start": "Start a terminal session", "terminal_send": "Type into a terminal session", "terminal_stop": "Stop a terminal session"}[name] + (f": {full('command') or full('text')}" if (a.get("command") or a.get("text")) else "")
     if name in ("build_tool", "run_user_tool"):
         return ("Build a small tool: " if name == "build_tool" else "Run my tool: ") + g("name")
     return name.replace("_", " ").capitalize() + (": " + ", ".join(f"{k} {str(v)[:30]}" for k, v in list(a.items())[:3]) if a else "")
@@ -704,10 +705,11 @@ OWN_CARD = {"phone_send_sms", "phone_call", "phone_reply_notification"}
 
 
 HOLD_WHEN_TAINTED = {"read_file", "list_dir"}
+TAINT_HELD_WRITES = {"complete_task", "move_task", "update_project"}
 
 
 def guard(name, args, tainted):
-    if tainted and (name in GUARDED or name in HOLD_WHEN_TAINTED) and name not in OWN_CARD and config.load().get("taint_guard", True):
+    if tainted and (name in GUARDED or name in HOLD_WHEN_TAINTED or name in TAINT_HELD_WRITES) and name not in OWN_CARD and config.load().get("taint_guard", True):
         extra = " Agents ask for their own permissions; I won't answer those for you." if name == "terminal_send" else ""
         return actions.queue_tool(name, args, f"{describe_call(name, args)}. Checking with you because I just read outside content.{extra}")
     return None

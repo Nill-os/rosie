@@ -34,7 +34,8 @@ def _queue(kind, summary, payload):
     token = secrets.token_urlsafe(8)
     _pending[token] = {"kind": kind, "summary": summary, "payload": payload, "at": time.time()}
     tool = payload.get("name", kind) if isinstance(payload, dict) else kind
-    label = policy.risk("exec", summary, tool)
+    args = payload.get("args") if isinstance(payload, dict) else None
+    label = policy.risk("exec", " ".join([summary] + [str(args[k])[:4000] for k in ("command", "text") if k in args]) if isinstance(args, dict) else summary, tool)
     return {"status": "needs_confirmation", "token": token, "summary": summary, "risk": label, "risk_text": f"{label['level']} risk: {label['reason']}"}
 
 
