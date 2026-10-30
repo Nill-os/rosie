@@ -463,7 +463,7 @@ def select_groups(user_text, history, skill="", space=None):
     if skill == "meal-planning" and RECIPE_NOTE.search(t):
         on.add("phone")
     if len(on) == 1:
-        on |= set(rank_groups(user_text)) or {"calendar", "web"}
+        on |= set(rank_groups(user_text)) | {"calendar", "web"}
     return on
 
 

@@ -67,3 +67,8 @@ def test_budget_note_injected_once_near_cap(monkeypatch):
     assert notes and "2 steps left" in notes[0]["content"]
     last_msgs = [m["content"] for m in seen[-1]["messages"] if "Budget notice" in str(m.get("content"))]
     assert len(last_msgs) == 1
+
+
+def test_the_unmatched_fallback_keeps_calendar_and_web():
+    on = agent.select_groups("Add a one hour laundry block tomorrow at 10 AM", [])
+    assert "calendar" in on

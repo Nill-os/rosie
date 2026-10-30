@@ -45,7 +45,8 @@ def test_old_path_lists_unchanged():
         assert fsguard.DENY_NAME.match(n), n
 
 
-def test_terminal_start_still_refuses():
+def test_terminal_start_still_refuses(monkeypatch):
+    monkeypatch.setattr(terminals, "ensure_server", lambda: None)
     try:
         terminals.start("claude --yolo")
     except ValueError:
