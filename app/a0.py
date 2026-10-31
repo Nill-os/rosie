@@ -184,6 +184,12 @@ def _landed(token: str) -> str:
         return ""
 
 
+def _resolve_ctx(raw: str) -> str:
+    if raw.startswith("pending:"):
+        return _landed(raw[len("pending:"):])
+    return raw
+
+
 def _post(path, body, api_key, timeout):
     return httpx.post(URL + path, json=body, headers={"X-API-KEY": api_key}, timeout=timeout)
 
@@ -193,7 +199,7 @@ def chat(history: list[dict], user_text: str, voice: bool = False, chat_id=None,
     if not api_key:
         raise Unavailable("no Agent Zero API key in secrets/agent_zero.json")
     write_include()
-    ctx = _contexts().get(str(chat_id), "") if chat_id is not None else ""
+    ctx = _resolve_ctx(_contexts().get(str(chat_id), "")) if chat_id is not None else ""
     token = _secrets.token_hex(8)
     head = (f"[Rosie turn {token}]\n\n" if chat_id is not None else "") + (VOICE_NOTE + "\n" if voice else "") + (f"[Rosie space: {space}]\n" if space else "") + (UNTRUSTED_NOTE + "\n" if untrusted else "") + (reading + "\n" if reading else "")
     if not _turn_lock.acquire(timeout=BUSY_WAIT_S):
@@ -208,8 +214,12 @@ def chat(history: list[dict], user_text: str, voice: bool = False, chat_id=None,
                 body["message"] = head + _recap(history) + user_text
                 r = _post("/api/api_message", body, api_key, VOICE_TIMEOUT_S if voice else TIMEOUT_S)
         except httpx.TimeoutException:
-            if chat_id is not None and (landed := _landed(token)):
-                _save_context(chat_id, landed)
+            if chat_id is not None:
+                landed = _landed(token)
+                if landed:
+                    _save_context(chat_id, landed)
+                elif not ctx:
+                    _save_context(chat_id, "pending:" + token)
             _late["until"] = time.time() + TIMEOUT_S
             pending = end_turn()
             reply = "Agent Zero is still working on that. Ask me again in a few minutes for the result."

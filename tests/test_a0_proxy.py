@@ -64,7 +64,7 @@ def test_the_real_check_is_rosies_own(monkeypatch):
 def test_a_good_cookie_is_forwarded_without_rosies_cookie_and_hop_headers(proxy):
     c, seen = proxy
     r = c.post("/api/x?y=2", content=b"body", headers={**GOOD, "cookie": "assistant_session=good; a0=1", "connection": "keep-alive",
-                                                        "origin": "http://127.0.0.1:8771", "x-keep": "yes"})
+                                                        "origin": "http://127.0.0.1:8771", "host": "127.0.0.1:8771", "x-keep": "yes"})
     assert r.status_code == 200 and r.content == b"hello"
     up = seen[0]
     assert str(up.url) == "http://127.0.0.1:50080/api/x?y=2" and up.read() == b"body"

@@ -319,6 +319,9 @@ def _trace(out: dict | None, request: str):
 
 
 def verify(request: str, done: str, evidence: str = "", local: bool = True) -> dict | None:
+    request = request or ""
+    done = done or ""
+    evidence = evidence or ""
     out = _verify(request, done, evidence, local)
     _trace(out, request)
     return out

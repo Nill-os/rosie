@@ -84,6 +84,8 @@ def _http_client() -> httpx.AsyncClient:
 async def _http(request: Request):
     if not _allowed(request.cookies.get(COOKIE, "")):  # board #699 safety-cookie-boundary
         return PlainTextResponse("Log in to Rosie first.", status_code=401)
+    if not _same_site(request.headers):
+        return PlainTextResponse("Request origin not allowed.", status_code=403)
     base = a0_host.url()
     up = urlsplit(base)
     url = base + request.url.path + ("?" + request.url.query if request.url.query else "")
@@ -122,7 +124,12 @@ def _same_site(headers) -> bool:
     origin = headers.get("origin", "")
     if not origin:
         return True
-    want = _name(urlsplit(origin).netloc)
+    origin_host = _name(urlsplit(origin).netloc)
+    if origin_host in ("127.0.0.1", "localhost", "::1"):
+        origin_netloc = urlsplit(origin).netloc.lower()
+        host_netloc = (headers.get("host", "") or "").lower()
+        return origin_netloc == host_netloc
+    want = origin_host
     seen = {_name(headers.get("host", "")), _name(headers.get("x-forwarded-host", ""))}
     return want in seen or (_name(headers.get("host", "")) in ("127.0.0.1", "localhost", "::1") and bool(headers.get("x-forwarded-for")))
 
