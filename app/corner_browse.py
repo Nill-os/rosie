@@ -254,8 +254,12 @@ def fetch_page(url: str) -> dict | None:
     if scanned["level"] == "high":
         corner.log("blocked", final, status="injection", detail=", ".join(scanned["hits"]))
         return None
-    return _got_page({"url": final, "title": _title(h) or corner.source_of(final), "text": text, "links": _links(h, final, extra),
-                      "images": _images(h, final, extra)})
+    title = _title(h)
+    if injectscan.scan(title)["level"] == "high":
+        title = ""
+    links = [l for l in _links(h, final, extra) if injectscan.scan(l["text"])["level"] != "high"]
+    images = [i for i in _images(h, final, extra) if injectscan.scan(i.get("alt", ""))["level"] != "high"]
+    return _got_page({"url": final, "title": title or corner.source_of(final), "text": text, "links": links, "images": images})
 
 
 def _got_page(page: dict) -> dict:
@@ -342,7 +346,13 @@ def _github_page(url: str, repo: tuple[str, str], extra) -> dict | None:
         corner.log("page", url, status="failed", detail=("no README" if r.get("status") == 404 else r.get("error") or f"answer {r.get('status')}")[:200])
         return None
     text = r["body"].decode(r.get("encoding") or "utf-8", "replace")
+    readme_scan = injectscan.scan(text)
+    if readme_scan["level"] == "high":
+        corner.log("blocked", url, status="injection", detail=", ".join(readme_scan["hits"]))
+        return None
     links, pics = _md_links(text, owner, name, extra)
+    links = [l for l in links if injectscan.scan(l["text"])["level"] != "high"]
+    pics = [p for p in pics if injectscan.scan(p.get("alt", ""))["level"] != "high"]
     return _got_page({"url": url, "title": f"{owner}/{name} on GitHub", "text": re.sub(r"\n{3,}", "\n\n", text).strip(), "links": links, "images": pics})
 
 
@@ -633,6 +643,8 @@ def pick_result(query: str, results: list[dict], seen: set | None = None) -> str
     if seen:
         results = [r for r in results if r["url"] not in seen]
     results = [r for r in results if not corner.site_capped(r["url"])]
+    results = [r for r in results if injectscan.scan(r.get("title", ""))["level"] != "high"
+               and injectscan.scan(r.get("snippet", ""))["level"] != "high"]
     if not results:
         return None
     lines = "\n".join(f"[{i}] {_fence(r['title'])[:120]} ({corner.source_of(r['url'])}): {_fence(r.get('snippet', ''))[:200]}" for i, r in enumerate(results, 1))

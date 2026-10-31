@@ -7,7 +7,7 @@ PATTERNS = (
     (re.compile(r"\b(?:ignore|disregard|forget|override)\s+(?:all\s+|any\s+|every\s+)?(?:of\s+)?(?:the\s+|your\s+|my\s+)?"
                 r"(?:previous|prior|above|earlier|preceding|former)\s+(?:instructions?|prompts?|rules|directions?|context|messages?)", _I),
      "ignore_previous", "high"),
-    (re.compile(r"\bnew\s+system\s+prompt\b|^\s*(?:#+\s*|\[|<)?system\s*(?:\]|>)?\s*:\s+\S|<\|?(?:im_start|system)\|?>|\[/?INST\]", _I | re.M),
+    (re.compile(r"\bnew\s+system\s+prompt\b|^\s*(?:#+\s*|\[|<)?system\s*(?:\]|>)?\s*:\s+\S|<\|?(?:im_start|im_end|system)\|?>|\[/?INST\]", _I | re.M),
      "role_override", "high"),
     (re.compile(r"\byou\s+are\s+now\s+(?:an?\s+|in\s+|the\s+)?(?!going|able|ready|done|subscribed|logged|signed|all|not|free|a\s+member)\w+", _I),
      "you_are_now", "low"),
@@ -33,7 +33,7 @@ PATTERNS = (
     (re.compile(r"(?:​|‌|‍|⁠|﻿|᠎){4,}"), "zero_width_run", "high"),
     (re.compile(r"[\U000e0000-\U000e007f]{4,}"), "tag_characters", "high"),
     (re.compile(r"\b(?:decode|execute|run|eval|follow)\b[^\n]{0,40}?[A-Za-z0-9+/]{80,}={0,2}", _I), "base64_after_decode", "high"),
-    (re.compile(r"[‪-‮⁦-⁩]{2,}"), "bidi_controls", "low"),
+    (re.compile(r"[‪-‮⁦-⁩]{2,}"), "bidi_controls", "high"),
     (re.compile(r"(?:do\s+not|don'?t)\s+(?:tell|inform|alert|mention\s+(?:this\s+)?to)\s+the\s+(?:user|owner|human)", _I), "hide_from_user", "high"),
 )
 

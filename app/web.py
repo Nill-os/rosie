@@ -22,7 +22,7 @@ def _private_host(url: str) -> bool:
     try:
         for info in socket.getaddrinfo(host, None):
             ip = ipaddress.ip_address(info[4][0])
-            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or not ip.is_global:
                 return True
     except (socket.gaierror, ValueError):
         return False
