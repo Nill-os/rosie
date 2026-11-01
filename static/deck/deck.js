@@ -300,7 +300,7 @@ function drawBoardTab(b) {
     && (!q || (p.text + ' ' + p.agent + ' ' + who(p.agent, names)).toLowerCase().includes(q))).slice(0, 300);
   const feed = [];
   let day = '';
-  const today = new Date().toDateString(), yest = new Date(Date.now() - 86400000).toDateString();
+  const today = new Date().toDateString(), _y = new Date(); _y.setDate(_y.getDate() - 1); const yest = _y.toDateString();
   for (const p of list) {
     const d = new Date(p.t * 1000), ds = d.toDateString();
     if (ds !== day) {
