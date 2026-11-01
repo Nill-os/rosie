@@ -63,9 +63,9 @@ def scan(text: str, timeout: float = 8.0) -> dict:
         r = httpx.post(
             LOCALJEV_URL,
             json={
-                "model": "jev-latest",
+                "model": "localjev-latest",
                 "state": snippet,
-                "questions": {"injection": {"type": "noul", "instructions": _QUESTION}},
+                "questions": {"injection": {"type": "noul", "question": _QUESTION}},
             },
             timeout=timeout,
         )
