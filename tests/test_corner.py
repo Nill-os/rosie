@@ -138,7 +138,7 @@ def test_the_browsing_agent_imports_nothing_private():
     got = _imports(ROOT / "app" / "corner_browse.py")
     assert not got & FORBIDDEN, got & FORBIDDEN
     assert got <= {"base64", "collections", "html", "json", "random", "re", "secrets", "threading", "time", "urllib", "httpx", "corner",
-                   "corner_groups", "corner_layout", "corner_pics", "injectscan", "web"}, got
+                   "corner_groups", "corner_layout", "corner_pics", "injectscan", "jevscan", "web"}, got
     for f in ("corner.py", "corner_layout.py", "corner_groups.py"):
         assert not _imports(ROOT / "app" / f) & (FORBIDDEN - {"os"}), f
 
