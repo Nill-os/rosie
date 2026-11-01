@@ -541,7 +541,17 @@ def _llm(user: str, schema: dict, predict: int = 700) -> dict | None:
             out = json.loads(text)
         except ValueError:
             return None
-        return out if isinstance(out, dict) else None
+        if not isinstance(out, dict):
+            return None
+        resp_text = " ".join(
+            x for v in out.values()
+            for x in ([v] if isinstance(v, str) else v if isinstance(v, list) else [])
+            if isinstance(x, str)
+        )
+        if resp_text and injectscan.scan(resp_text)["level"] == "high":
+            corner.log("blocked", status="response-injection", detail="llm output flagged")
+            return None
+        return out
     return None
 
 

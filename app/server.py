@@ -752,6 +752,8 @@ async def transcribe(audio: UploadFile = File(...)):
     import subprocess
     import numpy as np
     data = await audio.read()
+    if len(data) > 50_000_000:
+        return JSONResponse(status_code=413, content={"detail": "audio too large"})
 
     def work():
         if shutil.which("ffmpeg"):

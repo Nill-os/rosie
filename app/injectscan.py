@@ -1,4 +1,5 @@
 import re
+import unicodedata
 
 _I = re.IGNORECASE
 
@@ -39,7 +40,7 @@ PATTERNS = (
 
 
 def scan(text: str) -> dict:
-    text = text or ""
+    text = unicodedata.normalize("NFKC", text or "")
     found = [(name, lv) for rx, name, lv in PATTERNS if rx.search(text)]
     levels = {lv for _, lv in found}
     level = "high" if "high" in levels or len(found) >= 3 else "low" if found else "none"

@@ -157,3 +157,37 @@ def test_text_truncated_to_max(jev_clean):
         long_text = "A" * 5000
         jevscan.scan(long_text)
     assert payload_text and len(payload_text[0]) <= jevscan.MAX_TEXT
+
+
+def test_output_mode_sends_response_question(jev_clean):
+    sent_questions = []
+    class _Resp:
+        def raise_for_status(self): pass
+        def json(self): return _CLEAN_RESPONSE
+    def capture(*a, json=None, **kw):
+        if json:
+            q = list((json.get("questions") or {}).values())
+            sent_questions.append(q[0].get("question", "") if q else "")
+        return _Resp()
+    import unittest.mock as mock
+    jevscan._cache.clear()
+    with mock.patch("httpx.post", side_effect=capture):
+        jevscan.scan("some text", mode="output")
+    assert sent_questions and jevscan._RESPONSE_QUESTION in sent_questions[0]
+
+
+def test_input_mode_sends_input_question(jev_clean):
+    sent_questions = []
+    class _Resp:
+        def raise_for_status(self): pass
+        def json(self): return _CLEAN_RESPONSE
+    def capture(*a, json=None, **kw):
+        if json:
+            q = list((json.get("questions") or {}).values())
+            sent_questions.append(q[0].get("question", "") if q else "")
+        return _Resp()
+    import unittest.mock as mock
+    jevscan._cache.clear()
+    with mock.patch("httpx.post", side_effect=capture):
+        jevscan.scan("some text", mode="input")
+    assert sent_questions and jevscan._QUESTION in sent_questions[0]
