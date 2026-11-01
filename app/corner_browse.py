@@ -18,6 +18,7 @@ import corner_groups
 import corner_layout
 import corner_pics
 import injectscan
+import jevscan
 import web
 
 OLLAMA_CHAT = "http://127.0.0.1:11434/api/chat"
@@ -255,7 +256,7 @@ def fetch_page(url: str) -> dict | None:
         corner.log("blocked", final, status="injection", detail=", ".join(scanned["hits"]))
         return None
     title = _title(h)
-    if injectscan.scan(title)["level"] == "high":
+    if injectscan.scan(title)["level"] == "high" or jevscan.scan(title)["level"] == "high":
         title = ""
     links = [l for l in _links(h, final, extra) if injectscan.scan(l["text"])["level"] != "high"]
     images = [i for i in _images(h, final, extra) if injectscan.scan(i.get("alt", ""))["level"] != "high"]
@@ -349,6 +350,10 @@ def _github_page(url: str, repo: tuple[str, str], extra) -> dict | None:
     readme_scan = injectscan.scan(text)
     if readme_scan["level"] == "high":
         corner.log("blocked", url, status="injection", detail=", ".join(readme_scan["hits"]))
+        return None
+    jev_readme = jevscan.scan(text[:2000])
+    if jev_readme["level"] == "high":
+        corner.log("blocked", url, status="injection", detail=f"jev:{jev_readme['score']:.2f}")
         return None
     links, pics = _md_links(text, owner, name, extra)
     links = [l for l in links if injectscan.scan(l["text"])["level"] != "high"]
@@ -644,7 +649,8 @@ def pick_result(query: str, results: list[dict], seen: set | None = None) -> str
         results = [r for r in results if r["url"] not in seen]
     results = [r for r in results if not corner.site_capped(r["url"])]
     results = [r for r in results if injectscan.scan(r.get("title", ""))["level"] != "high"
-               and injectscan.scan(r.get("snippet", ""))["level"] != "high"]
+               and injectscan.scan(r.get("snippet", ""))["level"] != "high"
+               and jevscan.scan(r.get("snippet", ""))["level"] != "high"]
     if not results:
         return None
     lines = "\n".join(f"[{i}] {_fence(r['title'])[:120]} ({corner.source_of(r['url'])}): {_fence(r.get('snippet', ''))[:200]}" for i, r in enumerate(results, 1))
