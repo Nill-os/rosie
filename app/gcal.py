@@ -1,4 +1,5 @@
 import datetime as dt
+import time
 from pathlib import Path
 
 from google.auth.exceptions import RefreshError
@@ -14,6 +15,9 @@ CLIENT_FILE = ROOT / "secrets" / "google_client.json"
 TOKEN_FILE = ROOT / "secrets" / "google_token.json"
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
 TZ = get_localzone()
+
+_login_failed_until: float = 0.0
+_login_failed_msg: str = ""
 
 
 class LoginExpired(Exception):
@@ -34,16 +38,26 @@ def login():
 
 
 def service():
+    global _login_failed_until, _login_failed_msg
+    if time.time() < _login_failed_until:
+        raise LoginExpired(_login_failed_msg)
     if not TOKEN_FILE.exists():
-        raise LoginExpired("Not logged in to Google. " + plat.pick("Run ./login.sh", plat.google_login(cap=True)))
+        msg = "Not logged in to Google. " + plat.pick("Run ./login.sh", plat.google_login(cap=True))
+        _login_failed_until = time.time() + 120
+        _login_failed_msg = msg
+        raise LoginExpired(msg)
     creds = Credentials.from_authorized_user_file(str(TOKEN_FILE), SCOPES)
     if not creds.valid:
         try:
             creds.refresh(Request())
         except RefreshError as e:
-            raise LoginExpired("Google login expired (happens every 7 days). " + plat.pick("Run ./login.sh", plat.google_login(cap=True))) from e
+            msg = "Google login expired (happens every 7 days). " + plat.pick("Run ./login.sh", plat.google_login(cap=True))
+            _login_failed_until = time.time() + 120
+            _login_failed_msg = msg
+            raise LoginExpired(msg) from e
         TOKEN_FILE.write_text(creds.to_json())
         TOKEN_FILE.chmod(0o600)
+    _login_failed_until = 0.0
     return build("calendar", "v3", credentials=creds, cache_discovery=False)
 
 

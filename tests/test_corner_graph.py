@@ -251,7 +251,7 @@ def test_model_calls_use_her_model_one_at_a_time_and_stop_when_the_owner_comes(m
     assert live["max"] == 1
     b = bodies[0]
     assert b["model"] == agent.MODEL and {k: b["options"].get(k) for k in ctxsize.options(agent.MODEL)} == ctxsize.options(agent.MODEL)
-    assert b["think"] is False and b["format"] == schema and b["keep_alive"] == "30m" and b["stream"] is True
+    assert b["think"] is False and b["format"] == schema and b["keep_alive"] == "10m" and b["stream"] is True
     assert b["options"]["num_predict"] == cg.MAX_PREDICT and bodies[1]["options"]["num_predict"] == 100
 
     def owner_arrives(request):
@@ -363,6 +363,8 @@ def test_the_real_graph_is_never_opened_under_tests():
 
 
 def test_a_database_that_is_down_turns_it_off_and_is_retried_later(monkeypatch, client):
+    import corner_api
+    monkeypatch.setattr(corner_api, "_status_cache", None)
     cg.SECRET.parent.mkdir(parents=True, exist_ok=True)
     cg.SECRET.write_text("pw")
     tries = []
@@ -422,6 +424,8 @@ def test_search_never_waits_for_a_hanging_connect(monkeypatch):
 
 
 def test_a_broken_graph_module_never_breaks_the_corner_page(monkeypatch, client):
+    import corner_api
+    monkeypatch.setattr(corner_api, "_status_cache", None)
     monkeypatch.setattr(cg, "status", lambda: 1 / 0)
     st = client.get("/api/corner/status").json()
     assert st["graph"]["on"] is False and "could not be checked" in st["graph"]["line"]

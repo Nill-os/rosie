@@ -26,7 +26,7 @@ OLLAMA_GENERATE = "http://127.0.0.1:11434/api/generate"
 OLLAMA_SHOW = "http://127.0.0.1:11434/api/show"
 MODEL = "qwen3.5:9b"
 CTX_OPTIONS = {"num_ctx": 32768}
-KEEP_ALIVE = "30m"
+KEEP_ALIVE = "10m"
 LIVE = {"set": False}
 VISION_MODEL = "gemma4:12b"
 VISION_CTX = 4096
@@ -260,15 +260,18 @@ def fetch_page(url: str) -> dict | None:
         title = ""
     links = [l for l in _links(h, final, extra) if injectscan.scan(l["text"])["level"] != "high"]
     images = [i for i in _images(h, final, extra) if injectscan.scan(i.get("alt", ""))["level"] != "high"]
-    return _got_page({"url": final, "title": title or corner.source_of(final), "text": text, "links": links, "images": images})
+    return _got_page({"url": final, "title": title or corner.source_of(final), "text": text, "links": links, "images": images}, asked=url)
 
 
-def _got_page(page: dict) -> dict:
+def _got_page(page: dict, asked: str = "") -> dict:
     final = page["url"]
     _clear_thumbs()
     live(f"Reading: {page['title']} — {corner.source_of(final)}", page={"title": page["title"], "url": final, "host": corner.source_of(final),
          "text": page["text"][:LIVE_TEXT]}, links=[], chosen=None, pictures=[])
-    corner.log("page", final, page["title"], status="read", detail=f"{len(page['text'])} characters")
+    detail = f"{len(page['text'])} characters"
+    if asked and corner._canon(asked) != corner._canon(final):
+        detail += f", asked for {asked}"
+    corner.log("page", final, page["title"], status="read", detail=detail[:500])
     corner.state["session_pages"] += 1
     return page
 
@@ -656,7 +659,7 @@ def start_query(topic: str | None = None) -> str:
 
 def pick_result(query: str, results: list[dict], seen: set | None = None) -> str | None:
     if seen:
-        results = [r for r in results if r["url"] not in seen]
+        results = [r for r in results if corner._canon(r["url"]) not in seen]
     results = [r for r in results if not corner.site_capped(r["url"])]
     results = [r for r in results if injectscan.scan(r.get("title", ""))["level"] != "high"
                and injectscan.scan(r.get("snippet", ""))["level"] != "high"
@@ -991,7 +994,7 @@ def _cycle(session: dict, found: list):
             live("Choosing what to read…")
             focus = pick_focus()
             corner.state["focus"] = focus[0] if focus else None
-            seeds = [u for u in (focus[1] if focus else []) if u not in seen and not blocked_reason(u, s["corner_block_domains"])]
+            seeds = [u for u in (focus[1] if focus else []) if corner._canon(u) not in seen and not blocked_reason(u, s["corner_block_domains"])]
             if seeds:
                 queue.extend(seeds[:2])
                 continue
@@ -1006,15 +1009,19 @@ def _cycle(session: dict, found: list):
             queue.append(url)
             continue
         url = queue.pop(0)
-        seen.add(url)
+        asked = corner._canon(url)
         if corner.site_capped(url):
+            seen.add(asked)
             continue
         page = fetch_page(url)
+        landed = bool(page) and corner._canon(page["url"]) in seen
+        seen.add(asked)
         if not page or _halt():
             continue
-        if page["url"] != url:
-            seen.add(page["url"])
-        page["links"] = [l for l in page["links"] if l["url"] not in seen]
+        seen.add(corner._canon(page["url"]))
+        if landed:
+            continue
+        page["links"] = [l for l in page["links"] if corner._canon(l["url"]) not in seen]
         corner.doing("Thinking about " + corner.source_of(page["url"]))
         d = read_page(page)
         if corner.stopping():

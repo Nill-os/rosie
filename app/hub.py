@@ -389,6 +389,8 @@ class Settings(BaseModel):
     owner_notes: str | None = None
     hidden_pages: list[str] | None = None
     menu_layout: list[dict] | None = None
+    groq_api_key: str | None = None
+    gemini_api_key: str | None = None
 
 
 def pages_off() -> list[str]:
@@ -456,6 +458,10 @@ def settings_set(s: Settings):
         cfg["a0_chat_ui"] = bool(s.a0_chat_ui)
     if s.claude_planning is not None:
         cfg["claude_planning"] = bool(s.claude_planning)
+    if s.groq_api_key is not None:
+        cfg["groq_api_key"] = s.groq_api_key.strip()[:200]
+    if s.gemini_api_key is not None:
+        cfg["gemini_api_key"] = s.gemini_api_key.strip()[:200]
     if s.orchestrator is not None and orchestrator(bool(s.orchestrator)) is None:
         return err("The orchestrate skill for Claude Code isn't installed on this PC.")
     if s.owner_name is not None:
@@ -479,7 +485,8 @@ def settings_set(s: Settings):
         import a0
         a0.write_include()
     return {"write_target": cfg["write_target"], "brief_time": cfg["brief_time"], "brain": cfg["brain"], "planning": claude_plan.status(), "orchestrator": orchestrator(),
-            "owner_name": cfg.get("owner_name", ""), "owner_notes": cfg.get("owner_notes", ""), "hidden_pages": cfg.get("hidden_pages") or [], "menu_layout": cfg.get("menu_layout") or []}
+            "owner_name": cfg.get("owner_name", ""), "owner_notes": cfg.get("owner_notes", ""), "hidden_pages": cfg.get("hidden_pages") or [], "menu_layout": cfg.get("menu_layout") or [],
+            "groq_api_key": "set" if cfg.get("groq_api_key") else "", "gemini_api_key": "set" if cfg.get("gemini_api_key") else ""}
 
 
 def _clean_menu_layout(raw):
@@ -741,9 +748,9 @@ class NewReminder(BaseModel):
 @router.get("/api/badges")
 def badges():
     import proposals as _pr
-    import study
-    return {"overdue": len(tasks.overdue()), "inbox": inbox.unread_count(), "proposals": _pr.count_pending(), "study_due": study.due_count(), "ui_theme": config.load().get("ui_theme") or "aurora",
-            "pages_off": pages_off(), "google_login": plat.google_login(), "gmail_login": plat.google_login("main"), "pages_hidden": config.load().get("hidden_pages") or [], "menu_layout": config.load().get("menu_layout") or []}
+    out = {"overdue": len(tasks.overdue()), "inbox": inbox.unread_count(), "proposals": _pr.count_pending(), "ui_theme": config.load().get("ui_theme") or "aurora",
+           "pages_off": pages_off(), "google_login": plat.google_login(), "gmail_login": plat.google_login("main"), "pages_hidden": config.load().get("hidden_pages") or [], "menu_layout": config.load().get("menu_layout") or []}
+    return out
 
 
 @router.get("/api/canvas")

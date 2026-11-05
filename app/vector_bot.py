@@ -367,7 +367,7 @@ class _Control:
 
 def reachable(ip: str, port: int = PORT) -> bool:
     try:
-        with socket.create_connection((ip, port), timeout=2):
+        with socket.create_connection((ip, port), timeout=0.5):
             return True
     except OSError:
         return False

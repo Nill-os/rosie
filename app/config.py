@@ -26,6 +26,8 @@ DEFAULTS = {
     "board_link_pc": "",
     "board_link_dir": "",
     "claude_planning": False,  # board #718 safety-planning-sends-week
+    "groq_api_key": "",
+    "gemini_api_key": "",
     "brain": "rosie",
     "a0_chat_ui": True,
     "a0_proxy_port": 8771,
@@ -84,6 +86,7 @@ DEFAULTS = {
     "ai_overlay_mode": "full",
     "ai_sink": "default",
     "ai_speak": True,
+    "tts_provider": "lfm3",
     "ai_use_selection": True,
     "vector_on": False,
     "vector_host": "",

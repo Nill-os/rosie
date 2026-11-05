@@ -36,6 +36,7 @@ DEFAULTS = {
     "corner_max_load": 0.6,
     "corner_pc_free_gb": 4,
     "corner_pc_away_min": 5,
+    "corner_pc_browse_away_min": 30,
     "corner_max_temp": 90,
     "corner_on_battery": False,
     "corner_block_domains": [],
@@ -53,7 +54,7 @@ DEFAULTS = {
 INT_LIMITS = {"corner_idle_min": (1, 240), "corner_rest_min": (1, 720), "corner_pages_session": (1, 100), "corner_pages_hour": (1, 1000),
               "corner_pages_day": (1, 10000), "corner_site_gap_s": (5, 600), "corner_images_day": (0, 100), "corner_looks_day": (0, 50),
               "corner_storage_mb": (50, 10240), "corner_changes_day": (0, 100), "corner_github_pct": (0, 100),
-              "corner_graph_wait": (0, 5000), "corner_site_daily_cap": (1, 1000), "corner_pc_free_gb": (0, 64), "corner_pc_away_min": (1, 120), "corner_max_temp": (0, 105)}
+              "corner_graph_wait": (0, 5000), "corner_site_daily_cap": (1, 1000), "corner_pc_free_gb": (0, 64), "corner_pc_away_min": (1, 120), "corner_pc_browse_away_min": (0, 120), "corner_max_temp": (0, 105)}
 TIME_RE = re.compile(r"([01]\d|2[0-3]):[0-5]\d")
 DOMAIN_RE = re.compile(r"(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}")
 SITE_RE = re.compile(r"(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}(/[\w.~%!$&'()*+,;=:@/-]{0,200})?")
@@ -295,11 +296,19 @@ def has_read(url: str) -> bool:
                                f"AND url IN ({q}) LIMIT 1", us + us).fetchone())
 
 
+ASKED_FOR = re.compile(r"asked for (\S+)$")
+
+
 def seen_urls(days: int = 7) -> set[str]:
     since = _iso(_now() - dt.timedelta(days=days))
     with _db() as db:
-        out = {r[0] for r in db.execute("SELECT url FROM trail WHERE kind IN ('page', 'blocked') AND url != '' AND at >= ?", (since,))}
-        out |= {r[0] for r in db.execute("SELECT url FROM finds")}
+        out = set()
+        for u, d in db.execute("SELECT url, detail FROM trail WHERE kind IN ('page', 'blocked') AND url != '' AND at >= ?", (since,)):
+            out.add(_canon(u))
+            m = ASKED_FOR.search(d or "")
+            if m:
+                out.add(_canon(m.group(1)))
+        out |= {_canon(r[0]) for r in db.execute("SELECT url FROM finds")}
     return out
 
 
@@ -645,6 +654,11 @@ def pause_reason(now: dt.datetime | None = None, s: dict | None = None) -> str |
     why = health_reason(s)
     if why:
         return why
+    browse_away_min = s["corner_pc_browse_away_min"]
+    if browse_away_min > 0:
+        pc_idle = pchealth.input_idle_s()
+        if pc_idle is not None and pc_idle < browse_away_min * 60:
+            return f"Waiting until the PC has been idle {browse_away_min} min (idle {int(pc_idle // 60)} min now)."
     if pages_today() >= s["corner_pages_day"]:
         return f"Today's {s['corner_pages_day']} pages are read; she carries on after midnight."
     if graph_behind(s):
@@ -743,6 +757,11 @@ def busy_reason(now: dt.datetime | None = None, s: dict | None = None, check_res
     idle = time.time() - _activity["last"]
     if idle < s["corner_idle_min"] * 60:
         return f"Waiting until you have been away {s['corner_idle_min']} minutes."
+    browse_away_min = s["corner_pc_browse_away_min"]
+    if browse_away_min > 0:
+        pc_idle = pchealth.input_idle_s()
+        if pc_idle is not None and pc_idle < browse_away_min * 60:
+            return f"Waiting until the PC has been idle {browse_away_min} min (idle {int(pc_idle // 60)} min now)."
     if pages_today() >= s["corner_pages_day"]:
         return "Today's page budget is used up."
     if pages_since(3600) >= s["corner_pages_hour"]:

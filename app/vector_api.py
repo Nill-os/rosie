@@ -1,6 +1,7 @@
 # board #788 owner-vector-runs-rosie
 import re
 import subprocess
+import time
 
 from fastapi import APIRouter
 
@@ -15,6 +16,10 @@ import vector_pod
 router = APIRouter()
 IP = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}$")
 
+_vector_cache: dict | None = None
+_vector_cache_at: float = 0.0
+_VECTOR_TTL = 5.0
+
 
 def _ok(fn, *a):
     try:
@@ -27,21 +32,27 @@ def _ok(fn, *a):
 
 @router.get("/api/vector")
 def vector_status():
+    global _vector_cache, _vector_cache_at
+    if _vector_cache is not None and time.time() - _vector_cache_at < _VECTOR_TTL:
+        return _vector_cache
     cfg = config.load()
     robots = cfg.get("vector_robots") or []
     bot = robots[0] if robots else None
-    return {"on": bool(cfg.get("vector_on")), "running": vector_pod.status["running"], "host": vector_pod.host(),
-            "port": vector_pod.EP_PORT if cfg.get("vector_escapepod") else cfg.get("vector_port"),
-            "escapepod": bool(cfg.get("vector_escapepod")), "port_rule": "" if vector_pod.port_open_to_users(vector_pod.EP_PORT) else vector_pod.PORT_RULE, "check_port": cfg.get("vector_check_port"), "robots": robots,
-            "online": bool(bot and bot.get("ip") and vector_bot.reachable(bot["ip"])),
-            "held": bool(vector_pod._robot_obj and vector_pod._robot_obj.held),
-            "last": vector_pod.status["last"], "history": vector_pod.status.get("history", [])[-20:], "error": vector_pod.status["error"],
-            "personality": cfg.get("vector_personality", ""), "commands": cfg.get("vector_commands") or [],
-            "built_in": vector_intents.DEFAULT_COMMANDS, "face_panels": cfg.get("vector_face_panels") or [], "face_seconds": cfg.get("vector_face_seconds") or 15,
-            "quiet_idle": bool(cfg.get("vector_quiet_idle")), "wake_word": cfg.get("vector_wake_word") or "hey vector", "backpack": cfg.get("vector_backpack") or "own", "voice": cfg.get("vector_voice") or "rosie", "eyes": cfg.get("vector_eyes") or "rosie",
-            "followup": cfg.get("vector_followup", True),
-            "life": {"level": cfg.get("vector_life") or "some", "mood": vector_pod._alive.mood.describe() if vector_pod._alive else "", "last": vector_pod._alive.last if vector_pod._alive else None}, "stt_model": cfg.get("vector_stt_model") or "base.en", "talk_volume": cfg.get("vector_talk_volume") or "MEDIUM",
-            "pad": {**vector_pad.status, "on": cfg.get("vector_pad", True), "speed": cfg.get("vector_pad_speed") or "normal"}, "wirepod": (vector_pod.WIREPOD / "jdocs" / "jdocs.json").exists()}
+    result = {"on": bool(cfg.get("vector_on")), "running": vector_pod.status["running"], "host": vector_pod.host(),
+              "port": vector_pod.EP_PORT if cfg.get("vector_escapepod") else cfg.get("vector_port"),
+              "escapepod": bool(cfg.get("vector_escapepod")), "port_rule": "" if vector_pod.port_open_to_users(vector_pod.EP_PORT) else vector_pod.PORT_RULE, "check_port": cfg.get("vector_check_port"), "robots": robots,
+              "online": bool(bot and bot.get("ip") and vector_bot.reachable(bot["ip"])),
+              "held": bool(vector_pod._robot_obj and vector_pod._robot_obj.held),
+              "last": vector_pod.status["last"], "history": vector_pod.status.get("history", [])[-20:], "error": vector_pod.status["error"],
+              "personality": cfg.get("vector_personality", ""), "commands": cfg.get("vector_commands") or [],
+              "built_in": vector_intents.DEFAULT_COMMANDS, "face_panels": cfg.get("vector_face_panels") or [], "face_seconds": cfg.get("vector_face_seconds") or 15,
+              "quiet_idle": bool(cfg.get("vector_quiet_idle")), "wake_word": cfg.get("vector_wake_word") or "hey vector", "backpack": cfg.get("vector_backpack") or "own", "voice": cfg.get("vector_voice") or "rosie", "eyes": cfg.get("vector_eyes") or "rosie",
+              "followup": cfg.get("vector_followup", True),
+              "life": {"level": cfg.get("vector_life") or "some", "mood": vector_pod._alive.mood.describe() if vector_pod._alive else "", "last": vector_pod._alive.last if vector_pod._alive else None}, "stt_model": cfg.get("vector_stt_model") or "base.en", "talk_volume": cfg.get("vector_talk_volume") or "MEDIUM",
+              "pad": {**vector_pad.status, "on": cfg.get("vector_pad", True), "speed": cfg.get("vector_pad_speed") or "normal"}, "wirepod": (vector_pod.WIREPOD / "jdocs" / "jdocs.json").exists()}
+    _vector_cache = result
+    _vector_cache_at = time.time()
+    return result
 
 
 @router.post("/api/vector/settings")
@@ -89,6 +100,8 @@ def vector_settings(body: dict):
     if "on" in body:
         cfg["vector_on"] = bool(body["on"])
     config.save(cfg)
+    global _vector_cache
+    _vector_cache = None
     if "quiet_idle" in body or "talk_volume" in body:  # board #788 why-quiet-idle-volume
         bot = vector_pod.robot() if cfg.get("vector_robots") else None
         if bot is not None:

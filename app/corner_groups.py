@@ -102,7 +102,14 @@ def assign(llm=None, batch: int = 20) -> int:
         placed += [(guess, "guess", f["id"]) for f, guess in unclear]
     with corner._db() as db:
         db.executemany("UPDATE finds SET grp=?, grp_by=? WHERE id=? AND (grp_by IS NULL OR grp_by != 'owner')", placed)
+    if placed:
+        _invalidate_cache()
     return len(placed)
+
+
+def _invalidate_cache() -> None:
+    global _view_cache
+    _view_cache = None
 
 
 def move(fid: int, gid: str) -> dict:
@@ -112,6 +119,7 @@ def move(fid: int, gid: str) -> dict:
     with corner._db() as db:
         if not db.execute("UPDATE finds SET grp=?, grp_by='owner' WHERE id=?", (gid, int(fid))).rowcount:
             raise ValueError("That find is gone")
+    _invalidate_cache()
     return corner.find(fid)
 
 
@@ -137,21 +145,55 @@ def _same(a: dict, b: dict) -> bool:
     return r >= (0.85 if a["source"] == b["source"] else 0.92)
 
 
+def _title_words(t: str) -> set[str]:
+    return {w for w in _norm_title(t).split() if len(w) >= 4}
+
+
 def cards(finds: list[dict]) -> list[dict]:
     finds = sorted(finds, key=lambda f: f["at"], reverse=True)
     finds = sorted(finds, key=lambda f: not f["more"])
-    out = []
+    out: list[dict] = []
+    url_idx: dict[str, int] = {}   # norm_url -> index in out
+    word_idx: dict[str, set[int]] = {}  # title word -> set of card indices
+
     for f in finds:
-        home = next((c for c in out if any(_same(f, x) for x in c["_dups"])), None)
-        if home:
-            same_page = any(_norm_url(f["url"]) == _norm_url(x["url"]) for x in home["_dups"])
+        nu = _norm_url(f["url"])
+        card_idx = url_idx.get(nu)
+
+        if card_idx is None:
+            nt = _norm_title(f["title"])
+            if len(nt) >= 12:
+                words = _title_words(f["title"])
+                candidates: set[int] = set()
+                for w in words:
+                    candidates |= word_idx.get(w, set())
+                for i in candidates:
+                    c = out[i]
+                    for x in c["_dups"]:
+                        xt = _norm_title(x["title"])
+                        if len(xt) >= 12 and difflib.SequenceMatcher(None, nt, xt).ratio() >= (0.85 if f.get("source") == x.get("source") else 0.92):
+                            card_idx = i
+                            break
+                    if card_idx is not None:
+                        break
+
+        if card_idx is not None:
+            home = out[card_idx]
+            same_page = url_idx.get(nu) == card_idx
             home["_dups"].append(f)
+            url_idx[nu] = card_idx
             if not same_page:
                 home["also"].append({"host": corner_layout.host_of(f["url"]), "url": corner_layout.safe_href(f["url"]) or "", "title": f["title"]})
             continue
+
+        card_idx = len(out)
+        url_idx[nu] = card_idx
+        for w in _title_words(f["title"]):
+            word_idx.setdefault(w, set()).add(card_idx)
         out.append({"id": f["id"], "title": f["title"], "url": corner_layout.safe_href(f["url"]) or "", "host": corner_layout.host_of(f["url"]),
                     "at": f["at"], "summary": f["summary"][:2], "why": f["why"], "more": f["more"], "paper": f["paper"], "paper_used": f["paper_used"],
                     "group": f.get("grp") or "other", "also": [], "_dups": [f]})
+
     for c in out:
         c.pop("_dups")
     return out
@@ -173,15 +215,26 @@ def _header(g: dict, members: list[dict], notes: list[dict]) -> dict:
     return {"quote": best, "thought": thought}
 
 
+_view_cache: dict | None = None
+_view_cache_at: float = 0.0
+_VIEW_TTL = 60.0
+
+
 def view(look: bool = False) -> dict:
     # board #723 why-look-every-30min
+    global _view_cache, _view_cache_at
+    import time as _time
     assign(llm=None)
     gs = groups()
     now = corner._iso()
     seen = corner.meta_get("finds_seen", {"prev": "", "at": ""})
+    updated_seen = False
     if look and (not seen["at"] or (corner._now() - _parse(seen["at"])).total_seconds() > 1800):
         seen = {"prev": seen["at"], "at": now}
         corner.meta_set("finds_seen", seen)
+        updated_seen = True
+    if _view_cache is not None and not updated_seen and _time.time() - _view_cache_at < _VIEW_TTL:
+        return _view_cache
     allf = corner.finds(limit=2000)
     notes = corner.notes(limit=200)
     ids = {g["id"] for g in gs}
@@ -192,8 +245,11 @@ def view(look: bool = False) -> dict:
         out.append({"id": g["id"], "title": g["title"], "count": len(cs), "last": max((f["at"] for f in members), default=""),
                     "header": _header(g, members, notes) if members else None, "cards": cs})
     new = [f for f in allf if seen["prev"] and f["at"] > seen["prev"]]
-    return {"groups": [x for x in out if x["count"] or x["id"] != "other"], "all": cards(allf), "new": cards(new), "new_since": seen["prev"],
-            "targets": [{"id": g["id"], "title": g["title"]} for g in gs] + [{"id": "other", "title": "Other"}]}
+    result = {"groups": [x for x in out if x["count"] or x["id"] != "other"], "all": cards(allf), "new": cards(new), "new_since": seen["prev"],
+              "targets": [{"id": g["id"], "title": g["title"]} for g in gs] + [{"id": "other", "title": "Other"}]}
+    _view_cache = result
+    _view_cache_at = _time.time()
+    return result
 
 
 def _parse(iso: str):

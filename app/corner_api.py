@@ -1,6 +1,7 @@
 # board #720 safety-api-login-required
 import re
 import threading
+import time
 
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse, Response
@@ -13,6 +14,10 @@ import corner_pics
 
 router = APIRouter()
 IMG_RE = re.compile(r"[0-9a-f]{32}\.(png|jpg)")
+
+_status_cache: dict | None = None
+_status_cache_at: float = 0.0
+_STATUS_TTL = 8.0
 
 
 def err(msg, code=400):
@@ -41,7 +46,13 @@ def _pic(p):
 
 @router.get("/api/corner/status")
 def corner_status():
-    return corner.status()
+    global _status_cache, _status_cache_at
+    if _status_cache is not None and time.time() - _status_cache_at < _STATUS_TTL:
+        return _status_cache
+    result = corner.status()
+    _status_cache = result
+    _status_cache_at = time.time()
+    return result
 
 
 @router.post("/api/corner/settings")

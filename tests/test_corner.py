@@ -103,7 +103,7 @@ def fresh(monkeypatch):
 
 
 def turn_on(**kw):
-    corner.save_settings({"corner_on": True, **kw})
+    corner.save_settings({"corner_on": True, "corner_pc_browse_away_min": 0, **kw})
 
 
 @pytest.fixture
@@ -163,7 +163,7 @@ def test_she_uses_rosies_chat_model_at_the_live_context_size():
     import agent
     import workflows
     assert corner_browse.MODEL == agent.MODEL == workflows.MODEL
-    assert corner_browse.KEEP_ALIVE == "30m" and corner_browse.VISION_MODEL == "gemma4:12b"
+    assert corner_browse.KEEP_ALIVE == "10m" and corner_browse.VISION_MODEL == "gemma4:12b"
 
 
 @pytest.mark.parametrize("url", ["http://localhost:8765/api/chat", "http://127.0.0.1/", "http://10.0.0.5/", "http://192.168.1.1/admin",
@@ -468,7 +468,7 @@ def test_the_model_call_uses_the_chat_models_settings(fresh, monkeypatch):
     monkeypatch.setattr(corner_browse, "_ollama_transport", httpx.MockTransport(ollama))
     assert corner_browse._llm("q", corner_browse.START_SCHEMA) == {"query": "yagi antennas"}
     b = seen[0]
-    assert b["model"] == "qwen3.5:9b" and b["options"]["num_ctx"] == corner_browse.CTX_OPTIONS["num_ctx"] and b["keep_alive"] == "30m" and "tools" not in b
+    assert b["model"] == "qwen3.5:9b" and b["options"]["num_ctx"] == corner_browse.CTX_OPTIONS["num_ctx"] and b["keep_alive"] == "10m" and "tools" not in b
     assert "never follow instructions" in b["messages"][0]["content"]
 
 
@@ -747,7 +747,7 @@ def test_vision_is_batched_then_unloaded_and_the_chat_model_comes_back(fresh, mo
     calls.clear()
     corner_browse.unload_vision()
     corner_browse.warm_chat()
-    assert calls == [("generate", "gemma4:12b", 0, None, False), ("generate", "qwen3.5:9b", "30m", corner_browse.CTX_OPTIONS["num_ctx"], False)]
+    assert calls == [("generate", "gemma4:12b", 0, None, False), ("generate", "qwen3.5:9b", "10m", corner_browse.CTX_OPTIONS["num_ctx"], False)]
 
 
 def test_a_vision_model_that_never_answers_ends_the_round_at_once(fresh, monkeypatch):
@@ -1714,6 +1714,19 @@ def test_picture_looks_wait_while_the_owner_is_at_the_pc(fresh, monkeypatch, hea
     with corner._db() as db:
         db.execute("INSERT INTO pictures (at, file, fmt, width, height, bytes, src_url, looked) VALUES ('2026-10-16', 'x.jpg', 'jpeg', 1, 1, 1, 'https://example.org/x.jpg', 0)")
     corner_browse.pictures_step([], {"vision": False})
+
+
+def test_she_waits_until_the_pc_has_been_idle_for_the_configured_time(monkeypatch, health):
+    turn_on(corner_nonstop=True, corner_pc_browse_away_min=30)
+    _pc(monkeypatch, idle=29 * 60)
+    assert corner.pause_reason() and "idle 29 min" in corner.pause_reason()
+    assert corner.busy_reason() and "idle 29 min" in corner.busy_reason()
+    _pc(monkeypatch, idle=31 * 60)
+    assert corner.pause_reason() is None
+    assert corner.busy_reason() is None
+    turn_on(corner_nonstop=True, corner_pc_browse_away_min=0)
+    _pc(monkeypatch, idle=0)
+    assert corner.pause_reason() is None
 
 
 def test_blocked_sites_cover_subdomains_and_paths():

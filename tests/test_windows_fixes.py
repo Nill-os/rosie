@@ -28,6 +28,7 @@ def test_gcal_login_expired_message_is_per_system(monkeypatch, tmp_path):
     with pytest.raises(gcal.LoginExpired, match=r"Run \./login\.sh"):
         gcal.service()
     monkeypatch.setattr(plat, "IS_WIN", True)
+    monkeypatch.setattr(gcal, "_login_failed_until", 0)
     with pytest.raises(gcal.LoginExpired, match="Rosie Google Sign-in"):
         gcal.service()
 

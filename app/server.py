@@ -41,7 +41,6 @@ import corner
 import corner_api
 import hub
 import lifequest_api
-import study_api
 import models
 import a0_api
 import vector_api
@@ -62,7 +61,6 @@ app.include_router(paper_api.router)
 app.include_router(a0_api.router)
 app.include_router(corner_api.router)
 app.include_router(lifequest_api.router)
-app.include_router(study_api.router)
 app.include_router(agentdeck_api.router)
 app.include_router(graphview_api.router)
 app.include_router(vector_api.router)
@@ -93,6 +91,9 @@ def _startup():
     def _board_link():
         import board_link
         board_link.start()
+    def _validate_plan_keys():
+        import claude_plan
+        threading.Thread(target=claude_plan.validate_free_keys, daemon=True).start()
     steps = (("Agent Zero's place", a0_place),
              ("stopped flag", power.clear_flag),
              ("model", models.load_saved),
@@ -103,7 +104,8 @@ def _startup():
              ("board link", _board_link),
              ("Agent Zero tools", a0_tools),
              ("Agent Zero page", a0_page),
-             ("Vector", vector_pod.start))
+             ("Vector", vector_pod.start),
+             ("free API keys", _validate_plan_keys))
     for what, step in steps:
         try:
             step()
@@ -469,8 +471,32 @@ def _vector_stream(text):
 vector_pod.brain_stream = _vector_stream
 
 
+def _synth_ollama(text):
+    import io
+    import numpy as np
+    import soundfile as sf
+    import urllib.request
+    body = __import__("json").dumps({"model": "lfm3-audio", "input": text}).encode()
+    req = urllib.request.Request(
+        "http://localhost:11434/v1/audio/speech",
+        data=body,
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=90) as r:
+        wav_bytes = r.read()
+    audio, sr = sf.read(io.BytesIO(wav_bytes), dtype="float32")
+    if audio.ndim > 1:
+        audio = audio[:, 0]
+    return audio, sr
+
+
 def _synth(text):
     global _voice
+    if config.load().get("tts_provider", "lfm3") == "lfm3":
+        try:
+            return _synth_ollama(text)
+        except Exception:
+            pass
     with _tts_lock:
         if _voice is None:
             from kokoro_onnx import Kokoro

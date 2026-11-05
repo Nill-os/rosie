@@ -119,12 +119,16 @@ def status() -> dict:
     paused = float(st.get("paused_until") or 0)
     out = {"on": on, "installed": Path(binary()).exists(), "paused_until": paused if paused > time.time() else 0,
            "why": st.get("why", "") if paused > time.time() else "", "last_ok": st.get("last_ok"), "last_used": st.get("last_used")}
+    cfg = config.load()
+    has_free = bool(os.environ.get("GROQ_API_KEY") or cfg.get("groq_api_key") or
+                    os.environ.get("GEMINI_API_KEY") or cfg.get("gemini_api_key"))
+    free_note = " Free API (Groq/Gemini) handles planning meanwhile." if has_free else " Rosie plans with her own model."
     if not on:
-        out["line"] = "Off: Rosie plans with her own model."
+        out["line"] = "Off:" + free_note
     elif not out["installed"]:
-        out["line"] = "Claude Code is not installed on this PC, so Rosie plans with her own model."
+        out["line"] = "Claude Code is not installed on this PC." + free_note
     elif out["paused_until"]:
-        out["line"] = f"Paused until {time.strftime(timefmt.nopad('%-I:%M %p'), time.localtime(paused))}: {out['why']} Rosie plans with her own model meanwhile."
+        out["line"] = f"Paused until {time.strftime(timefmt.nopad('%-I:%M %p'), time.localtime(paused))}: {out['why']}" + free_note
     else:
         out["line"] = "On: planning requests go to Claude, then Rosie carries out the plan."
     return out
@@ -164,11 +168,11 @@ def _run(cmd: list, prompt: str, timeout: int) -> subprocess.CompletedProcess:
 
 def ask(prompt: str, schema: dict | None = None, timeout: int = TIMEOUT_S, system: str | None = None):
     if not available():
-        return None
+        return _free_api_ask(prompt, schema, system)
     try:
         WORKDIR.mkdir(parents=True, exist_ok=True)
     except OSError:
-        return None
+        return _free_api_ask(prompt, schema, system)
     cmd = [binary(), "-p", "--model", MODEL, "--setting-sources", "project", "--strict-mcp-config", "--tools", "", "--no-session-persistence",
            "--system-prompt", system or RULES, "--output-format", "json"] + (["--json-schema", json.dumps(schema)] if schema else [])
     _save(last_used=time.time())
@@ -178,22 +182,120 @@ def ask(prompt: str, schema: dict | None = None, timeout: int = TIMEOUT_S, syste
         d = d if isinstance(d, dict) else {}
     except subprocess.TimeoutExpired:
         _save(paused_until=time.time() + FAIL_PAUSE_S, why="Claude took too long to answer.")
-        return None
+        return _free_api_ask(prompt, schema, system)
     except (OSError, ValueError, IndexError) as e:
         _save(paused_until=time.time() + FAIL_PAUSE_S, why=f"Claude could not be run ({type(e).__name__}).")
-        return None
+        return _free_api_ask(prompt, schema, system)
     text = str(d.get("result") or "") + " " + (r.stderr or "")[-500:]
     if r.returncode != 0 or d.get("is_error") or not d:
         if LIMIT_RE.search(text) or str(d.get("api_error_status") or "") == "429":
             _save(paused_until=_reset_time(text), why="Your Claude usage limit is reached.")
         else:
             _save(paused_until=time.time() + FAIL_PAUSE_S, why=f"Claude did not answer ({' '.join(text.split())[:120] or 'no reply'}).")
-        return None
+        return _free_api_ask(prompt, schema, system)
     _save(last_ok=time.time(), paused_until=0, why="")
     if schema:
         out = d.get("structured_output")
-        return out if isinstance(out, dict) else None
+        return out if isinstance(out, dict) else _free_api_ask(prompt, schema, system)
     return str(d.get("result") or "").strip() or None
+
+
+_FREE_GROQ_MODEL = "qwen/qwen3.8-27b"
+_FREE_GEMINI_MODEL = "gemini-2.0-flash-exp"
+FREE_API_TIMEOUT_S = 90
+
+
+def _groq_ask(prompt: str, schema: dict | None, system: str | None, api_key: str):
+    import httpx
+    sys_text = system or RULES
+    if schema:
+        sys_text += f"\n\nRespond ONLY with a valid JSON object matching this schema:\n{json.dumps(schema)}"
+    body: dict = {
+        "model": _FREE_GROQ_MODEL,
+        "messages": [{"role": "system", "content": sys_text}, {"role": "user", "content": prompt[:60000]}],
+        "temperature": 0.1,
+        "max_tokens": 4096,
+    }
+    if schema:
+        body["response_format"] = {"type": "json_object"}
+    r = httpx.post("https://api.groq.com/openai/v1/chat/completions",
+                   json=body, headers={"Authorization": f"Bearer {api_key}"}, timeout=FREE_API_TIMEOUT_S)
+    r.raise_for_status()
+    text = r.json()["choices"][0]["message"]["content"].strip()
+    return json.loads(text) if schema else (text or None)
+
+
+def _gemini_ask(prompt: str, schema: dict | None, system: str | None, api_key: str):
+    import httpx
+    sys_text = system or RULES
+    if schema:
+        sys_text += f"\n\nRespond ONLY with a valid JSON object matching this schema:\n{json.dumps(schema)}"
+    gen_cfg: dict = {"temperature": 0.1, "maxOutputTokens": 4096}
+    if schema:
+        gen_cfg["responseMimeType"] = "application/json"
+    r = httpx.post(
+        f"https://generativelanguage.googleapis.com/v1beta/models/{_FREE_GEMINI_MODEL}:generateContent?key={api_key}",
+        json={"contents": [{"role": "user", "parts": [{"text": prompt[:60000]}]}],
+              "generationConfig": gen_cfg,
+              "system_instruction": {"parts": [{"text": sys_text}]}},
+        timeout=FREE_API_TIMEOUT_S)
+    r.raise_for_status()
+    text = r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+    return json.loads(text) if schema else (text or None)
+
+
+def _free_api_ask(prompt: str, schema: dict | None = None, system: str | None = None):
+    """Try Groq then Gemini (free tiers) when Claude Code is unavailable or fails."""
+    cfg = config.load()
+    groq_key = os.environ.get("GROQ_API_KEY") or str(cfg.get("groq_api_key") or "")
+    gemini_key = os.environ.get("GEMINI_API_KEY") or str(cfg.get("gemini_api_key") or "")
+    if groq_key:
+        try:
+            out = _groq_ask(prompt, schema, system, groq_key)
+            if out is not None:
+                return out
+        except Exception:
+            pass
+    if gemini_key:
+        try:
+            out = _gemini_ask(prompt, schema, system, gemini_key)
+            if out is not None:
+                return out
+        except Exception:
+            pass
+    return None
+
+
+def validate_free_keys() -> dict:
+    """Return {groq: bool, gemini: bool} and log a warning for each missing/invalid key."""
+    import logging
+    import httpx
+    cfg = config.load()
+    groq_key = os.environ.get("GROQ_API_KEY") or str(cfg.get("groq_api_key") or "")
+    gemini_key = os.environ.get("GEMINI_API_KEY") or str(cfg.get("gemini_api_key") or "")
+    result = {"groq": False, "gemini": False}
+    if groq_key:
+        try:
+            r = httpx.get("https://api.groq.com/openai/v1/models",
+                          headers={"Authorization": f"Bearer {groq_key}"}, timeout=10)
+            r.raise_for_status()
+            result["groq"] = True
+        except Exception as e:
+            logging.warning("claude_plan: GROQ_API_KEY invalid or unreachable (%s)", e)
+    else:
+        logging.warning("claude_plan: GROQ_API_KEY not set — planning fallback degraded")
+    if gemini_key:
+        try:
+            r = httpx.get(
+                f"https://generativelanguage.googleapis.com/v1beta/models?key={gemini_key}",
+                timeout=10)
+            r.raise_for_status()
+            result["gemini"] = True
+        except Exception as e:
+            logging.warning("claude_plan: GEMINI_API_KEY invalid or unreachable (%s)", e)
+    else:
+        logging.warning("claude_plan: GEMINI_API_KEY not set — planning fallback degraded")
+    return result
 
 
 def _clip(s, n) -> str:

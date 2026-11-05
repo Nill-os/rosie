@@ -113,6 +113,10 @@ def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(pchealth, "input_idle_s", lambda: 3600.0)
     _no_network(monkeypatch)
     testguard.block_network(monkeypatch.setattr)
+    if "vector_api" in sys.modules:
+        sys.modules["vector_api"]._vector_cache = None
+    if "corner_api" in sys.modules:
+        sys.modules["corner_api"]._status_cache = None
     return tmp_path
 
 

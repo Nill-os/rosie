@@ -65,7 +65,7 @@ _T = rosie_tuned()
 CTX = int(os.environ.get("LM_CTX") or _T.get("num_ctx") or rosie_setting("NUM_CTX", 32768))
 NUM_GPU = _T.get("num_gpu") if _T else rosie_setting("NUM_GPU", None)  # a big window fits the GPU only with every layer there
 CTX_BUCKETS = (CTX, 65536)    # only an oversized draft goes past Rosie's context (and reloads the model)
-KEEP_ALIVE = "30m"            # same as Rosie, so lm never shortens how long her model stays loaded
+KEEP_ALIVE = "10m"            # same as Rosie, so lm never shortens how long her model stays loaded
 
 
 def die(msg, code=1):
