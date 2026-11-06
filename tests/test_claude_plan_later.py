@@ -382,7 +382,7 @@ def test_validate_free_keys_flags_a_model_the_provider_no_longer_offers(monkeypa
         req = httpx.Request("GET", url)
         if "groq" in url:
             return httpx.Response(200, request=req, json={"data": [{"id": "qwen/qwen3.8-27b"}]})
-        return httpx.Response(200, request=req, json={"models": [{"name": "models/gemini-3.8-flash"}, {"name": "models/gemini-2.5-flash-lite"}, {"name": "models/gemini-2.5-pro"}]})
+        return httpx.Response(200, request=req, json={"models": [{"name": "models/gemini-3.5-flash-lite"}, {"name": "models/gemini-3.8-flash"}]})
     monkeypatch.setattr(httpx, "get", get)
     with caplog.at_level("WARNING"):
         assert claude_plan.validate_free_keys() == {"groq": True, "gemini": True}
@@ -397,3 +397,40 @@ def test_validate_free_keys_flags_a_model_the_provider_no_longer_offers(monkeypa
     monkeypatch.setattr(claude_plan, "_gemini_ask", lambda *a: asked.append("gemini") or "y")
     assert claude_plan._free_api_ask("plan") == "y"
     assert asked == ["gemini"]
+
+
+def test_gemini_ask_sends_a_gemini_3_request_and_skips_thought_parts(monkeypatch):
+    import httpx
+    sent = {}
+    def post(url, **k):
+        sent["url"], sent["cfg"] = url, k["json"]["generationConfig"]
+        return httpx.Response(200, request=httpx.Request("POST", url), json={"candidates": [{"content": {"parts": [
+            {"text": "thinking out loud", "thought": True}, {"thoughtSignature": "abc"}, {"text": "the answer"}]}}]})
+    monkeypatch.setattr(httpx, "post", post)
+    assert claude_plan._gemini_ask("p", None, None, "K") == "the answer"
+    assert "gemini-3.5-flash-lite" in sent["url"]
+    assert "temperature" not in sent["cfg"] and sent["cfg"]["thinkingConfig"]["thinkingLevel"] in ("low", "medium", "high")
+
+
+def test_gemini_ask_with_no_answer_text_is_unreadable(monkeypatch):
+    import httpx
+    monkeypatch.setattr(httpx, "post", lambda url, **k: httpx.Response(200, request=httpx.Request("POST", url), json={"candidates": [{"content": {"parts": [{"thoughtSignature": "abc"}]}, "finishReason": "MAX_TOKENS"}]}))
+    import pytest
+    with pytest.raises(ValueError):
+        claude_plan._gemini_ask("p", None, None, "K")
+
+
+def test_a_404_from_a_listed_model_marks_it_gone_and_says_so(monkeypatch):
+    import httpx
+    _setup(monkeypatch, gemini=True)
+    calls = []
+    def gem(*a):
+        calls.append(1)
+        req = httpx.Request("POST", "https://generativelanguage.googleapis.com/x")
+        raise httpx.HTTPStatusError("gone", request=req, response=httpx.Response(404, request=req))
+    monkeypatch.setattr(claude_plan, "_groq_ask", lambda *a: (_ for _ in ()).throw(ValueError("bad")))
+    monkeypatch.setattr(claude_plan, "_gemini_ask", gem)
+    assert claude_plan._free_api_ask("p") is None
+    assert claude_plan._free_api_ask("p") is None
+    assert calls == [1]
+    assert "Gemini no longer offers its model" in claude_plan.status()["line"]

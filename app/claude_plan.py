@@ -264,7 +264,7 @@ def _ask(prompt: str, schema: dict | None, timeout: int, system: str | None, fre
 
 
 _FREE_GROQ_MODEL = "qwen/qwen3.8-27b"
-_FREE_GEMINI_MODEL = "gemini-2.5-flash-lite"
+_FREE_GEMINI_MODEL = "gemini-3.5-flash-lite"
 FREE_API_TIMEOUT_S = 90
 
 
@@ -302,7 +302,7 @@ def _gemini_ask(prompt: str, schema: dict | None, system: str | None, api_key: s
     sys_text = system or RULES
     if schema:
         sys_text += f"\n\nRespond ONLY with a valid JSON object matching this schema:\n{json.dumps(schema)}"
-    gen_cfg: dict = {"temperature": 0.1, "maxOutputTokens": 4096}
+    gen_cfg: dict = {"maxOutputTokens": 16384, "thinkingConfig": {"thinkingLevel": "low"}}
     if schema:
         gen_cfg["responseMimeType"] = "application/json"
     r = httpx.post(
@@ -313,7 +313,10 @@ def _gemini_ask(prompt: str, schema: dict | None, system: str | None, api_key: s
               "system_instruction": {"parts": [{"text": sys_text}]}},
         timeout=timeout)
     r.raise_for_status()
-    text = r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+    parts = ((r.json().get("candidates") or [{}])[0].get("content") or {}).get("parts") or []
+    text = "".join(p["text"] for p in parts if isinstance(p.get("text"), str) and not p.get("thought")).strip()
+    if not text:
+        raise ValueError("no answer text")
     return _parsed(text, schema)
 
 
@@ -352,7 +355,11 @@ def _free_api_ask(prompt: str, schema: dict | None = None, system: str | None = 
         try:
             out = fn(prompt, schema, system, key, min(FREE_API_TIMEOUT_S, left))
         except httpx.HTTPStatusError as e:
-            _free_failed(name, f"HTTP {e.response.status_code}")
+            if e.response.status_code == 404:
+                _model_gone.add(name)
+                logging.warning("claude_plan: %s no longer serves its model; update it in claude_plan.py", name)
+            else:
+                _free_failed(name, f"HTTP {e.response.status_code}")
             continue
         except ValueError as e:
             logging.warning("claude_plan: %s gave an unreadable answer (%s)", name, type(e).__name__)
