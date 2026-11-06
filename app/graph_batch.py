@@ -106,6 +106,7 @@ class Writer:
 
 
 _writer = {"w": None, "driver": None}
+_solo = {"n": 0}
 
 
 def _get_writer():
@@ -140,7 +141,7 @@ async def _add(w: Writer, batch: list[dict]) -> list[tuple]:
 def step(now: dt.datetime | None = None) -> int:
     if not cg.ready():
         return 0
-    batch = cg.pending(FAST_BATCH, now)
+    batch = cg.pending(1 if _solo["n"] > 0 else FAST_BATCH, now)
     if not batch:
         return 0
     why = cg.wait_reason()
@@ -162,16 +163,21 @@ def step(now: dt.datetime | None = None) -> int:
             cg._drop(e)
             return 0
         if cg._lost(e):
-            for it in batch:
-                cg._record(it, error=f"the graph database stopped while adding this ({type(e).__name__})")
+            if len(batch) == 1:
+                cg._record(batch[0], error=f"the graph database stopped while adding this ({type(e).__name__})")
+            else:
+                _solo["n"] = len(batch)
             cg._drop(e)
             return 0
         cg.state["last_error"] = f"{batch[0]['key']}+{len(batch) - 1}: {type(e).__name__}: {cg._clip(e, 200)}"
-        for it in batch:
-            cg._record(it, error=cg.state["last_error"])
+        if len(batch) > 1:
+            _solo["n"] = len(batch)
+            return 0
+        cg._record(batch[0], error=cg.state["last_error"])
         return 0
     finally:
         cg.state["doing"] = ""
+    _solo["n"] = max(0, _solo["n"] - 1)
     added = 0
     for it, uuid, err in results:
         if uuid:

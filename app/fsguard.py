@@ -12,7 +12,7 @@ MAX_BYTES = 200_000
 DENY_PARTS = policy.DENY_PARTS
 DENY_PREFIXES = policy.DENY_PREFIXES
 DENY_NAME = policy.DENY_NAME
-SECRET_PATTERNS = [(re.compile(r"://[^/\s:@]+:[^@\s/]{3,}@"), "://[REDACTED url credentials]@"), (re.compile(r"AIza[0-9A-Za-z_\-]{30,}"), "[REDACTED google key]"), (re.compile(r"\bsk-[A-Za-z0-9_\-]{20,}"), "[REDACTED api key]"),
+SECRET_PATTERNS = [(re.compile(r"://[^/\s:@]+:[^@\s/]{3,}@"), "://[REDACTED url credentials]@"), (re.compile(r"AIza[0-9A-Za-z_\-]{30,}"), "[REDACTED google key]"), (re.compile(r"\bsk-[A-Za-z0-9_\-]{20,}"), "[REDACTED api key]"), (re.compile(r"\bgsk_[A-Za-z0-9]{20,}"), "[REDACTED api key]"), (re.compile(r"(?im)^([ \t]*(?:set-)?cookie:)[ \t]*\S[^\r\n]*"), r"\1 [REDACTED]"),
                    (re.compile(r"\bgh[pousr]_[A-Za-z0-9]{30,}"), "[REDACTED github token]"), (re.compile(r"\bxox[abprs]-[A-Za-z0-9\-]{10,}"), "[REDACTED slack token]"),
                    (re.compile(r"\bAKIA[0-9A-Z]{16}\b"), "[REDACTED aws key]"), (re.compile(r"\bya29\.[A-Za-z0-9_\-]{20,}"), "[REDACTED google oauth]"),
                    (re.compile(r"(?i)(?<![A-Za-z0-9])[\w.-]{0,40}(password|passwd|secret|token|api[_-]?key)\w{0,20}\s*[:=]\s*['\"]?[^\s'\"]{8,}"), "[REDACTED credential]"),

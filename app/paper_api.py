@@ -9,8 +9,8 @@ import paper
 import paper_render
 
 router = APIRouter()
-DAY_RE = re.compile(r"^\d{4}-\d\d-\d\d$")
-IMG_RE = re.compile(r"^(img\d{1,2}|cartoon\d?)\.(jpg|png|webp|gif)$")
+DAY_RE = re.compile(r"\d{4}-\d\d-\d\d", re.ASCII)
+IMG_RE = re.compile(r"(img\d{1,2}|cartoon\d?)\.(jpg|png|webp|gif)", re.ASCII)
 # board #752 safety-paper-frame-no-scripts
 FRAME_CSP = "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; font-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'"
 
@@ -22,7 +22,7 @@ def err(msg, code=400):
 def _day(day: str | None) -> str | None:
     if not day:
         return paper._now().date().isoformat()
-    return day if DAY_RE.match(day) else None
+    return day if DAY_RE.fullmatch(day) else None
 
 
 class Day(BaseModel):
@@ -64,7 +64,7 @@ def paper_view(day: str | None = None, look: str = "cyberdeck"):
 
 @router.get("/api/paper/img/{day}/{name}")
 def paper_img(day: str, name: str):
-    if not DAY_RE.match(day) or not IMG_RE.match(name):
+    if not DAY_RE.fullmatch(day) or not IMG_RE.fullmatch(name):
         return err("Not found.", 404)
     f = paper.DIR / day / name
     if not f.exists():

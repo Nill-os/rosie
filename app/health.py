@@ -122,10 +122,10 @@ def check_user_services():
     return rows
 
 
-def _unit_result(unit: str) -> str:
+def _unit_result(unit: str, prop: str = "Result") -> str:
     import pc_tools
     try:
-        return subprocess.run(["systemctl", "--user", "show", "-p", "Result", "--value", unit], capture_output=True, text=True, timeout=5,
+        return subprocess.run(["systemctl", "--user", "show", "-p", prop, "--value", unit], capture_output=True, text=True, timeout=5,
                               env=pc_tools.user_bus_env()).stdout.strip()
     except (OSError, subprocess.SubprocessError):
         return ""
@@ -141,12 +141,16 @@ def _unpushed_backups():
     try:
         if not BACKUP_REPO_NAME.read_text(encoding="utf-8").strip():
             return None
+    except (OSError, UnicodeDecodeError):
+        return None
+    try:
         out = subprocess.run(["git", "-C", str(BACKUP_REPO_DIR), "log", "--format=%ct", "@{u}..HEAD"],
                              capture_output=True, text=True, timeout=10)
-    except (OSError, subprocess.SubprocessError):
-        return None
+    except (OSError, subprocess.SubprocessError) as e:
+        return f"git could not run ({type(e).__name__})"
     if out.returncode != 0:
-        return None
+        why = (out.stderr or "").strip().splitlines()
+        return "the backup repo has no upstream branch or git failed" + (f": {why[-1][:120]}" if why else "")
     stamps = [int(x) for x in out.stdout.split() if x.isdigit()]
     if not stamps:
         return 0, 0.0
@@ -169,6 +173,8 @@ def check_backup():
     if h > 36:
         return _row("Backup", "bad", f"newest backup is {h:.0f} hours old", BACKUP_FIX)
     off = _unpushed_backups()
+    if isinstance(off, str):
+        return _row("Backup", "warn", f"cannot tell whether backups are copied off this PC: {off}", "~/assistant/backup-data.sh")
     if off and off[0] > 0:
         n, oldest = off
         msg = f"{n} backup{'s' if n != 1 else ''} not copied off this PC yet (oldest {oldest:.0f} h)"
@@ -205,6 +211,8 @@ def check_repo():
     except Exception:
         return _row("Code backup (GitHub)", "off", "git not available")
     days = (time.time() - last) / 86400
+    if _unit_result("rosie-sync.service", "LoadState") == "not-found":
+        return _row("Code backup (GitHub)", "off", "no daily sync is set up on this PC")
     res = _unit_result("rosie-sync.service")  # board #733 why-sync-row-real-result
     if res not in ("success", ""):
         return _row("Code backup (GitHub)", "warn", f"the last daily sync failed ({res}): the code isn't reaching GitHub",
@@ -244,7 +252,37 @@ def check_containers():
     return rows
 
 
-CHECKS = [check_ollama, check_disk, check_calendar, check_gmail, check_phone, check_user_services, check_containers, check_backup, check_repo, check_tailscale]
+def check_jobs():
+    import jobs
+    rows = jobs.listing()
+    sm = jobs.summary(rows)
+    if sm["level"] == "ok":
+        return _row("Background jobs", "ok", "every job is on time")
+    names = ", ".join(sm["bad"] + sm["late"])
+    return _row("Background jobs", "bad" if sm["bad"] else "warn", f"{len(sm['bad'])} failed, {len(sm['late'])} late: {names}", "open the Jobs page")
+
+
+UNIT_DIR = Path.home() / ".config" / "systemd" / "user"
+
+
+def check_unit_files():
+    if plat.IS_WIN:
+        return _row("Service files", "off", "Linux only")
+    shipped = ROOT / "ops" / "units"
+    stale = []
+    try:
+        for f in sorted(shipped.glob("*.service")):
+            installed = UNIT_DIR / f.name
+            if installed.is_file() and installed.read_bytes() != f.read_bytes():
+                stale.append(f.name)
+    except OSError as e:
+        return _row("Service files", "warn", f"could not compare the service files ({type(e).__name__})")
+    if stale:
+        return _row("Service files", "warn", f"{len(stale)} installed service file(s) differ from this version: {', '.join(stale)}", "run ops/install.sh")
+    return _row("Service files", "ok", "match this version")
+
+
+CHECKS = [check_ollama, check_disk, check_calendar, check_gmail, check_phone, check_user_services, check_containers, check_backup, check_repo, check_tailscale, check_jobs, check_unit_files]
 
 
 def run_all() -> list[dict]:
@@ -287,5 +325,7 @@ def summary(rows: list[dict]) -> dict:
 
 def alert(rows: list[dict], now: dt.datetime, add):
     for r in rows:
+        if r["name"] == "Background jobs":
+            continue
         if r["level"] == "bad" or (r["level"] == "warn" and "login is" in r["detail"]):
             add("system", f"Needs attention: {r['name']}", f"{r['detail']}. {('Fix: ' + r['fix']) if r['fix'] else ''}".strip(), "#/settings", key=f"health:{r['name']}:{now.date().isoformat()}", now=now)

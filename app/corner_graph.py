@@ -14,6 +14,7 @@ import httpx  # noqa: E402
 
 import corner  # noqa: E402
 import ctxsize  # noqa: E402
+import jobs  # noqa: E402
 import testguard  # noqa: E402
 import timefmt
 import ollama_url
@@ -268,9 +269,12 @@ def make_graph(password: str):
     return _run(build(), CONNECT_TIMEOUT_S + START_WAIT_S)
 
 
+def _loading(e: Exception) -> bool:
+    return type(e).__name__ == "BusyLoadingError" or "is loading the dataset" in str(e)
+
+
 def _starting(e: Exception) -> bool:
-    t = str(e)
-    return "loading the dataset" in t or "Connect call failed" in t or isinstance(e, ConnectionRefusedError)
+    return _loading(e) or "Connect call failed" in str(e) or isinstance(e, ConnectionRefusedError)
 
 
 async def retry_start(call, wait_s: float | None = None, sleep=None):
@@ -287,6 +291,8 @@ async def retry_start(call, wait_s: float | None = None, sleep=None):
 
 
 def _not_answering(e: Exception) -> str:
+    if _loading(e):
+        return f"The graph database on {HOST}:{PORT} is still loading its data and will be ready soon."
     return f"The graph database is not answering on {HOST}:{PORT} ({type(e).__name__})."
 
 
@@ -313,10 +319,6 @@ def ready() -> bool:
 def _drop(e: Exception):
     _graph["g"] = None
     state.update(on=False, why=_not_answering(e), checked=time.time())
-
-
-def _loading(e: Exception) -> bool:
-    return type(e).__name__ == "BusyLoadingError" or "loading the dataset" in str(e)
 
 
 def _lost(e: Exception) -> bool:
@@ -554,8 +556,10 @@ def _work_loop():
         try:
             corner.GRAPH_BACKLOG = backlog() if ready() else 0
             added = step()
+            jobs.mark("corner_graph", True)
         except Exception as e:
             state["last_error"] = f"{type(e).__name__}: {_clip(e, 200)}"
+            jobs.mark("corner_graph", False, state["last_error"])
         time.sleep(BACKLOG_ROUND_S if added >= (3 if FAST else BATCH) else ROUND_S)
 
 

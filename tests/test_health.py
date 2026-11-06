@@ -17,7 +17,7 @@ _REAL_UNIT_RESULT = health._unit_result
 
 @pytest.fixture(autouse=True)
 def _no_real_units(monkeypatch):
-    monkeypatch.setattr(health, "_unit_result", lambda unit: "")
+    monkeypatch.setattr(health, "_unit_result", lambda unit, prop="Result": "")
 
 
 @pytest.fixture(autouse=True)
@@ -69,6 +69,19 @@ def test_backup_ignores_off_pc_state_without_repo_name_or_upstream(monkeypatch, 
     assert health.check_backup()["level"] == "ok"
     monkeypatch.setattr(health, "BACKUP_REPO_DIR", tmp_path / "missing")
     assert health.check_backup()["level"] == "ok"
+
+
+def test_backup_without_repo_name_file_is_not_a_warning(monkeypatch, tmp_path):
+    _repo_with_origin(tmp_path, monkeypatch)
+    monkeypatch.setattr(health, "BACKUP_REPO_NAME", tmp_path / "no_such_file")
+    assert health.check_backup()["level"] == "ok"
+
+
+def test_backup_is_not_ok_when_the_repo_has_no_upstream(monkeypatch, tmp_path):
+    repo = _repo_with_origin(tmp_path, monkeypatch)
+    _git(repo, "branch", "--unset-upstream")
+    row = health.check_backup()
+    assert row["level"] != "ok" and "cannot tell" in row["detail"] and "upstream" in row["detail"]
 
 
 def test_summary_levels():
@@ -244,3 +257,32 @@ def test_windows_updates_row_follows_the_launchers_state(monkeypatch, tmp_path):
     assert put(0.1, "The new version (abc1234) failed GitHub's tests; waiting for a fixed one.")["level"] == "warn"
     state.write_text("not json")
     assert health.check_repo()["level"] == "off"
+
+
+def test_a_stale_installed_unit_file_warns_to_run_install(tmp_path, monkeypatch):
+    shipped = tmp_path / "ops" / "units"
+    shipped.mkdir(parents=True)
+    installed = tmp_path / "user"
+    installed.mkdir()
+    (shipped / "a.service").write_text("new")
+    (shipped / "b.service").write_text("same")
+    (shipped / "c.service").write_text("not installed")
+    (installed / "a.service").write_text("old")
+    (installed / "b.service").write_text("same")
+    monkeypatch.setattr(health, "ROOT", tmp_path)
+    monkeypatch.setattr(health, "UNIT_DIR", installed)
+    monkeypatch.setattr(health.plat, "IS_WIN", False)
+    row = health.check_unit_files()
+    assert row["level"] == "warn" and "a.service" in row["detail"] and "b.service" not in row["detail"] and "c.service" not in row["detail"]
+    assert row["fix"] == "run ops/install.sh"
+    (installed / "a.service").write_text("new")
+    assert health.check_unit_files()["level"] == "ok"
+    monkeypatch.setattr(health.plat, "IS_WIN", True)
+    assert health.check_unit_files()["level"] == "off"
+
+
+def test_code_backup_row_is_off_when_no_sync_unit_is_installed(monkeypatch):
+    monkeypatch.setattr(health.plat, "IS_WIN", False)
+    monkeypatch.setattr(health, "_unit_result", lambda unit, prop="Result": "not-found" if prop == "LoadState" else "success")
+    r = health.check_repo()
+    assert r["level"] == "off" and "no daily sync" in r["detail"]

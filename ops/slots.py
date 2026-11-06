@@ -19,7 +19,6 @@ PORT = int(os.environ.get("ROSIE_PORT") or 8765)
 STAGE_PORT = int(os.environ.get("ROSIE_STAGE_PORT") or 8780)
 PROBATION_MIN = 30
 SHARED = ["data", "secrets", "vault", ".venv", "vendor/gi", "android/app/build", "android/app/src/main/assets/model-en-us", "android/local.properties"]
-PROTECTED = ("ops", "start.sh", "sync-repo.sh", "backup-data.sh", "rotate-code.sh", "login.sh", "login-gmail.sh", ".git", ".github")
 STATE = OPS / "state.json"
 
 
@@ -387,12 +386,17 @@ def restart_units():
     try:
         if not shutil.which("systemctl"):
             return done
-        for u in sorted((SLOT[active()] / "ops" / "units").glob("*.service")):
+        names = sorted({u.name for slot in SLOT.values() for u in (slot / "ops" / "units").glob("*.service")})
+        for name in names:
             try:
-                _systemctl("try-restart", u.name)
-                done.append(u.name)
+                state = _systemctl("show", "-p", "ActiveState", "--value", name)
+                if (getattr(state, "stdout", "") or "").strip() == "activating":
+                    log_event("unit-restart-skipped", unit=name, why="running now")
+                    continue
+                _systemctl("try-restart", name)
+                done.append(name)
             except Exception as e:
-                log_event("unit-restart-failed", unit=u.name, error=str(e)[:200])
+                log_event("unit-restart-failed", unit=name, error=str(e)[:200])
     except Exception as e:
         log_event("unit-restart-failed", error=str(e)[:200])
     return done

@@ -1,5 +1,6 @@
 import datetime as dt
 import json
+import logging
 import shutil
 import subprocess
 import threading
@@ -8,6 +9,7 @@ from pathlib import Path
 
 import atomic
 import config
+import fsguard
 import plat
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -15,6 +17,7 @@ FILE = ROOT / "data" / "jobs.json"
 BOOT = time.time()
 HEARTBEAT_S = 60
 _lock = threading.Lock()
+log = logging.getLogger("rosie.jobs")
 _marks: dict = {}
 _units_cache: dict = {"at": 0.0, "data": {}}
 
@@ -84,6 +87,21 @@ def _board_link_on(cfg):
     return bool(cfg.get("board_link_dir") or cfg.get("board_link_repo"))
 
 
+def _mind_on(cfg):
+    import mind
+    return bool(mind.state.get("started"))
+
+
+def _corner_graph_on(cfg):
+    import corner_graph
+    return corner_graph._worker["t"] is not None
+
+
+def _brief_scheduler_on(cfg):
+    import briefs
+    return bool(briefs._started)
+
+
 MARKED = [
     ("scheduler", "Runs every timed job", _always, 300),
     ("health", "Checks Rosie's health", _always, 2 * H),
@@ -108,8 +126,13 @@ MARKED = [
     ("meeting", "Watches meeting recordings", _always, TICK),
     ("standing", "Runs your standing orders", _always, TICK),
     ("model", "Reconnects the language model", _always, TICK),
-    ("calendar", "Reads your Google calendar", _always, TICK),
+    ("calendar", "Reads your Google calendar", _cfg_on("remind_events"), TICK),
+    ("mind", "Learns from your chats", _mind_on, H),
+    ("corner_graph", "Builds the memory graph", _corner_graph_on, H),
+    ("brief_scheduler", "Starts the daily brief on time", _brief_scheduler_on, 5 * 60),
+    ("servers", "Finds servers on your network", _always, None),
 ]
+ON_DEMAND = {"servers"}
 TICK_NAMES = {"events", "reminders", "overdue", "scratch", "wrapup", "agents", "weekly_review", "meeting", "standing", "model", "calendar"}
 
 UNITS = [
@@ -123,7 +146,6 @@ UNITS = [
     ("assistant-dictation", "service", "Voice keys and dictation", None),
     ("assistant-overlay", "service", "Octopus overlay", None),
     ("graphiti-mcp", "service", "Memory graph tools", None),
-    ("rosie-phone", "service", "Phone link", None),
     ("assistant-notes-mcp", "service", "Notes tools for agents", None),
 ]
 
@@ -147,16 +169,25 @@ def _save():
         pass
 
 
+_mark_warned = 0.0
+
+
 def mark(name: str, ok: bool, err=None):
-    now = time.time()
-    with _lock:
-        prev = _marks.get(name) or {}
-        text = "" if ok else str(err or "failed")[:160]
-        if prev.get("ok") == ok and prev.get("err", "") == text and now - prev.get("at", 0) < HEARTBEAT_S:
-            return
-        _load()
-        _marks[name] = {"at": now, "ok": bool(ok), "err": text}
-        _save()
+    try:
+        now = time.time()
+        with _lock:
+            prev = _marks.get(name) or {}
+            text = "" if ok else fsguard.redact(str(err or "failed"))[0][:160]
+            if prev.get("ok") == ok and prev.get("err", "") == text and now - prev.get("at", 0) < HEARTBEAT_S:
+                return
+            _load()
+            _marks[name] = {"at": now, "ok": bool(ok), "err": text}
+            _save()
+    except Exception as e:
+        global _mark_warned
+        if time.time() - _mark_warned > 600:
+            _mark_warned = time.time()
+            log.warning("jobs.mark failed: %s", type(e).__name__)
 
 
 def mark_ok_many(names):
@@ -211,6 +242,8 @@ def _marked_row(spec, cfg, now):
         return _row(name, what, "ok", result="waiting for its first run")
     last = rec.get("at")
     nxt = last + interval if interval else None
+    if name in ON_DEMAND and now - last > D:
+        return _row(name, what, "off", last, "idle, runs when you open it", nxt)
     if not rec.get("ok"):
         return _row(name, what, "bad", last, "failed: " + (rec.get("err") or "no reason given"), nxt)
     if interval and now - last > 2 * interval:
@@ -251,7 +284,7 @@ def _read_units():
         names.append(f"{u}.{kind}")
         if kind == "timer":
             names.append(f"{u}.service")
-    out = subprocess.run(["systemctl", "--user", "--timestamp=unix", "show", "-p", "Id,ActiveState,Result,UnitFileState,ActiveEnterTimestamp,NextElapseUSecRealtime,LastTriggerUSec", *names],
+    out = subprocess.run(["systemctl", "--user", "--timestamp=unix", "show", "-p", "Id,LoadState,ActiveState,Result,UnitFileState,ActiveEnterTimestamp,NextElapseUSecRealtime,LastTriggerUSec", *names],
                          capture_output=True, text=True, timeout=8, env=pc_tools.user_bus_env()).stdout
     data = {}
     for block in out.split("\n\n"):
@@ -266,7 +299,7 @@ def _unit_row(spec, data, now):
     unit, kind, what, interval = spec
     name = unit
     p = data.get(f"{unit}.{kind}")
-    if not p:
+    if not p or p.get("LoadState") == "not-found":
         return _row(name, what, "off", result="not installed")
     state, enabled = p.get("ActiveState", ""), p.get("UnitFileState", "")
     if kind == "service":
@@ -328,3 +361,20 @@ def summary(rows: list[dict]) -> dict:
     bad = [r["name"] for r in rows if r["state"] == "bad"]
     late = [r["name"] for r in rows if r["state"] == "late"]
     return {"bad": bad, "late": late, "level": "bad" if bad else "late" if late else "ok"}
+
+
+_alerted: set = set()
+
+
+def alert(rows: list[dict], now, add):
+    bad = {r["name"]: r for r in rows if r["state"] == "bad"}
+    _alerted.intersection_update(bad)
+    for name, r in bad.items():
+        if name in _alerted:
+            continue
+        try:
+            add("system", f"Background job needs attention: {name}", f"{r['what']}: {r['result']}", "#/jobs", key=f"jobbad:{name}:{now.date().isoformat()}", now=now)
+        except Exception as e:
+            log.warning("job alert for %s failed: %s", name, type(e).__name__)
+            continue
+        _alerted.add(name)

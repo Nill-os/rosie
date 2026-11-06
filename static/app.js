@@ -96,10 +96,10 @@ const NAV = [['-', 'My day'], ['home', '⌂', 'Home'], ['inbox', '🔔', 'Inbox'
   ['-', 'Learn and grow'], ['lifequest', '★', 'Life Quest'], ['brief', '☀', 'Morning'],
   ['-', 'Work'], ['projects', '🧭', 'Projects'], ['meetings', '🎙', 'Meetings'], ['notes', '✎', 'Notes'],
   ['-', 'Rosie and helpers'], ['agentzero', '🧠', 'Agent Zero'], ['corner', '❀', "Rosie's corner"], ['memory', '◈', 'Memory'], ['skills', '✦', 'Skills'], ['vector', '🤖', 'Vector'],
-  ['-', 'System'], ['deck', '◫', 'System'],
+  ['-', 'System'], ['deck', '◫', 'Agent Deck'],
   ['-', ''], ['settings', '⚙', 'Settings']];
 const TABS = { home: [['home', 'Home'], ['chats', 'Chats']], brief: [['brief', 'Morning'], ['paper', 'Morning Paper']], memory: [['memory', 'Memory'], ['graph', 'Memory graph']],
-  deck: [['deck', 'System'], ['servers', 'Servers'], ['jobs', 'Jobs'], ['tokens', 'Tokens'], ['terminal', 'Terminal']] };
+  deck: [['deck', 'Agent Deck'], ['servers', 'Servers'], ['jobs', 'Jobs'], ['tokens', 'Tokens'], ['terminal', 'Terminal']] };
 const TAB_GROUP = {}; for (const [g, list] of Object.entries(TABS)) for (const [k] of list) TAB_GROUP[k] = g;
 let menuLayout = [];
 function menuGroups(nav, layout) {
@@ -1169,7 +1169,7 @@ VIEWS.settings = async (arg) => {
   };
   const setPlanning = async (v) => {
     if (v === s.planning.on) return;
-    try { await post('/api/settings', { claude_planning: v }); toast(v ? 'Planning requests now go to Claude' : 'Rosie plans with her own model again'); again(); } catch (e) { toast(e.message, 1); }
+    try { await post('/api/settings', { claude_planning: v }); toast(v ? (!s.planning.installed ? 'Planning is on, but Claude Code is not installed: ' + (s.planning.free_api ? 'Groq or Gemini plans' : 'Rosie\'s own model plans') : s.planning.paused_until ? 'Planning is on, but Claude is paused: ' + (s.planning.free_api ? 'Groq or Gemini plans for now' : 'Rosie\'s own model plans for now') : 'Planning requests now go to Claude') : 'Rosie plans with her own model again'); again(); } catch (e) { toast(e.message, 1); }
   };
   const setOrch = async (v) => {
     if (v === s.orchestrator) return;
@@ -1185,7 +1185,7 @@ VIEWS.settings = async (arg) => {
         row('Context window', ctxBox(cx, again)),
         row('Security', secBox(sw, again)),
         row('Brain', h('div', {}, h('div', { class: 'seg' }, h('button', { class: s.brain !== 'agent_zero' ? 'on' : '', onclick: () => setBrain('rosie') }, 'Rosie'), h('button', { class: s.brain === 'agent_zero' ? 'on' : '', onclick: () => setBrain('agent_zero') }, 'Agent Zero')), h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1));margin-top:4px' }, 'Who answers chat, voice and the phone app. Agent Zero is better at big tasks but slower; it uses Rosie\'s tools, and texts, calls, deletes and PC commands still wait for your Yes. If it is down, Rosie answers.'))),
-        row('Planning', h('div', {}, h('div', { class: 'seg' }, h('button', { class: s.planning.on ? 'on' : '', onclick: () => setPlanning(true) }, 'Claude'), h('button', { class: s.planning.on ? '' : 'on', onclick: () => setPlanning(false) }, 'Rosie\'s own model')), h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1));margin-top:4px' }, s.planning.line + ' Claude only plans (it gets your calendar, tasks and projects for the week, never mail or notes); Rosie does the work, with her usual Yes cards. Spoken requests skip it.'))),
+        row('Planning', h('div', {}, h('div', { class: 'seg' }, h('button', { class: s.planning.on ? 'on' : '', onclick: () => setPlanning(true) }, 'Claude'), h('button', { class: s.planning.on ? '' : 'on', onclick: () => setPlanning(false) }, 'Rosie\'s own model')), h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1));margin-top:4px' }, s.planning.line + ' Claude plans (it gets your calendar, tasks and projects for the week, plus files and command output Agent Zero passes along for planning or writing); Rosie does the work, with her usual Yes cards. When Claude is paused, not installed or fails, and a free Groq or Gemini key is set, the same planning or writing context (up to 60 KB, secrets hidden) goes to Groq or Gemini instead; with no key, Rosie\'s own model plans. Turn planning off and nothing leaves this PC. Spoken requests skip it.'))),
         s.orchestrator === null ? null : row('Orchestrator', h('div', {}, h('div', { class: 'seg' }, h('button', { class: s.orchestrator ? 'on' : '', onclick: () => setOrch(true) }, 'On'), h('button', { class: s.orchestrator ? '' : 'on', onclick: () => setOrch(false) }, 'Off')), h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1));margin-top:4px' }, 'On: your Claude Code sessions plan and check, and Rosie and Agent Zero do the work until Claude is satisfied. Same switch as "delegate on" and "delegate off".'))),
         row('GPU', s.gpu.name ? [s.gpu.name, h('div', { class: 'bar' }, h('i', { style: 'width:' + gpuPct + '%' })), h('span', { class: 'muted' }, `${s.gpu.used_mb} / ${s.gpu.total_mb} MB`)] : (s.gpu.error || 'not found')),
         row('Google Calendar', s.google.ok ? 'connected' : h('span', { style: 'color:var(--bad)' }, (s.google.error || 'login needed') + ' · ' + loginHint)),
@@ -1783,7 +1783,7 @@ VIEWS.tokens = async () => {
 };
 
 VIEWS.deck = async () => {
-  setHeader('System', []);
+  setHeader('Agent Deck', []);
   show(h('iframe', { class: 'deckframe', src: '/deck/index.html', title: 'Agent Deck: what every agent is doing, with controls' }));
 };
 

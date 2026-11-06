@@ -440,7 +440,7 @@ def test_selfdev_plan_and_review_send_only_code_and_return_claudes_verdict(tmp_p
     monkeypatch.setattr(selfdev, "_idle", lambda: (idle, st))
     asked = []
 
-    def fake_ask(prompt, schema=None, timeout=0):
+    def fake_ask(prompt, schema=None, timeout=0, system=None, free=True):
         asked.append(prompt)
         return {"ok": False, "fixes": ["Add a test for the weather screen."], "summary": "Close."} if schema else "1. Edit app/vector_face.py"
     monkeypatch.setattr(claude_plan, "ask", fake_ask)
@@ -604,7 +604,7 @@ def test_a_review_of_a_cut_off_change_never_passes(monkeypatch):
     import selfdev
     monkeypatch.setattr(selfdev, "_idle", lambda: (Path("/nowhere"), {}))
     monkeypatch.setattr(selfdev, "_patch", lambda st: "diff --git a/x\n" + "+" * 50 + "\n[TRUNCATED: the change is longer than shown]")
-    monkeypatch.setattr(claude_plan, "ask", lambda prompt, schema=None, timeout=0: {"ok": True, "fixes": [], "summary": "Looks good."})
+    monkeypatch.setattr(claude_plan, "ask", lambda prompt, schema=None, timeout=0, system=None, free=True: {"ok": True, "fixes": [], "summary": "Looks good."})
     r = selfdev.review("big change")
     assert r["ok"] is False and "split it into smaller commits" in r["fixes"][-1]
 

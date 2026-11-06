@@ -1389,3 +1389,11 @@ def test_paper_model_calls_use_her_live_context_size():
     m = paper.Model(post=lambda url, json=None, timeout=None: (sent.append(json), type("R", (), {"json": lambda self: {"message": {"content": "ok"}}})())[1])
     assert m.ask("s", "u") == "ok"
     assert sent[0]["options"]["num_ctx"] == ctxsize.options(m.model)["num_ctx"]
+
+
+def test_a_day_or_image_name_with_a_trailing_newline_is_refused():
+    import paper_api
+    assert paper_api._day("2026-11-05") == "2026-11-05"
+    assert paper_api._day("2026-11-05\n") is None
+    assert paper_api.DAY_RE.fullmatch("2026-11-05\n") is None
+    assert paper_api.IMG_RE.fullmatch("img1.jpg") and paper_api.IMG_RE.fullmatch("img1.jpg\n") is None

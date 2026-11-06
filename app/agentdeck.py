@@ -705,6 +705,12 @@ def act(body: dict) -> dict:
             return {"ok": True, "msg": "Rosie browses when idle." if on else "Rosie's browsing is off."}
         if name == "planning":
             _rosie_py(f"import config; c = config.load(); c['claude_planning'] = {on}; config.save(c)")
-            return {"ok": True, "msg": "Rosie plans with Claude." if on else "Rosie plans on her own model."}
+            if not on:
+                return {"ok": True, "msg": "Rosie plans on her own model."}
+            try:
+                line = _rosie_py("import claude_plan; print(claude_plan.status()['line'])").splitlines()[-1]
+            except (RuntimeError, OSError, subprocess.SubprocessError, IndexError):
+                line = ""
+            return {"ok": True, "msg": "Planning is on. " + line if line else "Planning is on."}
         return {"error": "Unknown switch."}
     return {"error": "Unknown action."}

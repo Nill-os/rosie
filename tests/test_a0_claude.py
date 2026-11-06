@@ -23,7 +23,7 @@ def test_agent_zero_gets_the_plan_and_verify_rules_in_its_own_prompt_file(tmp_pa
 def test_verify_with_claude_answers_ok_problems_and_fix(monkeypatch):
     seen = {}
 
-    def fake_ask(prompt, schema=None, timeout=0, system=None):
+    def fake_ask(prompt, schema=None, timeout=0, system=None, free=True):
         seen.update(prompt=prompt, schema=schema, system=system)
         return {"ok": False, "problems": ["The sizes are from /a0/usr/workdir, not /host/home."], "fix": "Run du on /host/home."}
     monkeypatch.setattr(claude_plan, "enabled", lambda: True)
@@ -325,6 +325,7 @@ def test_without_claude_or_rosies_model_only_code_problems_count(monkeypatch):
 
 
 def test_claude_is_tried_first_and_says_it_checked(monkeypatch):
+    claude_plan._who.v = "claude"
     monkeypatch.setattr(claude_plan, "available", lambda: True)
     monkeypatch.setattr(claude_plan, "ask", lambda *a, **k: {"ok": True, "problems": [], "fix": ""})
     monkeypatch.setattr(claude_plan, "_local", lambda *a: pytest.fail("Claude answered"))
@@ -370,10 +371,11 @@ def test_without_claude_agent_zero_still_gets_a_plan_and_a_solution_from_rosie(m
 
 
 def test_with_claude_the_hard_part_and_the_plan_come_from_claude_without_secrets(monkeypatch):
+    claude_plan._who.v = "claude"
     monkeypatch.setattr(claude_plan, "available", lambda: True)
     monkeypatch.setattr(claude_plan, "context", lambda: "Next week: nothing fixed.")
     seen = []
-    monkeypatch.setattr(claude_plan, "ask", lambda prompt, schema=None, timeout=0, system=None: seen.append((prompt, system)) or "1. Run make.")
+    monkeypatch.setattr(claude_plan, "ask", lambda prompt, schema=None, timeout=0, system=None, free=False: seen.append((prompt, system)) or "1. Run make.")
     monkeypatch.setattr(claude_plan, "_local", lambda *a: pytest.fail("Claude answered"))
     assert claude_plan.solve("fix the build", "token=" + FAKE_KEY, "linker") == {"solution": "1. Run make.", "by": "claude"}
     assert claude_plan.plan_for_agent("fix the build", "found x") == {"plan": "1. Run make.", "by": "claude"}
@@ -491,6 +493,7 @@ def test_a_one_step_answer_to_a_real_request_is_checked_but_small_talk_is_not(ex
 
 
 def test_the_other_ais_lines_come_from_every_source_masked_and_claude_answers_from_them(tmp_path, monkeypatch):
+    claude_plan._who.v = "claude"
     mem = tmp_path / "proj" / "memory"
     mem.mkdir(parents=True)
     (mem / "homelab.md").write_text("Proxmox host 10.0.4.10, Immich LXC 10.0.4.52:2283\napi_key=" + FAKE_KEY + " immich\nunrelated\n")
@@ -507,7 +510,7 @@ def test_the_other_ais_lines_come_from_every_source_masked_and_claude_answers_fr
     assert any("Rosie's memory" in x for x in lines) and not any("Laundry" in x or "unrelated" in x for x in lines)
     seen = {}
 
-    def fake_ask(prompt, schema=None, timeout=0, system=None):
+    def fake_ask(prompt, schema=None, timeout=0, system=None, free=True):
         seen.update(prompt=prompt, schema=schema, system=system)
         return {"answers": [{"question": "Immich address?", "known": True, "answer": "10.0.4.52:2283", "source": "Claude Code memory",
                              "how_to_find": ""}]}
@@ -614,9 +617,10 @@ def test_claudes_text_is_saved_only_in_agent_zeros_own_job_files(ext, monkeypatc
 
 
 def test_claude_writes_the_text_with_the_material_and_rosies_model_stands_in(monkeypatch):
+    claude_plan._who.v = "claude"
     seen = {}
 
-    def fake_ask(prompt, schema=None, timeout=0, system=None):
+    def fake_ask(prompt, schema=None, timeout=0, system=None, free=True):
         seen.update(prompt=prompt, schema=schema, system=system)
         return {"text": "# Final", "path": "/a0/usr/workdir/jobs/x/q.md"}
     monkeypatch.setattr(claude_plan, "available", lambda: True)
@@ -766,6 +770,7 @@ def test_blank_line_flood_in_a_terminal_result_is_scanned_fast_and_a_none_tool_n
 
 
 def test_verify_leaves_a_trace_of_who_checked(monkeypatch, tmp_path):
+    claude_plan._who.v = "claude"
     monkeypatch.setattr(claude_plan, "VERIFY_LOG", tmp_path / "verify_log.jsonl")
     monkeypatch.setattr(claude_plan, "available", lambda: True)
     monkeypatch.setattr(claude_plan, "ask", lambda *a, **k: {"ok": False, "problems": ["x", "y"], "fix": "f"})

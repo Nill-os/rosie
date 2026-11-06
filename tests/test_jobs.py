@@ -77,6 +77,8 @@ def test_windows_units_say_linux_only(monkeypatch):
     r = by_name(jobs.listing())
     assert r["rosie-backup"]["state"] == "off" and r["rosie-backup"]["result"] == "off (Linux only)"
     assert r["assistant-dictation"]["result"] == "off (Linux only)"
+    for spec in jobs.UNITS:
+        assert r[spec[0]]["state"] == "off" and r[spec[0]]["result"] == "off (Linux only)", spec[0]
 
 
 def test_unit_rows_from_systemd(monkeypatch):
@@ -88,7 +90,6 @@ def test_unit_rows_from_systemd(monkeypatch):
         "rosie-sync.service": {"Id": "rosie-sync.service", "Result": "success"},
         "assistant-dictation.service": {"Id": "assistant-dictation.service", "ActiveState": "inactive", "UnitFileState": "enabled", "Result": "success"},
         "assistant-overlay.service": {"Id": "assistant-overlay.service", "ActiveState": "inactive", "UnitFileState": "disabled", "Result": "success"},
-        "rosie-phone.service": {"Id": "rosie-phone.service", "ActiveState": "active", "UnitFileState": "enabled", "Result": "success", "ActiveEnterTimestamp": f"@{now - 60}"},
     }
     monkeypatch.setattr(jobs.shutil, "which", lambda n: "/bin/systemctl")
     monkeypatch.setattr(jobs.plat, "IS_WIN", False)
@@ -98,7 +99,6 @@ def test_unit_rows_from_systemd(monkeypatch):
     assert r["rosie-sync"]["state"] == "late"
     assert r["assistant-dictation"]["state"] == "bad"
     assert r["assistant-overlay"]["state"] == "off"
-    assert r["rosie-phone"]["state"] == "ok"
     assert r["graphiti-mcp"]["result"] == "not installed"
 
 
@@ -208,7 +208,7 @@ def test_marks_from_another_process_show_and_are_kept_on_write(tmp_path, monkeyp
 def test_tick_jobs_have_rows_and_failures_show(monkeypatch):
     import automations
     import gcal
-    monkeypatch.setattr(automations.config, "load", lambda: {})
+    monkeypatch.setattr(automations.config, "load", lambda: {"remind_events": True})
     monkeypatch.setattr(automations, "JOBS", [])
 
     def job_events(now, cfg):
@@ -261,3 +261,243 @@ def test_timer_that_never_fired_goes_late(monkeypatch):
     assert r["demo-fresh"]["state"] == "ok"
 
 
+def test_calendar_row_is_off_when_event_reminders_are_off(monkeypatch):
+    import automations
+    monkeypatch.setattr(automations.config, "load", lambda: {"remind_events": False})
+    monkeypatch.setattr(automations, "JOBS", [])
+    monkeypatch.setattr(automations, "job_corner", lambda now, cfg: None)
+    automations.tick()
+    assert by_name(jobs.listing())["calendar"]["state"] == "off"
+    monkeypatch.setattr(automations.config, "load", lambda: {"remind_events": True})
+    automations.tick()
+    assert by_name(jobs.listing())["calendar"]["state"] == "ok"
+
+
+def test_login_alert_failure_does_not_skip_the_job_marks(monkeypatch):
+    import automations
+    import gcal
+    monkeypatch.setattr(automations.config, "load", lambda: {"remind_events": True})
+
+    def job_reminders(now, cfg):
+        return None
+
+    def job_meeting(now, cfg):
+        raise gcal.LoginExpired()
+
+    def boom(now):
+        raise OSError("inbox locked")
+
+    monkeypatch.setattr(automations, "JOBS", [job_meeting, job_reminders])
+    monkeypatch.setattr(automations, "_login_alert", boom)
+    monkeypatch.setattr(automations, "job_corner", lambda now, cfg: None)
+    automations.tick()
+    r = by_name(jobs.listing())
+    assert r["reminders"]["state"] == "ok"
+    assert r["calendar"]["state"] == "bad"
+    assert r["scheduler"]["state"] == "ok"
+
+
+def test_paper_is_not_marked_ok_when_nothing_was_built(monkeypatch):
+    import automations
+    import paper
+    import datetime as dt
+    monkeypatch.setattr(paper, "fake_loaded", lambda: False)
+    monkeypatch.setattr(paper, "morning_due", lambda now: True)
+    monkeypatch.setattr(paper, "claim_run", lambda day, now: True)
+    monkeypatch.setattr(paper, "state", {"running": False})
+    monkeypatch.setattr(automations.threading, "Thread", lambda target, **kw: type("T", (), {"start": staticmethod(target)})())
+    monkeypatch.setattr(paper, "morning", lambda now=None: {"running": True})
+    automations.job_paper(dt.datetime.now(), {})
+    assert "paper" not in jobs._marks
+    monkeypatch.setattr(paper, "morning", lambda now=None: {"day": "x"})
+    monkeypatch.setattr(paper, "settings", lambda cfg=None: {"on": False})
+    automations.job_paper(dt.datetime.now(), {})
+    assert "paper" not in jobs._marks
+    monkeypatch.setattr(paper, "settings", lambda cfg=None: {"on": True})
+    automations.job_paper(dt.datetime.now(), {})
+    assert jobs._marks["paper"]["ok"] is True
+
+
+def test_bad_jobs_reach_health_and_inbox_once(monkeypatch):
+    import datetime as dt
+    import health
+    jobs.mark("tokens", False, "boom")
+    row = health.check_jobs()
+    assert row["name"] == "Background jobs" and row["level"] == "bad" and "tokens" in row["detail"]
+    assert health.alert([row], dt.datetime.now(), lambda *a, **k: (_ for _ in ()).throw(AssertionError("health must not post")))  is None
+    jobs._alerted.clear()
+    sent = []
+    now = dt.datetime(2026, 11, 5, 8, 0)
+    rows = jobs.listing()
+    jobs.alert(rows, now, lambda *a, **k: sent.append(a))
+    jobs.alert(rows, now, lambda *a, **k: sent.append(a))
+    assert len(sent) == 1 and "tokens" in sent[0][1]
+    jobs.mark("tokens", True)
+    jobs.alert(jobs.listing(), now, lambda *a, **k: sent.append(a))
+    jobs.mark("tokens", False, "again")
+    jobs.alert(jobs.listing(), now, lambda *a, **k: sent.append(a))
+    assert len(sent) == 2
+
+
+def test_health_jobs_row_is_ok_when_all_fine():
+    import health
+    assert health.check_jobs()["level"] in ("ok", "warn")
+    assert health.check_jobs in health.CHECKS
+
+
+def test_thread_heartbeats_write_marks_and_rows_exist(monkeypatch):
+    names = {s[0] for s in jobs.MARKED}
+    assert {"mind", "corner_graph", "brief_scheduler", "servers"} <= names
+    import briefs
+    import servers
+    monkeypatch.setattr(servers, "discover", lambda: None)
+    monkeypatch.setattr(servers.threading, "Thread", lambda target, **kw: type("T", (), {"start": staticmethod(target)})())
+    servers.state["running"] = False
+    servers.refresh()
+    assert jobs._marks["servers"]["ok"] is True
+    import inspect
+    import mind
+    assert 'jobs.mark("mind"' in inspect.getsource(mind)
+    assert 'jobs.mark("brief_scheduler"' in inspect.getsource(briefs)
+    import corner_graph
+    assert 'jobs.mark("corner_graph"' in inspect.getsource(corner_graph)
+
+
+def test_dead_thread_rows_go_late_and_off_when_not_started(monkeypatch):
+    import mind
+    monkeypatch.setitem(mind.state, "started", False)
+    assert by_name(jobs.listing())["mind"]["state"] == "off"
+    monkeypatch.setitem(mind.state, "started", True)
+    assert by_name(jobs.listing())["mind"]["state"] == "late"
+    jobs.mark("mind", True)
+    assert by_name(jobs.listing())["mind"]["state"] == "ok"
+
+
+def test_alert_retries_after_a_failed_post():
+    import datetime as dt
+    rows = [{"name": "x", "what": "w", "state": "bad", "result": "r"}]
+    calls = []
+
+    def flaky(*a, **k):
+        calls.append(1)
+        if len(calls) == 1:
+            raise OSError("locked")
+
+    jobs._alerted.clear()
+    jobs.alert(rows, dt.datetime.now(), flaky)
+    assert "x" not in jobs._alerted
+    jobs.alert(rows, dt.datetime.now(), flaky)
+    assert "x" in jobs._alerted and len(calls) == 2
+    jobs.alert(rows, dt.datetime.now(), flaky)
+    assert len(calls) == 2
+
+
+def test_health_job_stays_ok_when_the_job_alert_fails(monkeypatch):
+    import automations
+    import health
+    import datetime as dt
+    monkeypatch.setattr(automations, "state", dict(automations.state, health_at=None))
+    monkeypatch.setattr(health, "run_all", lambda: [])
+    monkeypatch.setattr(health, "alert", lambda *a, **k: None)
+    monkeypatch.setattr(automations.briefs, "log", lambda *a, **k: None)
+
+    def boom(*a, **k):
+        raise OSError("inbox locked")
+
+    monkeypatch.setattr(jobs, "alert", boom)
+    automations.job_health(dt.datetime.now(), {})
+    assert jobs._marks["health"]["ok"] is True
+
+
+def test_paper_with_nothing_built_is_marked_failed(monkeypatch):
+    import automations
+    import paper
+    import datetime as dt
+    monkeypatch.setattr(paper, "fake_loaded", lambda: False)
+    monkeypatch.setattr(paper, "morning_due", lambda now: True)
+    monkeypatch.setattr(paper, "claim_run", lambda day, now: True)
+    monkeypatch.setattr(paper, "state", {"running": False})
+    monkeypatch.setattr(automations.threading, "Thread", lambda target, **kw: type("T", (), {"start": staticmethod(target)})())
+    monkeypatch.setattr(paper, "settings", lambda cfg=None: {"on": True})
+    for built in (None, {}):
+        jobs._marks.clear()
+        monkeypatch.setattr(paper, "morning", lambda now=None, b=built: b)
+        automations.job_paper(dt.datetime.now(), {})
+        assert jobs._marks["paper"]["ok"] is False
+        assert "no paper built" in jobs._marks["paper"]["err"]
+
+
+def test_servers_row_goes_idle_not_late_when_stale():
+    jobs.mark("servers", True)
+    assert by_name(jobs.listing())["servers"]["state"] == "ok"
+    age("servers", 3 * 86400)
+    row = by_name(jobs.listing())["servers"]
+    assert row["state"] == "off" and "idle" in row["result"]
+
+
+def test_old_servers_failure_goes_idle_not_bad():
+    jobs.mark("servers", False, err="scan failed")
+    assert by_name(jobs.listing())["servers"]["state"] == "bad"
+    age("servers", 3 * 86400)
+    assert by_name(jobs.listing())["servers"]["state"] == "off"
+
+
+def test_mark_redacts_secrets_in_the_error_text():
+    key = "AIza" + "x" * 35
+    jobs.mark("paper", False, err=f"HTTPError: GET https://example.test/v1?key={key} failed")
+    err = jobs._marks["paper"]["err"]
+    assert key not in err and "REDACTED" in err
+
+
+def test_mark_never_raises(monkeypatch):
+    def boom(*a, **k):
+        raise OSError("disk")
+
+    monkeypatch.setattr(jobs, "_save", boom)
+    monkeypatch.setattr(jobs, "_load", boom)
+    jobs.mark("x", True)
+    jobs.mark("x", False, err=object())
+    jobs.mark(None, True)
+    jobs.mark(["unhashable"], True)
+
+
+def test_mind_row_is_not_late_while_the_backfill_runs(monkeypatch):
+    import mind
+    import testguard
+    monkeypatch.setattr(testguard, "active", lambda: False)
+    monkeypatch.delenv("ROSIE_SANDBOX", raising=False)
+    monkeypatch.delenv("ROSIE_MIND", raising=False)
+    monkeypatch.setitem(mind.state, "started", False)
+    seen = []
+
+    def slow():
+        seen.append(by_name(jobs.listing())["mind"]["state"])
+
+    for n in ("repair_outside", "repair_briefs", "repair_pronouns", "repair_duplicates", "repair_sprawl"):
+        monkeypatch.setattr(mind, n, lambda: None)
+    monkeypatch.setattr(mind, "backfill", slow)
+    monkeypatch.setattr(mind.threading, "Thread", lambda **kw: type("T", (), {"start": staticmethod(lambda: None)})())
+    mind.start()
+    assert seen == ["ok"]
+
+
+def test_a_unit_that_is_not_installed_shows_not_installed():
+    spec = ("rosie-sync", "timer", "Saves the code to GitHub", jobs.D)
+    data = {"rosie-sync.timer": {"Id": "rosie-sync.timer", "LoadState": "not-found", "ActiveState": "inactive", "UnitFileState": ""}}
+    row = jobs._unit_row(spec, data, time.time())
+    assert row["state"] == "off" and row["result"] == "not installed"
+
+
+def test_mark_failure_warning_is_rate_limited(monkeypatch, caplog):
+    import logging
+
+    def boom(*a, **k):
+        raise OSError("disk")
+
+    monkeypatch.setattr(jobs, "_save", boom)
+    monkeypatch.setattr(jobs, "_load", boom)
+    monkeypatch.setattr(jobs, "_mark_warned", 0.0, raising=False)
+    with caplog.at_level(logging.WARNING):
+        for i in range(5):
+            jobs.mark(f"x{i}", False, err="e")
+    assert sum("jobs.mark failed" in r.getMessage() for r in caplog.records) == 1

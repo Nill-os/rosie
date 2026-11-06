@@ -57,7 +57,11 @@ OnCalendar=*-*-* 00:00:00
 [Install]
 WantedBy=timers.target
 UNIT
-for u in "$SRC"/units/*.service; do cp "$u" "$HOME/.config/systemd/user/$(basename "$u")"; done
+if compgen -G "$SRC/units/*.service" > /dev/null; then
+  for u in "$SRC"/units/*.service; do cp "$u" "$HOME/.config/systemd/user/$(basename "$u")"; done
+else
+  echo "no shipped units in $SRC/units: skipping the unit copy"
+fi
 systemctl --user daemon-reload
 systemctl --user enable --now rosie-watchdog.timer
 systemctl --user enable --now rosie-audit.timer rosie-midnight.timer

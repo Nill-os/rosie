@@ -12,6 +12,7 @@ import numpy as np
 
 import config
 import injectscan
+import jobs
 import testguard
 import timefmt
 import util
@@ -901,8 +902,10 @@ def _work_loop():
     while True:
         try:
             did = step()
+            jobs.mark("mind", True)
         except Exception as e:
             state["last_error"] = f"{type(e).__name__}: {e}"[:300]
+            jobs.mark("mind", False, state["last_error"])
             did = ""
         time.sleep(2 if did else ROUND_S)
 
@@ -912,12 +915,10 @@ def start():
     if testguard.active() or os.environ.get("ROSIE_SANDBOX") or os.environ.get("ROSIE_MIND") == "off" or state["started"]:
         return
     state["started"] = True
-    backfill()
-    repair_outside()
-    repair_briefs()
-    repair_pronouns()
-    repair_duplicates()
-    repair_sprawl()
+    for step_fn in (backfill, repair_outside, repair_briefs, repair_pronouns, repair_duplicates, repair_sprawl):
+        jobs.mark("mind", True)
+        step_fn()
+    jobs.mark("mind", True)
     threading.Thread(target=_work_loop, daemon=True, name="mind").start()
 
 

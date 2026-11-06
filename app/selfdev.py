@@ -220,9 +220,9 @@ def plan_code(request):
         files = subprocess.run(["git", "-C", str(idle), "ls-files", "app", "static", "tests"], capture_output=True, text=True, timeout=20).stdout
     except (RuntimeError, OSError, subprocess.SubprocessError):
         files = ""
-    text = claude_plan.ask(CODE_RULES + "\n\nWrite a short coding plan Rosie can follow with find-and-replace edits: which files, "
+    text = claude_plan.ask("Write a short coding plan Rosie can follow with find-and-replace edits: which files, "
                            "what to change in each (name functions), which test to add, under 350 words.\n\nFiles:\n" + files[:6000]
-                           + "\n\nThe owner's request: " + str(request)[:3000])
+                           + "\n\nThe owner's request: " + claude_plan._clean(request, 3000), system=CODE_RULES, free=True)
     return {"plan": text} if text else {"error": claude_plan.status()["line"] + " Plan it yourself, keep it small."}
 
 
@@ -237,9 +237,9 @@ def review(request=""):
         return {"error": "There are no changes to check."}
     schema = {"type": "object", "properties": {"ok": {"type": "boolean"}, "fixes": {"type": "array", "items": {"type": "string"}},
                                                  "summary": {"type": "string"}}, "required": ["ok", "fixes", "summary"]}
-    out = claude_plan.ask(CODE_RULES + "\n\nCheck this change. ok=true only if it does what was asked, keeps the existing behavior, "
+    out = claude_plan.ask("Check this change. ok=true only if it does what was asked, keeps the existing behavior, "
                           "has a test, and has no bug you can point to. List each needed fix as one concrete instruction.\n\n"
-                          f"The owner's request: {str(request)[:2000]}\n\nThe change:\n{patch}", schema=schema)
+                          f"The owner's request: {str(request)[:2000]}\n\nThe change:\n{patch}", schema=schema, system=CODE_RULES, free=False)
     if not out:
         return {"error": claude_plan.status()["line"] + " Run the full check (selfdev_stage) and show the owner the diff instead."}
     if "[TRUNCATED" in patch[-60:]:

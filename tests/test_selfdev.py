@@ -26,6 +26,13 @@ def idle(tmp_path, monkeypatch):
     return root
 
 
+def test_every_root_shell_script_is_off_limits_to_selfdev(idle):
+    from pathlib import Path
+    for f in sorted(Path(selfdev.__file__).resolve().parents[1].glob("*.sh")):
+        with pytest.raises(ValueError):
+            selfdev.safe_path(f.name, idle)
+
+
 def test_only_code_inside_the_idle_copy_is_editable(idle):
     for bad in ("../A/app/x.py", "/etc/passwd", "~/.ssh/id_rsa", "data/tasks.db", "secrets/session_key", "ops/slots.py", "start.sh", ".git/config", "vault/note.md", ".venv/bin/python", "app/../data/tasks.db", "app/google_token.json", "app/server.key", "android/app/build/x"):
         with pytest.raises(ValueError):

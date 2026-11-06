@@ -225,7 +225,7 @@ def test_switch_restarts_the_shipped_units_after_the_new_slot_is_healthy(world, 
     monkeypatch.setattr(slots, "wait_healthy", lambda slot, seconds=90: order.append("healthy") or True)
     monkeypatch.setattr(slots, "_systemctl", lambda *a: order.append(a))
     assert slots.switch()["ok"]
-    assert order == ["healthy", ("try-restart", "one.service"), ("try-restart", "two.service")]
+    assert [o for o in order if o == "healthy" or o[0] == "try-restart"] == ["healthy", ("try-restart", "one.service"), ("try-restart", "two.service")]
 
 
 def test_rollback_restarts_the_shipped_units_too(world, monkeypatch):
@@ -234,8 +234,22 @@ def test_rollback_restarts_the_shipped_units_too(world, monkeypatch):
     slots.switch()
     calls.clear()
     slots.rollback("back")
-    assert [c[0] for c in calls] == [("try-restart", "one.service"), ("try-restart", "two.service")]
-    assert all(c[1] == "A" for c in calls)
+    restarts = [c for c in calls if c[0][0] == "try-restart"]
+    assert [c[0] for c in restarts] == [("try-restart", "one.service"), ("try-restart", "two.service")]
+    assert all(c[1] == "A" for c in restarts)
+
+
+def test_units_shipped_only_by_the_other_slot_are_still_restarted(world, monkeypatch):
+    units = world["b"] / "ops" / "units"
+    units.mkdir(parents=True)
+    (units / "only-b.service").write_text("[Unit]\n")
+    slots.set_active("A")
+    assert not (world["a"] / "ops" / "units").exists()
+    calls = []
+    monkeypatch.setattr(slots.shutil, "which", lambda n: "/bin/systemctl")
+    monkeypatch.setattr(slots, "_systemctl", lambda *a: calls.append(a))
+    assert slots.restart_units() == ["only-b.service"]
+    assert [c for c in calls if c[0] == "try-restart"] == [("try-restart", "only-b.service")]
 
 
 def test_a_failing_systemctl_does_not_fail_the_switch(world, monkeypatch):
@@ -243,3 +257,23 @@ def test_a_failing_systemctl_does_not_fail_the_switch(world, monkeypatch):
     _unit_world(world, monkeypatch, calls, fail=True)
     r = slots.switch()
     assert r["ok"] and slots.active() == "B" and len(calls) == 2
+
+
+def test_a_unit_that_is_running_now_is_not_restarted(world, monkeypatch):
+    import subprocess
+    units = world["a"] / "ops" / "units"
+    units.mkdir(parents=True)
+    (units / "busy.service").write_text("[Unit]\n")
+    (units / "idle.service").write_text("[Unit]\n")
+    slots.set_active("A")
+    calls = []
+
+    def fake(*a):
+        calls.append(a)
+        if a[0] == "show":
+            return subprocess.CompletedProcess(a, 0, "activating\n" if a[-1] == "busy.service" else "inactive\n", "")
+        return subprocess.CompletedProcess(a, 0, "", "")
+    monkeypatch.setattr(slots.shutil, "which", lambda n: "/bin/systemctl")
+    monkeypatch.setattr(slots, "_systemctl", fake)
+    assert slots.restart_units() == ["idle.service"]
+    assert ("try-restart", "busy.service") not in calls and ("try-restart", "idle.service") in calls

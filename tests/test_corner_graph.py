@@ -665,6 +665,7 @@ def fast(graph, monkeypatch):
     monkeypatch.setattr(graph_batch.Writer, "load_names", load_names)
     monkeypatch.setattr(graph_batch.Writer, "write", write)
     monkeypatch.setattr(graph_batch, "_writer", {"w": None, "driver": None})
+    monkeypatch.setattr(graph_batch, "_solo", {"n": 0})
     graph.wrote, graph.asked = wrote, asked
     return graph
 
@@ -723,6 +724,46 @@ def test_fast_path_charges_a_try_for_a_piece_the_model_left_out(fast, monkeypatc
     assert first not in [k for k, _ in fast.wrote]
 
 
+def test_fast_path_generic_error_on_a_batch_charges_nothing_then_goes_one_by_one(fast, monkeypatch):
+    import graph_batch
+    _seed()
+    real = cg._run
+
+    def boom(coro, timeout):
+        coro.close()
+        raise ValueError("odd failure")
+    monkeypatch.setattr(cg, "_run", boom)
+    assert cg.step() == 0
+    assert _tries() == 0 and graph_batch._solo["n"] > 1
+    seen = []
+
+    def one(coro, timeout):
+        coro.close()
+        seen.append(1)
+        raise ValueError("odd failure")
+    monkeypatch.setattr(cg, "_run", one)
+    n = graph_batch._solo["n"]
+    for _ in range(n * cg.MAX_TRIES + 2):
+        cg.step()
+    assert _tries() > 0
+    with cg._db() as db:
+        assert db.execute("SELECT MAX(tries) FROM graph_items").fetchone()[0] <= cg.MAX_TRIES
+    monkeypatch.setattr(cg, "_run", real)
+
+
+def test_fast_path_generic_error_on_one_piece_charges_it_once(fast, monkeypatch):
+    import graph_batch
+    _seed()
+    graph_batch._solo["n"] = 1
+
+    def boom(coro, timeout):
+        coro.close()
+        raise ValueError("odd failure")
+    monkeypatch.setattr(cg, "_run", boom)
+    assert cg.step() == 0
+    assert _tries() == 1
+
+
 def test_fast_path_waits_when_the_gpu_is_busy(fast, monkeypatch):
     _seed()
     monkeypatch.setattr(cg, "wait_reason", lambda now=None: "The GPU is busy.")
@@ -775,3 +816,51 @@ def test_a_board_post_charges_no_try_while_the_database_loads(graph, monkeypatch
     graph.fail = BusyLoadingError("Redis is loading the dataset in memory")
     ag.step()
     assert tried == [] and cg.state["on"] is False
+
+
+def test_an_error_that_only_echoes_the_loading_words_is_not_taken_for_loading():
+    assert not cg._loading(ValueError("page text: loading the dataset now"))
+    assert not cg._starting(ValueError("page text: loading the dataset now"))
+    assert cg._loading(BusyLoadingError("Redis is loading the dataset in memory"))
+    assert cg._starting(BusyLoadingError("x"))
+
+
+def test_a_wrapped_redis_loading_message_counts_as_loading():
+    class ResponseError(Exception):
+        pass
+    ResponseError.__module__ = "redis.exceptions"
+    assert cg._loading(ResponseError("LOADING Valkey is loading the dataset in memory"))
+    assert cg._starting(ResponseError("LOADING Redis is loading the dataset in memory"))
+    assert not cg._loading(ResponseError("WRONGTYPE bad value"))
+
+
+def test_a_runtime_error_wrapping_the_redis_loading_message_counts_as_loading():
+    e = RuntimeError("graph: Redis is loading the dataset in memory")
+    assert cg._loading(e) and cg._starting(e)
+
+
+def test_the_status_says_loading_while_the_database_loads(graph):
+    _seed()
+    cg.ready()
+    graph.fail = BusyLoadingError("Redis is loading the dataset in memory")
+    cg.step()
+    assert "loading" in cg.state["why"] and "not answering" not in cg.state["why"]
+
+
+def test_fast_path_connection_drops_never_abandon_healthy_pieces(fast, monkeypatch):
+    _seed()
+    real = cg._run
+    seen = []
+
+    def drop(coro, timeout):
+        coro.close()
+        raise ConnectionRefusedError("gone")
+    monkeypatch.setattr(cg, "_run", drop)
+    for _ in range(cg.MAX_TRIES):
+        cg.state["checked"] -= cg.RETRY_S + 1
+        cg.step()
+    with cg._db() as db:
+        charged = db.execute("SELECT COUNT(*) FROM graph_items WHERE tries > 0").fetchone()[0]
+    assert charged <= 1
+    monkeypatch.setattr(cg, "_run", real)
+    assert len(cg.pending(cg.BATCH)) >= cg.BATCH - 1

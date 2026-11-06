@@ -72,3 +72,12 @@ def test_private_key_blocks_basic_auth_cookies_and_jwts_are_redacted():
 def test_the_word_basic_in_ordinary_prose_is_not_redacted():
     for text in ("Basic authentication methods", "basic configuration", "basic\nauthorization", "basic requirements and information"):
         assert fsguard.redact(text)[0] == text
+
+
+def test_redact_hides_groq_keys_and_cookie_headers():
+    import fsguard
+    key = "gsk_" + "A1b2" * 10
+    text = f"key {key}\nCookie: sid=abc123def456; other=1\nset-cookie: s=xyz789000111\nplain line"
+    out, n = fsguard.redact(text)
+    assert key not in out and "abc123def456" not in out and "xyz789000111" not in out
+    assert "Cookie: [REDACTED]" in out and "plain line" in out and n >= 3

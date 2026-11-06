@@ -14,6 +14,7 @@ import httpx
 
 import security_watch
 import atomic
+import jobs
 import testguard
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -177,8 +178,10 @@ def refresh() -> bool:
         try:
             discover()
             state["last_error"] = ""
+            jobs.mark("servers", True)
         except Exception as e:
             state["last_error"] = f"{type(e).__name__}: {str(e)[:200]}"
+            jobs.mark("servers", False, state["last_error"])
         finally:
             state["running"] = False
     threading.Thread(target=run, daemon=True, name="servers").start()

@@ -60,3 +60,31 @@ def test_a_uvicorn_unit_never_writes_request_paths_to_the_journal():
         s = u.read_text()
         if "uvicorn" in s:
             assert "--no-access-log" in s, u.name
+
+
+def _unit_copy_block():
+    text = (ROOT / "ops" / "install.sh").read_text()
+    m = re.search(r"^if compgen -G .*?^fi$", text, re.M | re.S)
+    assert m, "install.sh has no guarded unit copy"
+    return m.group(0)
+
+
+def _run_copy(tmp_path, src):
+    dest = tmp_path / ".config" / "systemd" / "user"
+    dest.mkdir(parents=True)
+    r = subprocess.run(["bash", "-e", "-c", _unit_copy_block()], env={"SRC": str(src), "HOME": str(tmp_path), "PATH": "/usr/bin:/bin"}, capture_output=True, text=True)
+    return r, sorted(p.name for p in dest.iterdir())
+
+
+def test_the_installer_skips_a_missing_or_empty_units_folder(tmp_path):
+    (tmp_path / "empty" / "units").mkdir(parents=True)
+    for src in (tmp_path / "none", tmp_path / "empty"):
+        r, copied = _run_copy(tmp_path / src.name, src)
+        assert r.returncode == 0 and copied == [] and "skipping the unit copy" in r.stdout, (src, r.stderr)
+
+
+def test_the_installer_copies_units_when_the_folder_has_them(tmp_path):
+    (tmp_path / "s" / "units").mkdir(parents=True)
+    (tmp_path / "s" / "units" / "x.service").write_text("[Unit]\n")
+    r, copied = _run_copy(tmp_path / "h", tmp_path / "s")
+    assert r.returncode == 0 and copied == ["x.service"]

@@ -9,6 +9,7 @@ import chats
 import config
 import gcal
 import gmail
+import jobs
 import mailwatch
 import projects
 import tasks
@@ -179,7 +180,9 @@ def start_scheduler():
         while True:
             try:
                 _tick()
+                jobs.mark("brief_scheduler", True)
             except Exception as e:
                 log(f"scheduler error: {type(e).__name__}: {e}")
+                jobs.mark("brief_scheduler", False, f"{type(e).__name__}: {e}")
             time.sleep(60)
     threading.Thread(target=loop, daemon=True, name="brief-scheduler").start()

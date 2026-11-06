@@ -19,7 +19,7 @@ Hash routes for `http://127.0.0.1:8765`. Several sidebar names do not match thei
 | Memory | `#/memory` | |
 | Skills | `#/skills` | |
 | Vector | `#/vector` | |
-| **System** | **`#/deck`** | Shows Agent Deck |
+| **Agent Deck** | **`#/deck`** | Shows Agent Deck (in the System menu group) |
 | Settings | `#/settings` | |
 
 ## Navigating via DevTools (Wayland workaround)

@@ -13,10 +13,10 @@ def _first_tab(group):
 
 
 def test_nav_labels_match_page_titles():
-    assert _nav_label("deck") == _first_tab("deck") == "System"
+    assert _nav_label("deck") == _first_tab("deck") == "Agent Deck"
     assert _nav_label("brief") == _first_tab("brief") == "Morning"
     assert _nav_label("calendar") == "Calendar"
     assert "h('h2', {}, 'Calendar')" in JS
     assert _nav_label("memory") == _first_tab("memory") == "Memory"
     assert "h('h2', {}, 'Memory')" in JS
-    assert "setHeader('Morning', [])" in JS and "setHeader('System', [])" in JS
+    assert "setHeader('Morning', [])" in JS and "setHeader('Agent Deck', [])" in JS

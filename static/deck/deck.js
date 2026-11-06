@@ -212,7 +212,7 @@ function drawAgents(s) {
     r.task ? h('div', { class: 'task' }, r.task) : null,
     metrics(r, [h('div', { class: 'metric' }, h('small', {}, 'Memory graph'), h('b', {}, r.graph ? `${num(r.graph.done)} (+${r.graph.today})` : '–'))]),
     h('div', { class: 'switches' }, sw('Browse when idle', r.browsing, 'browsing', 'Rosie reads the web on her own when you are away'),
-      sw('Plan with Claude', r.planning, 'planning', 'Planning requests go to Claude (falls back to her own model)'),
+      sw('Plan with Claude', r.planning, 'planning', 'Planning requests go to Claude (falls back to Groq or Gemini if a free key is set, then her own model)'),
       r.orchestrator === null ? null : sw('Orchestrator', r.orchestrator, 'orchestrator', 'Claude plans and checks; Rosie and Agent Zero do the work')),
     r.plan && r.plan.paused_until > Date.now() / 1000 ? h('div', { class: 'muted' }, `Claude planning paused until ${clock(r.plan.paused_until)}: ${r.plan.why}`) : null,
     h('div', { class: 'row' }, h('button', { class: 'btn sm acc', onclick: () => act({ action: 'open', what: 'rosie' }) }, 'Open Rosie'),

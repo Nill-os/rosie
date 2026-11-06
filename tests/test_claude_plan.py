@@ -168,7 +168,7 @@ def test_gemini_key_goes_in_a_header_not_the_url(monkeypatch):
 
 
 def test_a_free_model_check_is_never_called_claudes(monkeypatch):
-    def ask(prompt, schema=None, timeout=0, system=None):
+    def ask(prompt, schema=None, timeout=0, system=None, free=True):
         claude_plan._who.v = "groq"
         return {"answers": ["a"]} if schema is claude_plan.TEAM_SCHEMA else {"ok": True, "problems": []}
     monkeypatch.setattr(claude_plan, "available", lambda: True)
@@ -188,7 +188,7 @@ def test_planning_turned_off_sends_nothing_to_a_free_model(fake, monkeypatch):
     cfg["claude_planning"] = False
     config.save(cfg)
     assert not claude_plan.can_ask()
-    assert claude_plan.ask("plan my week") is None
+    assert claude_plan.ask("plan my week", free=True) is None
     assert claude_plan.plan("plan my week") is None
     monkeypatch.setattr(claude_plan, "_local", lambda *a, **k: "local text")
     assert claude_plan.solve("fix it")["by"] == "rosie"
@@ -208,6 +208,7 @@ def test_a_rejected_gemini_key_never_reaches_the_log(monkeypatch, caplog):
 
     monkeypatch.setattr(httpx, "get", get)
     monkeypatch.setenv("GEMINI_API_KEY", "SECRETGEMINIKEY")
+    monkeypatch.setattr(claude_plan, "enabled", lambda: True)
     with caplog.at_level("WARNING"):
         assert claude_plan.validate_free_keys()["gemini"] is False
     assert sent and all("SECRETGEMINIKEY" not in u for u, _ in sent)

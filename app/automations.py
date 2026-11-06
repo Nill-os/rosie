@@ -223,6 +223,10 @@ def job_health(now, cfg):
     health._cache["rows"], health._cache["at"] = rows, time.time()
     health.alert(rows, now, inbox.add)
     jobs.mark("health", True)
+    try:
+        jobs.alert(jobs.listing(), now, inbox.add)
+    except Exception as e:
+        briefs.log(f"job alert failed: {type(e).__name__}")
 
 
 TIMER_UNITS = ("rosie-paper-print.service", "rosie-backup.service", "rosie-sync.service", "rosie-midnight.service")
@@ -294,8 +298,12 @@ def job_paper(now, cfg):
         return
     def run():
         try:
-            paper.morning(now=now)
-            jobs.mark("paper", True)
+            built = paper.morning(now=now)
+            if paper.settings()["on"] and not (built and built.get("running")):
+                if built:
+                    jobs.mark("paper", True)
+                else:
+                    jobs.mark("paper", False, "no paper built")
         except Exception as e:
             jobs.mark("paper", False, f"{type(e).__name__}: {e}")
     threading.Thread(target=run, daemon=True, name="paper-morning").start()
@@ -380,7 +388,11 @@ def tick(now=None):
             except gcal.LoginExpired:
                 login_ok = False
                 jobs.mark(name, False, "Google login expired")
-                _login_alert(now)
+                try:
+                    _login_alert(now)
+                except Exception as e2:
+                    state["last_error"] = f"login alert: {type(e2).__name__}: {e2}"
+                    briefs.log(f"automation {state['last_error']}")
             except Exception as e:
                 state["last_error"] = f"{job.__name__}: {type(e).__name__}: {e}"
                 jobs.mark(name, False, state["last_error"])
@@ -393,10 +405,11 @@ def tick(now=None):
         state["last_error"] = f"job_corner: {type(e).__name__}: {e}"
         briefs.log(f"automation {state['last_error']}")
     state["last_tick"] = now.isoformat(timespec="seconds")
-    if login_ok:
-        ok_names.append("calendar")
-    else:
-        jobs.mark("calendar", False, "Google login expired. Log in again (Settings).")
+    if cfg.get("remind_events"):
+        if login_ok:
+            ok_names.append("calendar")
+        else:
+            jobs.mark("calendar", False, "Google login expired. Log in again (Settings).")
     jobs.mark_ok_many([n for n in ok_names if n in jobs.TICK_NAMES])
     jobs.mark("scheduler", True)
 

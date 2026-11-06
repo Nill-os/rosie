@@ -231,3 +231,17 @@ def test_an_idle_refresh_does_not_rewrite_the_state(home):
     time.sleep(0.02)
     tokens.refresh()
     assert tokens.STATE.stat().st_mtime_ns == first
+
+
+def test_a_v1_state_left_by_a_rollback_is_rebuilt_from_the_logs_as_v2(home):
+    write(home / "projects/-proj-a/s1.jsonl", line("r1", out=100), line("r2", out=40))
+    v1 = {"v": 1, "files": {"x": {"off": 1}}, "days": {today(): {"opus": {"main": [9999, 0, 0, 0, 1]}}}, "sessions": {}, "ledger": {"off": 0, "days": {}}, "at": 1}
+    tokens.STATE.write_text(json.dumps(v1))
+    st = tokens.refresh()
+    assert st["v"] == 2 and "x" not in st["files"]
+    cell = st["days"][today()]["opus"]["main"]
+    assert cell[0] == 140 and cell[4] == 2
+    day = st["sessions"]["s1"]["d"][today()]
+    assert day["in"] == 10 and day["cr"] == 2000 and day["cw"] == 100
+    assert json.loads(tokens.STATE.read_text())["v"] == 2
+    assert tokens.hook_line() is not None
