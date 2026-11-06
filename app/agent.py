@@ -35,7 +35,6 @@ import usertools
 import vaultsearch
 import lifequest
 import projects
-import immich
 import proposals
 import terminals
 import lessons
@@ -404,18 +403,6 @@ TOOLS = {
                   {"task": ("string", "task id or words from its title"), "new_due": ("string", "e.g. tomorrow, friday, 2026-10-09")}),
 }
 
-TOOLS.update({
-    "immich_recent": (immich.tool_recent, "Show the most recently added photos in Immich. Returns filenames, dates, and thumbnail URLs.",
-                      {"count": ("integer", "how many to show, default 10")}),
-    "immich_search": (immich.tool_search, "Search photos in Immich by description, subject, or scene (AI smart search). Returns matching photos with dates and thumbnail URLs.",
-                      {"query": ("string", "what to search for, e.g. 'sunset at the beach'"), "count": ("integer", "results, default 10")}),
-    "immich_albums": (immich.tool_albums, "List Immich albums. Optional filter by name.",
-                      {"query": ("string", "optional words from the album name")}),
-    "immich_album_photos": (immich.tool_album_photos, "Show photos in a specific Immich album.",
-                            {"album": ("string", "album name or partial name"), "count": ("integer", "photos to show, default 20")}),
-    "immich_stats": (immich.tool_stats, "Immich library stats: total photos, videos, storage used, per-user breakdown.", {}),
-})
-
 GROUPS = {n: "core" for n in ("what_now", "add_task", "list_tasks", "overdue_tasks", "find_task", "complete_task", "move_task", "capture", "remember", "recall", "forget", "lessons",
                                "set_reminder", "list_reminders", "cancel_reminder", "start_my_day", "wrap_up_day", "run_sync", "search_chats", "propose_task", "get_schedule")}
 GROUPS.update({n: "calendar" for n in ("find_free_time", "search_events", "add_event", "move_event", "delete_event", "shift_day", "propose_event")})
@@ -436,7 +423,6 @@ GROUPS.update({n: "selfdev" for n in ("selfdev_plan", "selfdev_review", "selfdev
 GROUPS.update({n: "build" for n in ("build_tool", "run_user_tool", "list_user_tools")})
 GROUPS.update({n: "projects" for n in ("list_projects", "project_status", "create_project", "update_project", "add_project_task", "plan_project")})
 GROUPS.update({n: "lifequest" for n in ("lifequest_log", "lifequest_progress")})
-GROUPS.update({n: "immich" for n in ("immich_recent", "immich_search", "immich_albums", "immich_album_photos", "immich_stats")})
 GROUPS.update({n: "term" for n in ("launch_agent", "terminal_start", "terminal_read", "terminal_send", "terminal_list", "terminal_stop")})
 GROUP_RE = {
     "calendar": r"\b(calendar|events?|meetings?|appointments?|schedul\w*|behind|late|agenda|busy|free time|am i free|book|cancel|delete|move|reschedul\w*|when is|what'?s on)\b",
@@ -671,7 +657,6 @@ def pick_skill(user_text: str, history: list[dict]) -> str:
 # board #701 safety-untrusted-content-confirm
 UNTRUSTED = {"corner_memory", "find_skills", "selfdev_read", "selfdev_search", "find_recipe", "phone_notifications", "phone_screen_do", "phone_read_messages", "search_notes", "web_search", "fetch_url", "search_email", "summarize_email", "draft_email_reply", "list_emails", "terminal_read"}
 UNTRUSTED |= {"board_read", "board_history", "plan_with_claude", "verify_with_claude", "ask_claude_to_solve", "ask_other_ais", "mail_cleanup_preview"}
-UNTRUSTED |= {"immich_recent", "immich_search", "immich_albums", "immich_album_photos"}
 GUARDED = {"schedule", "standing", "lessons", "remember", "forget", "memory_forget", "install_skill", "cancel_reminder", "selfdev_edit", "selfdev_write", "selfdev_agent", "selfdev_switch", "selfdev_rollback", "phone_screen_do", "phone_reply_notification", "phone_send_sms", "phone_call", "phone_keep_note", "build_tool", "run_user_tool", "run_command", "write_file", "open_on_desktop", "launch_agent", "terminal_start", "terminal_send", "terminal_stop"}
 
 
