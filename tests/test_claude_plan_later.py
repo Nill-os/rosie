@@ -25,6 +25,7 @@ def _setup(monkeypatch, groq=True, gemini=False, claude=True):
         cfg["gemini_api_key"] = "SECRETGEM"
     config.save(cfg)
     monkeypatch.setattr(claude_plan, "context", lambda days=7: "Now")
+    monkeypatch.setattr(claude_plan, "_model_gone", set())
     monkeypatch.setattr(claude_plan, "binary", lambda: sys.executable)
     claude_plan._free_fail.clear()
     if not claude:
@@ -381,7 +382,7 @@ def test_validate_free_keys_flags_a_model_the_provider_no_longer_offers(monkeypa
         req = httpx.Request("GET", url)
         if "groq" in url:
             return httpx.Response(200, request=req, json={"data": [{"id": "qwen/qwen3.8-27b"}]})
-        return httpx.Response(200, request=req, json={"models": [{"name": "models/gemini-2.5-flash"}, {"name": "models/gemini-2.5-pro"}]})
+        return httpx.Response(200, request=req, json={"models": [{"name": "models/gemini-3.8-flash"}, {"name": "models/gemini-2.5-flash-lite"}, {"name": "models/gemini-2.5-pro"}]})
     monkeypatch.setattr(httpx, "get", get)
     with caplog.at_level("WARNING"):
         assert claude_plan.validate_free_keys() == {"groq": True, "gemini": True}
@@ -390,3 +391,9 @@ def test_validate_free_keys_flags_a_model_the_provider_no_longer_offers(monkeypa
     with caplog.at_level("WARNING"):
         assert claude_plan.validate_free_keys()["groq"] is False
     assert "no longer offers the model retired/model-1" in caplog.text
+    assert "Groq no longer offers its model" in claude_plan.status()["line"]
+    asked = []
+    monkeypatch.setattr(claude_plan, "_groq_ask", lambda *a: asked.append("groq") or "x")
+    monkeypatch.setattr(claude_plan, "_gemini_ask", lambda *a: asked.append("gemini") or "y")
+    assert claude_plan._free_api_ask("plan") == "y"
+    assert asked == ["gemini"]

@@ -125,6 +125,7 @@ def enabled() -> bool:
 
 
 _NAMES = {"groq": "Groq", "gemini": "Gemini"}
+_model_gone: set = set()
 
 
 def status() -> dict:
@@ -148,6 +149,9 @@ def status() -> dict:
         out["line"] = f"Paused until {time.strftime(timefmt.nopad('%-I:%M %p'), time.localtime(paused))}: {out['why']}" + free_note + by_note
     else:
         out["line"] = "On: planning requests go to Claude, then Rosie carries out the plan." + by_note
+    gone = sorted(_NAMES[n] for n in tuple(_model_gone) if n in _NAMES)
+    if on and gone:
+        out["line"] += " " + " and ".join(gone) + " no longer offers its model, so Rosie skips it until she is updated."
     return out
 
 
@@ -260,7 +264,7 @@ def _ask(prompt: str, schema: dict | None, timeout: int, system: str | None, fre
 
 
 _FREE_GROQ_MODEL = "qwen/qwen3.8-27b"
-_FREE_GEMINI_MODEL = "gemini-2.5-flash"
+_FREE_GEMINI_MODEL = "gemini-2.5-flash-lite"
 FREE_API_TIMEOUT_S = 90
 
 
@@ -343,7 +347,7 @@ def _free_api_ask(prompt: str, schema: dict | None = None, system: str | None = 
         deadline = time.monotonic() + CHAIN_DEADLINE_S
     for name, key, fn in (("groq", groq_key, _groq_ask), ("gemini", gemini_key, _gemini_ask)):
         left = deadline - time.monotonic()
-        if not key or _free_paused(name) or left < FREE_MIN_S:
+        if not key or name in _model_gone or _free_paused(name) or left < FREE_MIN_S:
             continue
         try:
             out = fn(prompt, schema, system, key, min(FREE_API_TIMEOUT_S, left))
@@ -381,7 +385,9 @@ def _offers(r, model: str, name: str) -> bool:
         return True
     ids = {str(m.get("id") or m.get("name") or "").removeprefix("models/") for m in rows if isinstance(m, dict)}
     if model in ids:
+        _model_gone.discard(name)
         return True
+    _model_gone.add(name)
     logging.warning("claude_plan: %s no longer offers the model %s; update it in claude_plan.py", name, model)
     return False
 
