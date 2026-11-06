@@ -13,7 +13,6 @@ Rosie is a private AI assistant that runs on your own PC, Linux or Windows. The 
 - **Your PC and phone.** Runs commands, opens files and apps, sends texts, and sets alarms. Anything risky waits for your Yes on a confirm card.
 - **Tasks.** Tap a task to see its details, notes, and the email it came from.
 - **Mail organizer.** Sorts Gmail into your own labels, turns meeting requests in mail into calendar events, lists action items on the Mail page, and keeps one undo.
-- **Study page.** Flash cards with spaced review, walk mode, cards made from your notes, printing, practice tests, a tutor, study ideas sent from the phone, and the next study block on your calendar.
 - **Life Quest page.** Stats, quests, XP that needs evidence, and a weekly review.
 - **Agent Deck page.** A live view of every agent and process (CPU, RAM, and GPU at a glance), with controls to stop or restart them. Works on Windows too.
 - **Memory graph page.** A map of her memories (her corner's finds, the agent board's history, or what she remembers about you), with a Clusters view; Ctrl+click several things to see how they connect.
