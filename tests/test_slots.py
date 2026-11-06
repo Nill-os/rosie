@@ -195,3 +195,51 @@ def test_update_log_records_each_stage_and_compares_with_the_last_good_one(world
 def test_update_log_handles_a_stage_without_eval_timings(world):
     slots.record_update(_res("ccc3333", "skipped"), [])
     assert slots.update_log_entries()[0]["median_s"] is None
+
+
+def _unit_world(world, monkeypatch, calls, fail=False):
+    units = world["a"] / "ops" / "units"
+    units.mkdir(parents=True)
+    (units / "one.service").write_text("[Unit]\n")
+    (units / "two.service").write_text("[Unit]\n")
+    sh("git", "add", "-A", cwd=world["a"])
+    sh("git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "units", cwd=world["a"])
+    slots.prepare("x")
+    edit_b(world, "print('v2')\n")
+    slots.commit("v2")
+    slots.save_state(last_stage={"ok": True, "head": slots.head("B")})
+    monkeypatch.setattr(slots.shutil, "which", lambda n: "/bin/systemctl")
+
+    def fake(*args):
+        calls.append((args, slots.active(), bool(slots.healthz())))
+        if fail:
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(slots, "_systemctl", fake)
+
+
+def test_switch_restarts_the_shipped_units_after_the_new_slot_is_healthy(world, monkeypatch):
+    calls = []
+    _unit_world(world, monkeypatch, calls)
+    order = []
+    monkeypatch.setattr(slots, "wait_healthy", lambda slot, seconds=90: order.append("healthy") or True)
+    monkeypatch.setattr(slots, "_systemctl", lambda *a: order.append(a))
+    assert slots.switch()["ok"]
+    assert order == ["healthy", ("try-restart", "one.service"), ("try-restart", "two.service")]
+
+
+def test_rollback_restarts_the_shipped_units_too(world, monkeypatch):
+    calls = []
+    _unit_world(world, monkeypatch, calls)
+    slots.switch()
+    calls.clear()
+    slots.rollback("back")
+    assert [c[0] for c in calls] == [("try-restart", "one.service"), ("try-restart", "two.service")]
+    assert all(c[1] == "A" for c in calls)
+
+
+def test_a_failing_systemctl_does_not_fail_the_switch(world, monkeypatch):
+    calls = []
+    _unit_world(world, monkeypatch, calls, fail=True)
+    r = slots.switch()
+    assert r["ok"] and slots.active() == "B" and len(calls) == 2

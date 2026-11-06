@@ -158,6 +158,9 @@ def step(now: dt.datetime | None = None) -> int:
         if cg._model_down(e):
             cg.state["waiting"] = f"Waiting for the AI model: Ollama isn't answering ({type(e).__name__})."
             return 0
+        if cg._loading(e):
+            cg._drop(e)
+            return 0
         if cg._lost(e):
             for it in batch:
                 cg._record(it, error=f"the graph database stopped while adding this ({type(e).__name__})")

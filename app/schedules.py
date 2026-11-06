@@ -1,3 +1,4 @@
+import jobs
 import contextlib
 import datetime as dt
 import json
@@ -306,7 +307,9 @@ def job(now, cfg):
     def go():
         try:
             run_due(now, notify=notify)
+            jobs.mark("schedules", True)
         except Exception as e:
+            jobs.mark("schedules", False, f"{type(e).__name__}: {e}")
             import briefs
             briefs.log(f"schedules {type(e).__name__}: {e}")
         finally:

@@ -138,7 +138,7 @@ def test_the_browsing_agent_imports_nothing_private():
     got = _imports(ROOT / "app" / "corner_browse.py")
     assert not got & FORBIDDEN, got & FORBIDDEN
     assert got <= {"base64", "collections", "html", "json", "random", "re", "secrets", "threading", "time", "urllib", "httpx", "corner",
-                   "corner_groups", "corner_layout", "corner_pics", "injectscan", "jevscan", "web"}, got
+                   "corner_groups", "corner_layout", "corner_pics", "injectscan", "jevscan", "ollama_url", "web"}, got
     for f in ("corner.py", "corner_layout.py", "corner_groups.py"):
         assert not _imports(ROOT / "app" / f) & (FORBIDDEN - {"os"}), f
 
@@ -403,13 +403,17 @@ def test_job_corner_starts_only_when_on_and_idle_and_stops_a_running_session(mon
     import datetime as dt
     import automations
     started = []
+    ran = []
+    monkeypatch.setattr(corner_browse, "run_session", lambda: ran.append(1))
     monkeypatch.setattr(automations.threading, "Thread", lambda target, **k: type("T", (), {"start": lambda self: started.append(target)})())
     now = dt.datetime(2026, 10, 16, 14, 0).astimezone()
     automations.job_corner(now, {"corner_on": False})
     assert not started
     turn_on()
     automations.job_corner(now, {"corner_on": True})
-    assert started == [corner_browse.run_session]
+    assert len(started) == 1
+    started[0]()
+    assert ran == [1]
     corner.begin_session()
     corner.owner_active(True)
     corner.owner_active(False)
@@ -1224,13 +1228,17 @@ def test_nonstop_survives_a_restart_only_if_left_on(monkeypatch):
     import datetime as dt
     import automations
     started = []
+    ran = []
+    monkeypatch.setattr(corner_browse, "run_session", lambda: ran.append(1))
     monkeypatch.setattr(automations.threading, "Thread", lambda target, **k: type("T", (), {"start": lambda self: started.append(target)})())
     now = dt.datetime(2026, 10, 17, 14, 0).astimezone()
     corner.set_nonstop(True)
     corner._activity["last"] = time.time()
     corner.state["last_end"] = time.time()
     automations.job_corner(now, config_load())
-    assert started == [corner_browse.run_session]
+    assert len(started) == 1
+    started[0]()
+    assert ran == [1]
     corner.set_nonstop(False)
     automations.job_corner(now, config_load())
     assert len(started) == 1

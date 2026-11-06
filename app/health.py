@@ -5,10 +5,12 @@ import subprocess
 import time
 from pathlib import Path
 
+import atomic
 import backup
 import config
 import phone
 import plat
+import ollama_url
 
 ROOT = Path(__file__).resolve().parent.parent
 DATES = ROOT / "data" / "login_dates.json"
@@ -28,9 +30,7 @@ def record_login(key: str):
         d = {}
     d[key] = dt.datetime.now().isoformat(timespec="seconds")
     DATES.parent.mkdir(exist_ok=True)
-    tmp = DATES.with_name(DATES.name + ".tmp")
-    tmp.write_text(json.dumps(d))
-    tmp.replace(DATES)
+    atomic.write_text(DATES, json.dumps(d))
 
 
 def login_age_days(key: str) -> float:
@@ -55,7 +55,7 @@ def check_ollama():
     import httpx
     import agent
     try:
-        tags = httpx.get("http://127.0.0.1:11434/api/tags", timeout=3).json()
+        tags = httpx.get(ollama_url.BASE + "/api/tags", timeout=3).json()
     except Exception as e:
         return _row("Language model", "bad", f"Ollama is not answering ({type(e).__name__})", plat.pick("sudo systemctl restart ollama", "start Ollama from the Start menu"))
     names = [m["name"] for m in tags.get("models", [])]
@@ -131,6 +131,28 @@ def _unit_result(unit: str) -> str:
         return ""
 
 
+BACKUP_REPO_NAME = backup.ROOT / "secrets" / "backup_repo"
+BACKUP_REPO_DIR = Path.home() / "backups" / "rosie-data-repo"
+
+
+def _unpushed_backups():
+    if plat.IS_WIN or not BACKUP_REPO_DIR.is_dir():
+        return None
+    try:
+        if not BACKUP_REPO_NAME.read_text(encoding="utf-8").strip():
+            return None
+        out = subprocess.run(["git", "-C", str(BACKUP_REPO_DIR), "log", "--format=%ct", "@{u}..HEAD"],
+                             capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode != 0:
+        return None
+    stamps = [int(x) for x in out.stdout.split() if x.isdigit()]
+    if not stamps:
+        return 0, 0.0
+    return len(stamps), (time.time() - min(stamps)) / 3600
+
+
 def check_backup():
     if plat.IS_WIN and not backup.status().get("exists"):
         return _row("Backup", "off", "not set up on Windows yet")
@@ -146,6 +168,11 @@ def check_backup():
     h = s["age_hours"]
     if h > 36:
         return _row("Backup", "bad", f"newest backup is {h:.0f} hours old", BACKUP_FIX)
+    off = _unpushed_backups()
+    if off and off[0] > 0:
+        n, oldest = off
+        msg = f"{n} backup{'s' if n != 1 else ''} not copied off this PC yet (oldest {oldest:.0f} h)"
+        return _row("Backup", "bad" if oldest > 36 else "warn", msg, "~/assistant/backup-data.sh")
     if h > 26:
         return _row("Backup", "warn", f"newest backup is {h:.0f} hours old")
     return _row("Backup", "ok", f"{s['count']} kept, newest {h:.0f} h ago, verified")

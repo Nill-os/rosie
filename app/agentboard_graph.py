@@ -75,6 +75,9 @@ def step() -> int:
             if corner_graph._model_down(e):
                 state["waiting"] = f"Waiting for the AI model: Ollama isn't answering ({type(e).__name__})."
                 break
+            if corner_graph._loading(e):
+                corner_graph._drop(e)
+                break
             if corner_graph._lost(e):  # board #705 why-crashing-post-tries
                 _record(p, error=f"the graph database stopped while adding this ({type(e).__name__})")
                 corner_graph._drop(e)

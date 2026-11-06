@@ -16,7 +16,6 @@ ROOT = Path(__file__).resolve().parent.parent
 HOME = Path.home()
 OPS = Path(os.environ.get("ROSIE_OPS_DIR") or HOME / "rosie-ops")
 CLAUDE = HOME / ".claude"
-OLLAMA = "http://127.0.0.1:11434"
 ROSIE_URL = "http://127.0.0.1:8765"
 CONTAINERS = ("agent-zero", "rosie-graph")
 A0_CHATS = HOME / "agent-zero" / "usr" / "chats"
@@ -30,7 +29,10 @@ MY_PID = os.getpid()
 REAL_FS = {"ext4", "ext3", "btrfs", "xfs", "vfat", "exfat", "ntfs", "ntfs3", "f2fs", "zfs", "fuseblk"}
 STATES = {"R": "Running", "S": "Sleeping", "D": "Disk wait", "Z": "Zombie", "T": "Stopped", "t": "Traced", "I": "Idle", "X": "Dead"}
 sys.path.insert(0, str(ROOT / "app"))
-import agentdeck_tokens as tokens  # noqa: E402
+import tokens  # noqa: E402
+import ollama_url
+
+OLLAMA = ollama_url.BASE
 
 WIN = None  # board #706 owner-windows-psutil-readings
 if not LINUX:
@@ -44,7 +46,8 @@ _lock = threading.Lock()
 _prev = {"t": 0.0, "procs": {}, "cores": None, "net": None}
 _cache = {}
 _users = {}
-_counter = tokens.TokenCounter(str(CLAUDE / "projects"))
+_counter = tokens.Live(str(CLAUDE / "projects"))
+_numbers = {"v": {"sessions": {}, "today": {}, "total": {}}}
 _tok_lock = threading.Lock()
 _tok_thread = {"t": None}
 
@@ -59,7 +62,7 @@ def start_counting():
 def _count_tokens():
     while True:
         try:
-            fresh = tokens.TokenCounter(str(CLAUDE / "projects")) if not _counter.files else None
+            fresh = tokens.Live(str(CLAUDE / "projects")) if not _counter.files else None
             if fresh:
                 fresh.refresh()
                 with _tok_lock:
@@ -67,6 +70,9 @@ def _count_tokens():
             else:
                 with _tok_lock:
                     _counter.refresh()
+            nums = tokens.deck_numbers()
+            with _tok_lock:
+                _numbers["v"] = nums
         except Exception:
             pass
         time.sleep(5)
@@ -465,10 +471,11 @@ def agents(procs, gpu):
     board = cached("board", 2, _board) or {"sessions": [], "claims": [], "posts": []}
     tasks = {s["agent"]: s for s in board["sessions"]}
     with _tok_lock:
-        tok = _counter.by_session()
+        nums = _numbers["v"]
+        tok = nums["sessions"]
         acts = dict(_counter.activity)
         titles = {sid: _counter.title(sid) for sid in list(_counter.titles)}
-        today = _counter.by_day(time.localtime().tm_gmtoff // 60).get(time.strftime("%Y-%m-%d"), {})
+        today = nums["today"]
     claude = []
     for f in sorted((CLAUDE / "sessions").glob("*.json")):
         try:
@@ -532,7 +539,7 @@ def agents(procs, gpu):
         seen_pids.update(g["pids"])
     total = group(procs, list(seen_pids), gpu)
     return {"claude": claude, "rosie": rosie, "ollama": ollama, "agent_zero": agent_zero, "memory": memory, "others": others,
-            "board": board, "tokens_today": today, "tokens_total": _sum(tok.values()),
+            "board": board, "tokens_today": today, "tokens_total": nums["total"],
             "total": {k: total[k] for k in ("cpu", "cores", "rss", "count", "vram")}}
 
 
@@ -542,14 +549,6 @@ def clean_task(t: str) -> str:
         m = re.search(r"<summary>(.*?)</summary>", t, re.S)
         return "Background job: " + m.group(1).strip()[:150] if m else "(a notice from Claude Code)"
     return t
-
-
-def _sum(rows):
-    out = {"input": 0, "output": 0, "cache_write": 0, "cache_read": 0, "messages": 0}
-    for r in rows:
-        for k in out:
-            out[k] += r.get(k, 0)
-    return out
 
 
 def snapshot():

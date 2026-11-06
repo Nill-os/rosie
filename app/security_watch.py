@@ -1,4 +1,5 @@
 # board #769 owner-zero-day-search
+import jobs
 import datetime as dt
 import hashlib
 import json
@@ -17,8 +18,10 @@ import httpx
 
 import config
 import corner
+import atomic
 import testguard
 import util
+import ollama_url
 
 ROOT = Path(__file__).resolve().parent.parent
 STATE = ROOT / "data" / "security_watch.json"
@@ -91,9 +94,7 @@ def load() -> dict:
 def save(d: dict):
     testguard.check(STATE)
     STATE.parent.mkdir(parents=True, exist_ok=True)
-    tmp = STATE.with_suffix(".tmp")
-    tmp.write_text(json.dumps(d, indent=1))
-    tmp.replace(STATE)
+    atomic.write_text(STATE, json.dumps(d, indent=1))
 
 
 _now = util.now_dt
@@ -243,7 +244,7 @@ def inventory() -> dict:
         except Exception as e:
             problems.append(f"{where}: {e}")
     try:
-        here["apps"]["ollama"] = str(_version(httpx.get("http://127.0.0.1:11434/api/version", timeout=5).json()["version"]))
+        here["apps"]["ollama"] = str(_version(httpx.get(ollama_url.BASE + "/api/version", timeout=5).json()["version"]))
     except Exception as e:
         problems.append(f"Ollama's version: {type(e).__name__}")
     if shutil.which("docker"):
@@ -643,8 +644,10 @@ def start(target=None, args=()) -> bool:
         try:
             (target or check)(*args)
             state["last_error"] = ""
+            jobs.mark("security_watch", True)
         except Exception as e:
             state["last_error"] = f"{type(e).__name__}: {str(e)[:160]}"
+            jobs.mark("security_watch", False, state["last_error"])
             d = load()
             d["ran_on"] = _now().date().isoformat()
             save(d)

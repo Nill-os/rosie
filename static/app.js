@@ -98,8 +98,8 @@ const NAV = [['-', 'My day'], ['home', '⌂', 'Home'], ['inbox', '🔔', 'Inbox'
   ['-', 'Rosie and helpers'], ['agentzero', '🧠', 'Agent Zero'], ['corner', '❀', "Rosie's corner"], ['memory', '◈', 'Memory'], ['skills', '✦', 'Skills'], ['vector', '🤖', 'Vector'],
   ['-', 'System'], ['deck', '◫', 'System'],
   ['-', ''], ['settings', '⚙', 'Settings']];
-const TABS = { home: [['home', 'Home'], ['chats', 'Chats']], brief: [['brief', 'Daily Brief'], ['paper', 'Morning Paper']], memory: [['memory', 'Memory'], ['graph', 'Memory graph']],
-  deck: [['deck', 'Agent Deck'], ['servers', 'Servers'], ['tokens', 'Tokens'], ['terminal', 'Terminal']] };
+const TABS = { home: [['home', 'Home'], ['chats', 'Chats']], brief: [['brief', 'Morning'], ['paper', 'Morning Paper']], memory: [['memory', 'Memory'], ['graph', 'Memory graph']],
+  deck: [['deck', 'System'], ['servers', 'Servers'], ['jobs', 'Jobs'], ['tokens', 'Tokens'], ['terminal', 'Terminal']] };
 const TAB_GROUP = {}; for (const [g, list] of Object.entries(TABS)) for (const [k] of list) TAB_GROUP[k] = g;
 let menuLayout = [];
 function menuGroups(nav, layout) {
@@ -802,12 +802,12 @@ VIEWS.terminal = async (arg) => {
 };
 
 VIEWS.brief = async () => {
-  setHeader('Daily Brief', []);
+  setHeader('Morning', []);
   show(h('div', { class: 'muted' }, 'Loading…'));
   const d = await J('/api/briefs');
   const again = () => keepScroll(() => VIEWS.brief());
   const todays = d.briefs.find((b) => b.day === d.today);
-  show(h('div', { class: 'pagehead' }, h('h2', {}, 'Daily Brief'), h('span', { class: 'muted' }, 'made automatically at ' + d.time + ' · built from your real calendar and tasks'), h('div', { class: 'sp' }),
+  show(h('div', { class: 'pagehead' }, h('h2', {}, 'Morning'), h('span', { class: 'muted' }, 'made automatically at ' + d.time + ' · built from your real calendar and tasks'), h('div', { class: 'sp' }),
     btn(todays ? 'Regenerate today' : 'Generate today', '', async () => { toast('Making your brief…'); try { await post('/api/briefs/generate', { force: !!todays }); refreshSide(); again(); } catch (e) { toast(e.message, 1); } })),
     d.briefs.length ? d.briefs.map((b) => h('div', { class: 'card', style: 'margin-bottom:14px' }, mdNode(b.text), h('div', { class: 'form', style: 'margin-top:10px' }, btn('Discuss in chat', 'sm', () => go('#/chat/' + b.chat_id))))) : h('div', { class: 'empty' }, 'No briefs yet.'));
 };
@@ -940,7 +940,7 @@ VIEWS.calendar = async () => {
   const title = h('input', { placeholder: 'New event title', 'aria-label': 'Event title' }), date = h('input', { type: 'date', value: todayISO(), 'aria-label': 'Date' });
   const st = h('input', { type: 'time', value: '09:00', 'aria-label': 'Start' }), en = h('input', { type: 'time', value: '10:00', 'aria-label': 'End' });
   const where = d.write_target === 'primary' ? 'your REAL calendar' : 'the TEST calendar (change in Settings)';
-  show(h('div', { class: 'pagehead' }, h('h2', {}, 'Next 7 days'), h('div', { class: 'sp' }), btn('Ask assistant to change something', 'sm pur', () => { newChat(); t.value = 'On my calendar: '; t.focus(); })),
+  show(h('div', { class: 'pagehead' }, h('h2', {}, 'Calendar'), h('div', { class: 'sp' }), btn('Ask assistant to change something', 'sm pur', () => { newChat(); t.value = 'On my calendar: '; t.focus(); })),
     d.error ? h('div', { class: 'err' }, d.error + ' (' + loginHint + ')') : null,
     h('div', { class: 'card' }, h('h3', {}, 'Add event'), h('div', { class: 'muted', style: 'margin-bottom:8px' }, 'Saves to ' + where + '. To move or delete events, ask the assistant (it asks you to confirm).'),
       h('form', { class: 'form', onsubmit: async (e) => { e.preventDefault(); try { const r = await post('/api/calendar/event', { title: title.value, date: date.value, start: st.value, end: en.value }); toast('Added to the ' + r.calendar.toUpperCase() + ' calendar'); VIEWS.calendar(); } catch (er) { toast(er.message, 1); } } },
@@ -988,7 +988,7 @@ VIEWS.memory = async () => {
   const kind = h('select', { 'aria-label': 'Kind' }, d.kinds.map((k) => h('option', { value: k }, k))), txt = h('input', { placeholder: 'Something I should remember…', 'aria-label': 'Memory text' });
   const byKind = {}; d.notes.forEach((n) => (byKind[n.kind] = byKind[n.kind] || []).push(n));
   const W = [['focus', 'Current focus'], ['waiting_on', 'Waiting on'], ['people', 'People'], ['followups', 'Follow-ups'], ['decisions', 'Recent decisions']];
-  show(h('div', { class: 'pagehead' }, h('h2', {}, 'What I remember about you'), h('span', { class: 'muted' }, 'Saved in a database on this PC. Delete anything that is wrong.')),
+  show(h('div', { class: 'pagehead' }, h('h2', {}, 'Memory'), h('span', { class: 'muted' }, 'Saved in a database on this PC. Delete anything that is wrong.')),
     h('div', { class: 'card' }, h('form', { class: 'form', onsubmit: async (e) => { e.preventDefault(); if (!txt.value.trim()) return; try { await post('/api/memory', { kind: kind.value, content: txt.value }); again(); } catch (er) { toast(er.message, 1); } } }, kind, txt, btn('Save', 'pur', null, 'submit'))),
     h('div', { class: 'grid', style: 'margin-top:14px' },
       d.kinds.filter((k) => byKind[k]).map((k) => h('div', { class: 'card' }, h('h3', {}, k), h('div', { class: 'list' }, byKind[k].map((n) => h('div', { class: 'item' }, h('span', { class: 'tx' }, n.content), h('span', { class: 'chip' }, n.created.slice(0, 10)),
@@ -1709,6 +1709,33 @@ VIEWS.chats = async () => {
   show(h('div', { class: 'pagehead' }, h('h2', {}, 'Chats'), count), h('div', { style: 'display:flex;gap:8px;flex-wrap:wrap' }, search, pick), list);
   await draw();
 };
+let jobsPollT = null;
+const jobsWhen = (t) => { if (!t) return ''; const m = Math.round((Date.now() / 1000 - t) / 60); return m < 1 ? 'just now' : m < 60 ? m + ' min ago' : m < 2880 ? Math.round(m / 60) + ' h ago' : Math.round(m / 1440) + ' days ago'; };
+const jobsNext = (t) => { if (!t) return ''; const d = new Date(t * 1000), mins = Math.round((t - Date.now() / 1000) / 60); return mins < 1 ? 'now' : mins < 60 ? 'in ' + mins + ' min' : d.toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' }); };
+VIEWS.jobs = async () => {
+  setHeader('Jobs', []);
+  const here = () => /^#\/jobs\/?$/.test(location.hash);
+  const LABEL = { bad: 'Failed', late: 'Late', ok: 'Working', off: 'Off' }, DOT = { bad: 'var(--bad)', late: 'var(--warn)', ok: 'var(--ok)', off: 'var(--mute)' };
+  const draw = async () => {
+    clearTimeout(jobsPollT);
+    if (!here()) return;
+    if (document.hidden) { jobsPollT = setTimeout(draw, 60000); return; }
+    let d;
+    try { d = await J('/api/jobs'); } catch (e) { if (here()) show(h('div', { class: 'card' }, 'Couldn\'t read the jobs: ' + e.message)); return; }
+    if (!here()) return;
+    const bad = d.rows.filter((r) => r.state === 'bad').length, late = d.rows.filter((r) => r.state === 'late').length;
+    const head = h('div', { class: 'pagehead' }, h('h2', {}, 'Jobs'), h('span', { class: 'muted' }, bad || late ? `${bad} failed, ${late} late` : 'All working'));
+    const list = h('div', { class: 'card' }, d.rows.map((r) => h('div', { class: 'row', style: 'display:flex;gap:12px;align-items:center;padding:8px 0;border-top:1px solid var(--line,rgba(255,255,255,.08))' },
+      h('span', { role: 'img', 'aria-label': LABEL[r.state], title: LABEL[r.state], style: 'width:10px;height:10px;border-radius:50%;flex:none;background:' + DOT[r.state] }),
+      h('div', { style: 'flex:1;min-width:0' }, h('div', {}, r.name, h('span', { class: 'muted' }, ' · ' + r.what)),
+        h('div', { class: r.state === 'bad' ? '' : 'muted', style: 'font-size:calc(12px*var(--ts,1))' }, LABEL[r.state] + (r.result ? ': ' + r.result : ''))),
+      h('div', { class: 'muted', style: 'text-align:right;font-size:calc(12px*var(--ts,1));white-space:nowrap' }, h('div', {}, r.last ? 'Ran ' + jobsWhen(r.last) : ''), h('div', {}, r.next ? 'Next ' + jobsNext(r.next) : '')))));
+    show(head, list);
+    jobsPollT = setTimeout(draw, 30000);
+  };
+  show(h('div', { class: 'muted' }, 'Reading the jobs…'));
+  draw();
+};
 let tokensPollT = null;
 const tkFmt = (n) => n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e4 ? Math.round(n / 1e3) + 'k' : n >= 1e3 ? (n / 1e3).toFixed(1) + 'k' : String(Math.round(n));
 VIEWS.tokens = async () => {
@@ -1756,7 +1783,7 @@ VIEWS.tokens = async () => {
 };
 
 VIEWS.deck = async () => {
-  setHeader('Agent Deck', []);
+  setHeader('System', []);
   show(h('iframe', { class: 'deckframe', src: '/deck/index.html', title: 'Agent Deck: what every agent is doing, with controls' }));
 };
 

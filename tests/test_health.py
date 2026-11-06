@@ -2,6 +2,7 @@ import datetime as dt
 import json
 import time
 
+import subprocess
 import sys
 
 import pytest
@@ -17,6 +18,57 @@ _REAL_UNIT_RESULT = health._unit_result
 @pytest.fixture(autouse=True)
 def _no_real_units(monkeypatch):
     monkeypatch.setattr(health, "_unit_result", lambda unit: "")
+
+
+@pytest.fixture(autouse=True)
+def _no_real_backup_repo(monkeypatch, tmp_path):
+    monkeypatch.setattr(health, "BACKUP_REPO_DIR", tmp_path / "none")
+
+
+def _git(cwd, *a, env=None):
+    import os
+    e = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t", **(env or {}))
+    subprocess.run(["git", "-C", str(cwd), *a], check=True, capture_output=True, env=e)
+
+
+def _repo_with_origin(tmp_path, monkeypatch):
+    origin, repo = tmp_path / "origin.git", tmp_path / "repo"
+    subprocess.run(["git", "init", "-q", "--bare", str(origin)], check=True)
+    subprocess.run(["git", "clone", "-q", str(origin), str(repo)], check=True, capture_output=True)
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "first")
+    _git(repo, "push", "-q", "-u", "origin", "HEAD")
+    name = tmp_path / "backup_repo"
+    name.write_text("owner/repo\n")
+    monkeypatch.setattr(health, "BACKUP_REPO_DIR", repo)
+    monkeypatch.setattr(health, "BACKUP_REPO_NAME", name)
+    monkeypatch.setattr(health.plat, "IS_WIN", False)
+    monkeypatch.setattr(backup, "status", lambda: {"exists": True, "verified": True, "age_hours": 2, "count": 3})
+    return repo
+
+
+def test_backup_warns_when_commits_are_not_copied_off_the_pc(monkeypatch, tmp_path):
+    repo = _repo_with_origin(tmp_path, monkeypatch)
+    assert health.check_backup()["level"] == "ok"
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "second")
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "third")
+    row = health.check_backup()
+    assert row["level"] == "warn" and "2 backups not copied off this PC" in row["detail"]
+
+
+def test_backup_is_bad_when_oldest_unpushed_commit_is_over_36_hours_old(monkeypatch, tmp_path):
+    repo = _repo_with_origin(tmp_path, monkeypatch)
+    old = str(int(time.time()) - 40 * 3600)
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "old", env={"GIT_COMMITTER_DATE": old, "GIT_AUTHOR_DATE": old})
+    assert health.check_backup()["level"] == "bad"
+
+
+def test_backup_ignores_off_pc_state_without_repo_name_or_upstream(monkeypatch, tmp_path):
+    repo = _repo_with_origin(tmp_path, monkeypatch)
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "second")
+    (tmp_path / "backup_repo").write_text("")
+    assert health.check_backup()["level"] == "ok"
+    monkeypatch.setattr(health, "BACKUP_REPO_DIR", tmp_path / "missing")
+    assert health.check_backup()["level"] == "ok"
 
 
 def test_summary_levels():

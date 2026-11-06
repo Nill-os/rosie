@@ -142,4 +142,11 @@ def search_in_files(text: str, folder: str = "~", limit: int = 20) -> str:
 
 
 if __name__ == "__main__":
-    server.run("stdio")
+    import argparse
+    p = argparse.ArgumentParser(add_help=False)
+    p.add_argument("--port", type=int, default=0)
+    args, _ = p.parse_known_args()
+    if args.port:
+        server.run("streamable-http", port=args.port)
+    else:
+        server.run("stdio")

@@ -210,6 +210,8 @@ def test_no_plan_when_it_already_asked_claude_or_rosie_brought_one(ext, monkeypa
     run(ext, a0_agent(asked, iteration=4), tool="get_schedule")
     brought = [item("user", "[Plan from Claude for this request.]\n1. x\n\nplan my week")]
     run(ext, a0_agent(brought, iteration=4), tool="get_schedule")
+    free = [item("user", "[Plan from Groq (a free online model) for this request.]\n1. x\n\nplan my week")]
+    run(ext, a0_agent(free, iteration=4), tool="get_schedule")
 
 
 def test_rosie_pc_tools_count_as_work(ext):
@@ -348,6 +350,8 @@ def test_the_chat_note_says_which_checker_ran(ext):
     assert ext.verdict_note({"ok": False, "by": "rosie", "why": why, "problems": ["Desktop is 77G."]}) == \
         f"(Rosie's local check did not pass: Desktop is 77G. Treat this answer as unverified. {why})"
     assert ext.verdict_note({"ok": True, "by": "claude"}) == "(Checked by Claude.)"
+    assert ext.verdict_note({"ok": True, "by": "groq"}) == "(Checked by Groq, a free online model, not Claude.)"
+    assert ext.verdict_note({"ok": False, "by": "gemini", "problems": ["x"]}).startswith("(Gemini's check did not pass")
 
 
 def test_without_claude_agent_zero_still_gets_a_plan_and_a_solution_from_rosie(monkeypatch):
@@ -604,6 +608,9 @@ def test_claudes_text_is_saved_only_in_agent_zeros_own_job_files(ext, monkeypatc
     assert ext.save(str(root / "rosie.promptinclude.md"), "x") == "" and ext.save("/host/home/notes.md", "x") == ""
     assert ext.save(str(root / "jobs" / ".." / ".." / "escape.md"), "x") == "" and ext.save(str(root / "run.sh"), "x") == ""
     assert "Not saved: /host/home/a.md" in ext.written_note({"by": "claude", "path": "/host/home/a.md"}, "")
+    assert ext.written_note({"by": "groq"}, "").startswith("(Written by Groq")
+    assert ext.written_note({"by": "gemini"}, "").startswith("(Written by Gemini")
+    assert ext.written_note({"by": "rosie"}, "").startswith("(Written by Rosie's local model")
 
 
 def test_claude_writes_the_text_with_the_material_and_rosies_model_stands_in(monkeypatch):

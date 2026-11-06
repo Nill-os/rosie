@@ -727,3 +727,51 @@ def test_fast_path_waits_when_the_gpu_is_busy(fast, monkeypatch):
     _seed()
     monkeypatch.setattr(cg, "wait_reason", lambda now=None: "The GPU is busy.")
     assert cg.step() == 0 and cg.state["waiting"] == "The GPU is busy." and fast.wrote == []
+
+
+class BusyLoadingError(Exception):
+    pass
+
+
+def _tries():
+    with cg._db() as db:
+        return db.execute("SELECT COALESCE(SUM(tries), 0) FROM graph_items").fetchone()[0]
+
+
+def test_a_database_still_loading_charges_no_tries(graph):
+    _seed()
+    graph.fail = BusyLoadingError("Redis is loading the dataset in memory")
+    for _ in range(cg.MAX_TRIES + 1):
+        cg.state["checked"] -= cg.RETRY_S + 1
+        assert cg.step() == 0
+    assert _tries() == 0
+    graph.fail = None
+    cg.state["checked"] -= cg.RETRY_S + 1
+    assert cg.step() == cg.BATCH
+
+
+def test_fast_path_charges_no_tries_while_the_database_loads(fast, monkeypatch):
+    _seed()
+    real = cg._run
+
+    def loading(coro, timeout):
+        coro.close()
+        raise BusyLoadingError("Redis is loading the dataset in memory")
+    monkeypatch.setattr(cg, "_run", loading)
+    for _ in range(cg.MAX_TRIES + 1):
+        cg.state["checked"] -= cg.RETRY_S + 1
+        assert cg.step() == 0
+    assert _tries() == 0
+    monkeypatch.setattr(cg, "_run", real)
+
+
+def test_a_board_post_charges_no_try_while_the_database_loads(graph, monkeypatch):
+    import agentboard_graph as ag
+    tried = []
+    post = {"id": 7, "t": 1.0, "agent": "claude-1", "kind": "done", "to_agent": "", "text": "x"}
+    monkeypatch.setattr(ag, "pending", lambda limit=4: [post])
+    monkeypatch.setattr(ag, "_record", lambda p, ep=None, error="": tried.append(error))
+    cg.ready()
+    graph.fail = BusyLoadingError("Redis is loading the dataset in memory")
+    ag.step()
+    assert tried == [] and cg.state["on"] is False

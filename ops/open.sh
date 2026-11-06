@@ -32,4 +32,7 @@ if [ "${1:-}" = "agentzero" ]; then
   for _ in $(seq 1 30); do curl -s -m 2 -o /dev/null "$A0_URL/" && break; sleep 2; done
   exec "$BROWSER" --app="$A0_URL"
 fi
+if [ "${1:-}" = "deck" ]; then
+  exec "$BROWSER" --app="http://127.0.0.1:$PORT/#/deck" --user-data-dir="$APP_PROFILE" --class=assistant
+fi
 exec "$BROWSER" --app="http://127.0.0.1:$PORT" --user-data-dir="$APP_PROFILE" --class=assistant

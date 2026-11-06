@@ -9,68 +9,68 @@ import pytest
 from fastapi.testclient import TestClient
 
 import agentdeck
-import agentdeck_tokens as tokens
+import tokens
 
 HERE = Path(__file__).resolve().parent
 DATA = HERE / "deck_transcripts"
 
 
-def _counter(tmp_path):
-    sub = tmp_path / "proj" / "sub"
-    sub.mkdir(parents=True)
-    shutil.copy(DATA / "s1.jsonl", tmp_path / "proj")
-    shutil.copy(DATA / "s1_more.jsonl", sub)  # board #845 why-subfolders-count
-    return tokens.TokenCounter(str(tmp_path)).refresh(), tmp_path / "proj" / "s1.jsonl"
+@pytest.fixture
+def home(tmp_path, monkeypatch):
+    monkeypatch.setenv("ROSIE_CLAUDE_HOME", str(tmp_path / "ch"))
+    monkeypatch.setattr(tokens, "STATE", tmp_path / "state.json")
+    proj = tmp_path / "ch" / "projects" / "proj"
+    (proj / "sub").mkdir(parents=True)
+    shutil.copy(DATA / "s1.jsonl", proj)
+    shutil.copy(DATA / "s1_more.jsonl", proj / "sub")
+    return tmp_path / "ch" / "projects", proj / "s1.jsonl"
+
+
+def _counter(home):
+    root, f = home
+    return tokens.Live(str(root)).refresh(), f
 
 
 def _line(mid, ts="2026-10-21T11:00:00.000Z", out=5):
-    return json.dumps({"type": "assistant", "sessionId": "s1", "timestamp": ts,
+    return json.dumps({"type": "assistant", "sessionId": "s1", "timestamp": ts, "requestId": mid,
                        "message": {"id": mid, "usage": {"input_tokens": 1, "output_tokens": out}}})
 
 
-def test_each_message_counts_once_across_files(tmp_path):
-    c, _ = _counter(tmp_path)
-    assert c.by_session() == {"s1": {"input": 16, "output": 1160, "cache_write": 120, "cache_read": 12100, "messages": 4}}
+def test_each_message_counts_once_across_files(home):
+    n = tokens.deck_numbers(budget_s=0)
+    assert n["sessions"]["s1"]["messages"] == 4
+    assert n["total"]["messages"] == 4
+    assert n["total"]["output"] == n["sessions"]["s1"]["output"]
 
 
-def test_days_follow_the_local_clock(tmp_path):
-    c, _ = _counter(tmp_path)
-    days = c.by_day(-420)
-    assert days["2026-10-20"]["messages"] == 1 and days["2026-10-20"]["output"] == 50
-    assert days["2026-10-21"]["messages"] == 3 and days["2026-10-21"]["output"] == 1110
-    assert set(c.by_day(0)) == {"2026-10-20", "2026-10-21"}
+def test_the_deck_and_the_token_report_give_the_same_totals(home, monkeypatch):
+    tokens.refresh()
+    st = tokens._load()
+    days = {d: tokens._dayrow(st, d) for d in st["days"]}
+    rep_out = sum(r["out"] for r in days.values())
+    rep_n = sum(r["n"] for r in days.values())
+    rep_in = sum(r["in"] for r in days.values())
+    n = tokens.deck_numbers()
+    assert n["total"]["output"] == rep_out and n["total"]["messages"] == rep_n and n["total"]["input"] == rep_in
+    day = next(iter(days))
+    monkeypatch.setattr(tokens.time, "strftime", lambda fmt: day)
+    assert tokens.deck_numbers()["today"]["output"] == days[day]["out"]
 
 
-def test_refresh_reads_only_new_lines_and_waits_for_a_whole_line(tmp_path):
-    c, f = _counter(tmp_path)
-    c.refresh()
-    assert c.by_session()["s1"]["messages"] == 4
+def test_refresh_reads_only_new_lines_and_waits_for_a_whole_line(home):
+    root, f = home
+    tokens.deck_numbers()
     with open(f, "a") as fh:
         fh.write(_line("m5") + "\n" + _line("m6")[:40])
-    c.refresh()
-    assert c.by_session()["s1"]["messages"] == 5
+    assert tokens.deck_numbers()["sessions"]["s1"]["messages"] == 5
     with open(f, "a") as fh:
         fh.write(_line("m6")[40:] + "\n")
-    c.refresh()
-    assert c.by_session()["s1"]["messages"] == 6 and c.by_session()["s1"]["output"] == 1170
+    s = tokens.deck_numbers()["sessions"]["s1"]
+    assert s["messages"] == 6 and s["output"] == 1170
 
 
-def test_a_file_cut_short_is_counted_again(tmp_path):
-    c, f = _counter(tmp_path)
-    f.write_text(_line("only", out=7) + "\n")
-    c.refresh()
-    assert c.by_session()["s1"] == {"input": 3, "output": 17, "cache_write": 0, "cache_read": 100, "messages": 2}
-
-
-def test_a_deleted_file_drops_out(tmp_path):
-    c, f = _counter(tmp_path)
-    f.unlink()
-    c.refresh()
-    assert c.by_session()["s1"]["messages"] == 1
-
-
-def test_the_chat_title_comes_from_the_transcript_and_a_rename_wins(tmp_path):
-    c, f = _counter(tmp_path)
+def test_the_chat_title_comes_from_the_transcript_and_a_rename_wins(home):
+    c, f = _counter(home)
     assert c.title("s1") == ""
     with open(f, "a") as fh:
         fh.write(json.dumps({"type": "ai-title", "aiTitle": "Coordinating   multiple Claude instances", "sessionId": "s1"}) + "\n")
@@ -97,7 +97,7 @@ def deck(tmp_path, monkeypatch):
     monkeypatch.setattr(agentdeck, "live_slot", lambda: tmp_path)
     monkeypatch.setattr(agentdeck, "A0_CHATS", tmp_path / "a0-chats")
     monkeypatch.setattr(agentdeck, "_a0_chats", lambda: tmp_path / "a0-chats")
-    monkeypatch.setattr(agentdeck, "_counter", tokens.TokenCounter(str(claude / "projects")))
+    monkeypatch.setattr(agentdeck, "_counter", tokens.Live(str(claude / "projects")))
     monkeypatch.setattr(agentdeck, "_tok_thread", {"t": "off"})  # board #845 quirk-no-background-reader
     monkeypatch.setattr(agentdeck, "_containers", lambda: {})
     monkeypatch.setattr(agentdeck, "_gpu", lambda: None)

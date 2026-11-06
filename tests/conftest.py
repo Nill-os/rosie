@@ -54,6 +54,7 @@ PATCHES = [("config", "PATH", "config.json"), ("tasks", "DB", "tasks.db"), ("lif
            ("server", "VECTOR_CHAT", "vector_chat.json"), ("server", "ICON", "icon.svg"), ("vector_pod", "DIR", "vector"), ("vector_pod", "CERT", "vector/cert.pem"), ("vector_pod", "KEY", "vector/key.pem"),
            ("vector_pod", "DOCS", "vector/jdocs.json"), ("vector_pod", "TOKEN", "vector/client_token"), ("vector_pod", "SSH_KEY", "vector/ssh_root_key"), ("vector_pod", "WIREPOD", "wire-pod"), ("vector_pod", "EP_CERT", "vector/ep.crt"), ("vector_pod", "EP_KEY", "vector/ep.key"), ("vector_pod", "HEY_ROSIE", "vector/hey_rosie_1-5.ppn"), ("vector_pod", "LAST_HEARD", "vector/last_heard.wav"),
            ("vector_pad", "SYS", "input"), ("vector_pad", "DEV", "dev-input"), ("schedules", "DB", "schedules.db"), ("standing", "DB", "standing.db")]
+PATCHES += [("health", "BACKUP_REPO_NAME", "secrets/backup_repo"), ("jobs", "FILE", "jobs.json")]
 ALWAYS = ("config", "tasks", "inbox", "chats", "memory", "lessons", "proposals", "skills", "pc_tools", "server",
           "briefs", "projects", "mailwatch", "mailorganize", "gcal", "gmail", "workflows", "corner_graph", "a0", "paper", "agentboard", "skill_sync", "vector_pod", "vector_pad", "lifequest", "board_link", "canvas", "schedules", "standing")
 
@@ -61,7 +62,8 @@ ALWAYS = ("config", "tasks", "inbox", "chats", "memory", "lessons", "proposals",
 # board #830 owner-linux-only-tests
 LINUX_ONLY = ["test_agentdeck.py", "test_backup.py", "test_slots.py", "test_selfdev.py", "test_skill_sync.py", "test_a0_monitor.py",
               "test_audit_1020.py", "test_vector.py", "test_vector_pad.py", "test_vector_menu.py", "test_vector_life.py", "test_vector_talk.py", "test_terminals.py", "test_dictation.py", "test_overlay.py", "test_meetings.py",
-              "test_power.py", "test_security_watch.py"]
+              "test_power.py", "test_security_watch.py",
+              "test_netretry.py", "test_unit_templates.py", "test_phone_install.py", "test_dictation_cookie.py"]
 collect_ignore = LINUX_ONLY if sys.platform == "win32" else []
 
 
@@ -112,6 +114,10 @@ def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(pchealth, "on_battery", lambda: False)
     monkeypatch.setattr(pchealth, "input_idle_s", lambda: 3600.0)
     _no_network(monkeypatch)
+    for key in ("GROQ_API_KEY", "GEMINI_API_KEY"):
+        monkeypatch.delenv(key, raising=False)
+    import claude_plan
+    claude_plan._who.v = ""
     testguard.block_network(monkeypatch.setattr)
     if "vector_api" in sys.modules:
         sys.modules["vector_api"]._vector_cache = None

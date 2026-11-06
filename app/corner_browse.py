@@ -20,10 +20,11 @@ import corner_pics
 import injectscan
 import jevscan
 import web
+import ollama_url
 
-OLLAMA_CHAT = "http://127.0.0.1:11434/api/chat"
-OLLAMA_GENERATE = "http://127.0.0.1:11434/api/generate"
-OLLAMA_SHOW = "http://127.0.0.1:11434/api/show"
+OLLAMA_CHAT = ollama_url.BASE + "/api/chat"
+OLLAMA_GENERATE = ollama_url.BASE + "/api/generate"
+OLLAMA_SHOW = ollama_url.BASE + "/api/show"
 MODEL = "qwen3.5:9b"
 CTX_OPTIONS = {"num_ctx": 32768}
 KEEP_ALIVE = "10m"

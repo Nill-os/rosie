@@ -16,13 +16,14 @@ import corner  # noqa: E402
 import ctxsize  # noqa: E402
 import testguard  # noqa: E402
 import timefmt
+import ollama_url
 
 GROUP = "rosie-corner"
 ROOT = Path(__file__).resolve().parent.parent
 SECRET = ROOT / "secrets" / "graphiti_falkordb_password"
 HOST = os.environ.get("ROSIE_GRAPH_HOST", "127.0.0.1")
 PORT = int(os.environ.get("ROSIE_GRAPH_PORT", "6380"))
-OLLAMA = "http://127.0.0.1:11434"
+OLLAMA = ollama_url.BASE
 EMBED_MODEL = "nomic-embed-text"
 EMBED_CPU = "nomic-embed-cpu"
 EMBED_DIM = 768
@@ -314,6 +315,10 @@ def _drop(e: Exception):
     state.update(on=False, why=_not_answering(e), checked=time.time())
 
 
+def _loading(e: Exception) -> bool:
+    return type(e).__name__ == "BusyLoadingError" or "loading the dataset" in str(e)
+
+
 def _lost(e: Exception) -> bool:
     if isinstance(e, (Slow, httpx.HTTPError)):
         return False
@@ -516,6 +521,9 @@ def step(now: dt.datetime | None = None) -> int:
         except Exception as e:
             if _model_down(e):
                 state["waiting"] = f"Waiting for the AI model: Ollama isn't answering ({type(e).__name__})."
+                break
+            if _loading(e):
+                _drop(e)
                 break
             if _lost(e):
                 # board #722 fix-segfault-retry-cap

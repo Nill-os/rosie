@@ -119,3 +119,96 @@ def test_the_local_stand_in_has_a_length_cap_and_a_cut_off_answer_is_none(monkey
     monkeypatch.setattr(httpx, "post", post)
     assert claude_plan._local("s", "u", {"type": "object"}) is None
     assert sent[0]["options"]["num_predict"] == claude_plan.LOCAL_PREDICT
+
+
+def _free_transport(monkeypatch, seen):
+    import httpx
+
+    def handler(request):
+        seen.append(request)
+        if "groq" in request.url.host:
+            return httpx.Response(200, json={"choices": [{"message": {"content": "groq answer"}}]})
+        return httpx.Response(200, json={"candidates": [{"content": {"parts": [{"text": "gemini answer"}]}}]})
+
+    def post(url, json=None, headers=None, timeout=None):
+        with httpx.Client(transport=httpx.MockTransport(handler)) as c:
+            return c.post(url, json=json, headers=headers)
+    monkeypatch.setattr(httpx, "post", post)
+
+
+def test_free_api_is_used_while_claude_is_paused(fake, monkeypatch):
+    seen = []
+    _free_transport(monkeypatch, seen)
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    cfg = config.load()
+    cfg["groq_api_key"] = "gk"
+    config.save(cfg)
+    claude_plan._save(paused_until=time.time() + 3600, why="limit")
+    s = claude_plan.solve("fix it")
+    assert s and s["by"] == "groq" and s["solution"] == "groq answer"
+    assert "Groq" in claude_plan.tool_solve("fix it")["next"]
+    assert fake.calls == []
+
+
+def test_no_free_key_keeps_the_local_path(fake, monkeypatch):
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    claude_plan._save(paused_until=time.time() + 3600, why="limit")
+    monkeypatch.setattr(claude_plan, "_local", lambda *a, **k: "local text")
+    s = claude_plan.solve("fix it")
+    assert s["by"] == "rosie" and s["solution"] == "local text"
+
+
+def test_gemini_key_goes_in_a_header_not_the_url(monkeypatch):
+    seen = []
+    _free_transport(monkeypatch, seen)
+    assert claude_plan._gemini_ask("p", None, None, "SECRETKEY") == "gemini answer"
+    assert "SECRETKEY" not in str(seen[0].url) and seen[0].headers["x-goog-api-key"] == "SECRETKEY"
+
+
+def test_a_free_model_check_is_never_called_claudes(monkeypatch):
+    def ask(prompt, schema=None, timeout=0, system=None):
+        claude_plan._who.v = "groq"
+        return {"answers": ["a"]} if schema is claude_plan.TEAM_SCHEMA else {"ok": True, "problems": []}
+    monkeypatch.setattr(claude_plan, "available", lambda: True)
+    monkeypatch.setattr(claude_plan, "team_notes", lambda qs: [])
+    monkeypatch.setattr(claude_plan, "ask", ask)
+    v = claude_plan.verify("do it", "done", "out")
+    assert v["by"] == "groq"
+    assert "Verified by Groq" in claude_plan.tool_verify("do it", "done", "out")["next"]
+    assert claude_plan.ask_team(["q?"], "r")["by"] == "groq"
+
+
+def test_planning_turned_off_sends_nothing_to_a_free_model(fake, monkeypatch):
+    seen = []
+    _free_transport(monkeypatch, seen)
+    cfg = config.load()
+    cfg["groq_api_key"] = "gk"
+    cfg["claude_planning"] = False
+    config.save(cfg)
+    assert not claude_plan.can_ask()
+    assert claude_plan.ask("plan my week") is None
+    assert claude_plan.plan("plan my week") is None
+    monkeypatch.setattr(claude_plan, "_local", lambda *a, **k: "local text")
+    assert claude_plan.solve("fix it")["by"] == "rosie"
+    assert seen == [] and fake.calls == []
+    assert "Groq" not in claude_plan.status()["line"]
+
+
+def test_a_rejected_gemini_key_never_reaches_the_log(monkeypatch, caplog):
+    import httpx
+    sent = []
+
+    def get(url, headers=None, timeout=None):
+        sent.append((url, headers))
+        req = httpx.Request("GET", url, headers=headers)
+        resp = httpx.Response(400, request=req)
+        raise httpx.HTTPStatusError(f"Client error '400 Bad Request' for url '{req.url}'", request=req, response=resp)
+
+    monkeypatch.setattr(httpx, "get", get)
+    monkeypatch.setenv("GEMINI_API_KEY", "SECRETGEMINIKEY")
+    with caplog.at_level("WARNING"):
+        assert claude_plan.validate_free_keys()["gemini"] is False
+    assert sent and all("SECRETGEMINIKEY" not in u for u, _ in sent)
+    assert "SECRETGEMINIKEY" not in caplog.text

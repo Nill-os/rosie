@@ -27,6 +27,12 @@ MATERIAL_CHARS, FILE_CHARS = 40000, 20000
 ERROR_LINE = re.compile(r"^[^\w\n]*(\w*(?:Error|Exception)\b.*|.*: (?:command not found|No such file or directory|Permission denied)|.*no CLI client connected.*)$", re.M)
 NO_SUCH_TOOL = re.compile(r"^Tool (\S+) not found")
 CODE_TOOLS = {"code_execution_tool", "code_execution_remote"}
+WRITERS = {"claude": "Claude", "groq": "Groq, a free online model", "gemini": "Gemini, a free online model"}
+FREE = {"groq": "Groq", "gemini": "Gemini"}
+
+
+def writer(by) -> str:
+    return WRITERS.get(by) or "Rosie's local model"
 
 
 def _rosie(route: str) -> tuple[str, str]:
@@ -150,7 +156,8 @@ def team_note(answers: list) -> str:
 
 
 def checker(v: dict) -> str:
-    return "Claude" if v.get("by", "claude") == "claude" else "Rosie's local checker"
+    by = v.get("by", "claude")
+    return "Claude" if by == "claude" else ("Rosie's local checker" if by not in WRITERS else WRITERS[by])
 
 
 def verdict_note(v: dict) -> str:
@@ -158,9 +165,11 @@ def verdict_note(v: dict) -> str:
         return f"(Not checked: {v['skip']})"
     why = f" {v['why']}" if v.get("by") == "rosie" and v.get("why") else ""
     if v.get("ok"):
-        return "(Checked by Claude.)" if checker(v) == "Claude" else f"(Checked by Rosie's local model, not Claude.{why})"
+        if checker(v) == "Claude":
+            return "(Checked by Claude.)"
+        return f"(Checked by {checker(v)}, not Claude.)" if v.get("by") in FREE else f"(Checked by Rosie's local model, not Claude.{why})"
     problems = "; ".join(str(p).rstrip(". ") for p in (v.get("problems") or [])[:5]) or "it could not confirm this from the evidence"
-    label = "Claude's check" if checker(v) == "Claude" else "Rosie's local check"
+    label = "Claude's check" if checker(v) == "Claude" else (f"{FREE[v['by']]}'s check" if v.get("by") in FREE else "Rosie's local check")
     return f"({label} did not pass: {problems}. Treat this answer as unverified.{why})"
 
 
@@ -217,7 +226,7 @@ def written_note(w: dict, saved: str) -> str:
     if w.get("by") == "claude":
         return f"(Written by Claude: Agent Zero's draft did not pass the check.{where})"
     why = f" {w['why']}" if w.get("why") else ""
-    return f"(Written by Rosie's local model because Claude can't be used now; not checked.{why}{where})"
+    return f"(Written by {writer(w.get('by'))} because Claude can't be used now; not checked.{why}{where})"
 
 
 class ClaudeLoop(Extension):
@@ -257,11 +266,11 @@ class ClaudeLoop(Extension):
 
     async def plan(self, loop, request, items):
         loop.params_persistent[PLANNED] = True
-        if "[Plan from Claude" in request or any(i.type == "mcp" and _tool(i) == "plan_with_claude" for i in items):
+        if "[Plan from " in request or any(i.type == "mcp" and _tool(i) == "plan_with_claude" for i in items):
             return
         p = await ask("/plan", {"request": request, "found": evidence(items)})
         if p.get("plan"):
-            who = "Claude" if p.get("by") == "claude" else "Rosie's local model (Claude can't be used now)"
+            who = writer(p.get("by")) + ("" if p.get("by") == "claude" else " (Claude can't be used now)")
             self.agent.hist_add_warning(
                 f"[Plan from {who} for this task. The owner already asked for it: follow it step by step now with real commands and "
                 f"tools, changing course only when the output shows the plan is wrong. Never delete, move, overwrite, send or buy anything "
@@ -298,7 +307,7 @@ class ClaudeLoop(Extension):
                 if n >= ESCALATE_AT:
                     s = await ask("/solve", {"request": request, "found": found, "stuck_on": problems + "\n" + str(v.get("fix") or "")})
                     if s.get("solution"):
-                        who = "Claude" if s.get("by") == "claude" else "Rosie's local model"
+                        who = writer(s.get("by"))
                         msg += f"\n{who} took over the hard part. Carry out exactly these steps now:\n{s['solution']}\n"
             if team:
                 loop.params_persistent[ASKED] = True

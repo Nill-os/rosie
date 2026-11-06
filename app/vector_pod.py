@@ -18,6 +18,7 @@ from pathlib import Path
 import grpc
 
 import config
+import atomic
 import testguard
 import vector_audio
 import vector_bot
@@ -143,9 +144,7 @@ def _load_docs() -> dict:
 def _save_docs(docs: dict):
     testguard.check(DOCS)
     DIR.mkdir(parents=True, exist_ok=True)
-    tmp = DOCS.with_suffix(".tmp")
-    tmp.write_text(json.dumps(docs, indent=1))
-    tmp.replace(DOCS)
+    atomic.write_text(DOCS, json.dumps(docs, indent=1))
 
 
 def import_wirepod() -> int:

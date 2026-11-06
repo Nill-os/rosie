@@ -1,4 +1,5 @@
 # board #775 owner-same-skills-everywhere
+import jobs
 import hashlib
 import io
 import json
@@ -425,6 +426,7 @@ def _loop():
     time.sleep(120)
     while True:
         _quiet_sync()
+        jobs.mark("skill_sync", True)
         time.sleep(ROUND_S)
 
 

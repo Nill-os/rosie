@@ -24,6 +24,7 @@ import gcal
 import gmail
 import web
 import timefmt
+import ollama_url
 
 ROOT = Path(__file__).resolve().parent.parent
 DB = ROOT / "data" / "paper.db"
@@ -33,7 +34,7 @@ FONT = ROOT / "static" / "vendor" / "fonts" / "rosie-blackletter.woff2"
 PRINTER = ""
 PRINTER_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 WATCH_EVERY_S, WATCH_CHECKS = 30, 10
-OLLAMA = "http://127.0.0.1:11434/api/chat"
+OLLAMA = ollama_url.BASE + "/api/chat"
 UA = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) personal-assistant (Rosie morning paper)"}
 MAX_AGE_H = 36
 DELIVERY_DAYS = 14

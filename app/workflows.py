@@ -11,6 +11,7 @@ import ctxsize
 import gcal
 import memory
 import tasks
+import ollama_url
 
 VAULT = Path(__file__).resolve().parent.parent / "vault"
 SCRATCH = VAULT / "Scratch Pad.md"
@@ -18,7 +19,7 @@ BOARD = VAULT / "Task Board.md"
 MEMFILE = VAULT / "memory.md"
 DAILY = VAULT / "Daily Notes"
 MEETINGS = VAULT / "Meetings"
-OLLAMA = "http://127.0.0.1:11434/api/chat"
+OLLAMA = ollama_url.BASE + "/api/chat"
 MODEL = "qwen3.5:9b"
 SCRATCH_HEADER = "# Scratch Pad\n\nDump anything here (or say \"jot that down\"). Run /sync to sort it.\n\n"
 MEM_SECTIONS = [("focus", "Current focus"), ("waiting_on", "Waiting on"), ("people", "People"),

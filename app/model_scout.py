@@ -1,4 +1,5 @@
 # board #748 owner-research-abliterated-models
+import jobs
 import datetime as dt
 import json
 import os
@@ -15,13 +16,15 @@ import httpx
 import config
 import corner
 import models
+import atomic
 import testguard
 import web
 import util
+import ollama_url
 
 ROOT = Path(__file__).resolve().parent.parent
 STATE = ROOT / "data" / "model_scout.json"
-OLLAMA = "http://127.0.0.1:11434"
+OLLAMA = ollama_url.BASE
 HF = "https://huggingface.co"
 SEARCH = (HF + "/api/models?search=abliterated&filter=gguf&sort=createdAt&direction=-1&limit=100"
           "&expand[]=gguf&expand[]=createdAt&expand[]=downloads&expand[]=likes&expand[]=cardData")
@@ -54,9 +57,7 @@ def load() -> dict:
 def save(d: dict):
     testguard.check(STATE)
     STATE.parent.mkdir(parents=True, exist_ok=True)
-    tmp = STATE.with_suffix(".tmp")
-    tmp.write_text(json.dumps(d, indent=1))
-    tmp.replace(STATE)
+    atomic.write_text(STATE, json.dumps(d, indent=1))
 
 
 _now = util.now_dt
@@ -325,8 +326,10 @@ def job(now: dt.datetime, cfg: dict):
     def guarded():
         try:
             target(*args)
+            jobs.mark("model_scout", True)
         except Exception as e:
             state["last_error"] = f"{type(e).__name__}: {str(e)[:160]}"
+            jobs.mark("model_scout", False, state["last_error"])
         finally:
             state.update(running=False, doing="")
     threading.Thread(target=guarded, daemon=True, name="model-scout").start()

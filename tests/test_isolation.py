@@ -194,3 +194,8 @@ def test_the_weather_tool_cannot_reach_the_network():
 def test_the_weather_asks_for_a_place_when_none_is_set():
     import web
     assert "Which place?" in web.weather("")["error"]  # board #866 why-no-city-guess
+
+
+def test_free_model_keys_from_the_shell_never_reach_tests():
+    import os
+    assert not os.environ.get("GROQ_API_KEY") and not os.environ.get("GEMINI_API_KEY")

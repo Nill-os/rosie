@@ -15,10 +15,11 @@ import injectscan
 import testguard
 import timefmt
 import util
+import ollama_url
 
 ROOT = Path(__file__).resolve().parent.parent
 DB = ROOT / "data" / "mind.db"
-OLLAMA = "http://127.0.0.1:11434"
+OLLAMA = ollama_url.BASE
 EMBED_MODEL = "nomic-embed-text"
 CHUNK_CHARS = 3000
 RRF_K = 60

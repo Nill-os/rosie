@@ -48,8 +48,9 @@ import skills
 import web
 import tasks
 import workflows
+import ollama_url
 
-OLLAMA = "http://127.0.0.1:11434/api/chat"
+OLLAMA = ollama_url.BASE + "/api/chat"
 MODEL = "qwen3.5:9b"
 # board #701 why-ctx-options-shared
 

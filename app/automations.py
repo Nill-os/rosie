@@ -1,3 +1,4 @@
+import jobs
 import datetime as dt
 import os
 import re
@@ -49,6 +50,7 @@ def job_brief(now, cfg):
     m = re.search(r"\*\*(Good \w+)\.\*\* (.+)", b["text"])
     inbox.add("brief", "Your daily brief is ready", (m.group(2) if m else "Open it to see today's priorities."), "#/brief", key=f"brief:{day}", now=now)
     briefs.log(f"brief generated for {day}")
+    jobs.mark("brief", True)
 
 
 def job_reminders(now, cfg):
@@ -174,10 +176,13 @@ def job_mail(now, cfg):
     def run():  # board #711 why-triage-own-thread
         try:
             mailwatch.check(now)
+            jobs.mark("mail", True)
         except gmail.MailLoginExpired as e:
+            jobs.mark("mail", False, e)
             inbox.add("system", "Gmail login expired", str(e), "#/mail", key=f"gmaillogin:{now.date().isoformat()}", now=now)
         except Exception as e:
             state["last_error"] = f"job_mail: {type(e).__name__}: {e}"
+            jobs.mark("mail", False, state["last_error"])
             briefs.log(f"automation {state['last_error']}")
         finally:
             _mail["running"] = False
@@ -196,6 +201,7 @@ def job_canvas(now, cfg):
     def run():
         try:
             r = canvas.sync()
+            jobs.mark("canvas", not r.get("error"), r.get("error"))
             if r.get("error"):
                 inbox.add("system", "Canvas sync didn't work", r["error"], "#/settings", key=f"canvas:{now.date().isoformat()}", now=now)
         finally:
@@ -216,6 +222,7 @@ def job_health(now, cfg):
     rows = health.run_all()
     health._cache["rows"], health._cache["at"] = rows, time.time()
     health.alert(rows, now, inbox.add)
+    jobs.mark("health", True)
 
 
 TIMER_UNITS = ("rosie-paper-print.service", "rosie-backup.service", "rosie-sync.service", "rosie-midnight.service")
@@ -272,14 +279,26 @@ def job_corner(now, cfg):
     if not cfg.get("corner_on") or (not nonstop and corner.busy_reason(now, check_rest=True)):
         return
     import corner_browse
-    threading.Thread(target=corner_browse.run_session, daemon=True, name="corner").start()
+    def run():
+        try:
+            corner_browse.run_session()
+            jobs.mark("corner", True)
+        except Exception as e:
+            jobs.mark("corner", False, f"{type(e).__name__}: {e}")
+    threading.Thread(target=run, daemon=True, name="corner").start()
 
 
 def job_paper(now, cfg):
     import paper
     if paper.fake_loaded() or paper.state["running"] or not paper.morning_due(now) or not paper.claim_run(now.date().isoformat(), now):
         return
-    threading.Thread(target=paper._quiet, args=(paper.morning,), kwargs={"now": now}, daemon=True, name="paper-morning").start()
+    def run():
+        try:
+            paper.morning(now=now)
+            jobs.mark("paper", True)
+        except Exception as e:
+            jobs.mark("paper", False, f"{type(e).__name__}: {e}")
+    threading.Thread(target=run, daemon=True, name="paper-morning").start()
 
 
 JOBS = [job_health, job_meeting, job_brief, job_reminders, job_events, job_agents, job_overdue, job_weekly_review, job_scratch, job_wrapup, job_paper, job_canvas, job_mail]
@@ -350,14 +369,21 @@ def tick(now=None):
     now = now or dt.datetime.now(gcal.TZ)
     cfg = config.load()
     state["tick_started"] = time.time()
+    ok_names = []
+    login_ok = True
     try:
         for job in JOBS:
+            name = job.__name__.removeprefix("job_")
             try:
                 job(now, cfg)
+                ok_names.append(name)
             except gcal.LoginExpired:
+                login_ok = False
+                jobs.mark(name, False, "Google login expired")
                 _login_alert(now)
             except Exception as e:
                 state["last_error"] = f"{job.__name__}: {type(e).__name__}: {e}"
+                jobs.mark(name, False, state["last_error"])
                 briefs.log(f"automation {state['last_error']}")
     finally:
         state["tick_started"] = None
@@ -367,6 +393,12 @@ def tick(now=None):
         state["last_error"] = f"job_corner: {type(e).__name__}: {e}"
         briefs.log(f"automation {state['last_error']}")
     state["last_tick"] = now.isoformat(timespec="seconds")
+    if login_ok:
+        ok_names.append("calendar")
+    else:
+        jobs.mark("calendar", False, "Google login expired. Log in again (Settings).")
+    jobs.mark_ok_many([n for n in ok_names if n in jobs.TICK_NAMES])
+    jobs.mark("scheduler", True)
 
 
 _started = False

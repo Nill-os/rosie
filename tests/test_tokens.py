@@ -3,6 +3,7 @@ import datetime as dt
 import hashlib
 import hmac
 import json
+import os
 import subprocess
 import sys
 import time
@@ -215,8 +216,18 @@ def test_the_api_needs_the_login_and_has_the_shape(home, tmp_path, monkeypatch):
 
 def test_the_cli_prints_the_summary(home, tmp_path):
     write(home / "projects/-proj-a/s1.jsonl", line("r1", out=500))
-    env = {"ROSIE_CLAUDE_HOME": str(home), "ROSIE_TESTING": "1", "PATH": "/usr/bin:/bin"}
+    env = {k: v for k, v in os.environ.items() if k in ("SYSTEMROOT", "TEMP", "TMP", "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "APPDATA", "LOCALAPPDATA")}
+    env.update({"ROSIE_CLAUDE_HOME": str(home), "ROSIE_TESTING": "1", "PATH": "/usr/bin:/bin"})
     code = ("import sys; sys.path.insert(0, %r); import tokens; tokens.STATE = __import__('pathlib').Path(%r); "
             "tokens.refresh(); print(tokens.text(tokens.summary()))" % (str(ROOT / "app"), str(tmp_path / "cli.json")))
-    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env, timeout=60).stdout
-    assert "Today:   500 out" in out and "Flags:" in out
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env, timeout=60)
+    out = r.stdout
+    assert "Today:   500 out" in out and "Flags:" in out, r.stderr[-2000:]
+
+
+def test_an_idle_refresh_does_not_rewrite_the_state(home):
+    tokens.refresh()
+    first = tokens.STATE.stat().st_mtime_ns
+    time.sleep(0.02)
+    tokens.refresh()
+    assert tokens.STATE.stat().st_mtime_ns == first

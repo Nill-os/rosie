@@ -1,11 +1,15 @@
 # board #786 owner-token-report-numbers
+import jobs
 import datetime as dt
 import json
 import os
+import re
 import sys
 import threading
 import time
 from pathlib import Path
+
+import atomic
 
 ROOT = Path(__file__).resolve().parent.parent
 STATE = ROOT / "data" / "token_report.json"
@@ -59,21 +63,21 @@ def _day(ts: str):
         return None
 
 
+SAVE_IDLE_S = 600
+
+
 def _load() -> dict:
     try:
         d = json.loads(STATE.read_text(encoding="utf-8"))
-        if d.get("v") == 1:
+        if d.get("v") == 2:
             return d
     except (OSError, ValueError):
         pass
-    return {"v": 1, "files": {}, "days": {}, "sessions": {}, "ledger": {"off": 0, "days": {}}, "at": 0}
+    return {"v": 2, "files": {}, "days": {}, "sessions": {}, "ledger": {"off": 0, "days": {}}, "at": 0}
 
 
 def _save(st: dict):
-    STATE.parent.mkdir(parents=True, exist_ok=True)
-    tmp = STATE.with_name(STATE.name + f".{os.getpid()}.tmp")
-    tmp.write_text(json.dumps(st, separators=(",", ":")), encoding="utf-8")
-    os.replace(tmp, STATE)
+    atomic.write_text(STATE, json.dumps(st, separators=(",", ":")))
 
 
 def _add(st: dict, day, fam, sub, vals, project, sid):
@@ -87,6 +91,8 @@ def _add(st: dict, day, fam, sub, vals, project, sid):
     s["d"][day]["n"] = s["d"][day].get("n", 0) + 1
     if sub:
         s["d"][day]["sub"] = s["d"][day].get("sub", 0) + vals[0]
+    for key, v in zip(("in", "cr", "cw"), vals[1:]):
+        s["d"][day][key] = s["d"][day].get(key, 0) + v
 
 
 def _read_file(st: dict, path: Path, rec: dict, project: str, budget: int) -> int:
@@ -175,6 +181,7 @@ def _prune(st: dict):
 def refresh(cap: int = CAP_BYTES, budget_s: float = 0) -> dict:
     with _lock:
         st = _load()
+        before = (set(st["files"]), st.get("ledger", {}).get("off", 0), st.get("at", 0))
         proj = claude_home() / "projects"
         t0 = time.time()
         cutoff = time.time() - MAX_AGE_DAYS * 86400
@@ -207,6 +214,9 @@ def refresh(cap: int = CAP_BYTES, budget_s: float = 0) -> dict:
         st["pending"] = sum(max(r["size"] - r["off"], 0) for r in st["files"].values())
         _read_ledger(st)
         _prune(st)
+        changed = left != cap or set(st["files"]) != before[0] or st["ledger"]["off"] != before[1]
+        if not changed and time.time() - before[2] < SAVE_IDLE_S:
+            return st
         st["at"] = time.time()
         try:
             _save(st)
@@ -244,6 +254,122 @@ def _total(rows: list) -> dict:
     inp = t["in"] + t["cache_read"] + t["cache_write"]
     t["cache_ratio"] = round(100 * t["cache_read"] / inp) if inp else 0
     return t
+USAGE = re.compile(rb'"usage"\s*:\s*\{')
+ROLE = re.compile(rb'"role"\s*:\s*"assistant"|"type"\s*:\s*"assistant"')
+SESSION = re.compile(rb'"sessionId"\s*:\s*"([^"]+)"')
+FULL_STAMP = re.compile(rb'"timestamp"\s*:\s*"([^"]{10,40})"')
+TOOL = re.compile(rb'"type"\s*:\s*"tool_use"\s*,\s*"id"\s*:\s*"[^"]*"\s*,\s*"name"\s*:\s*"([^"]+)"\s*,\s*"input"\s*:\s*\{')
+ARG = re.compile(rb'"(description|file_path|pattern|url|query|skill|subagent_type|command|prompt)"\s*:\s*"((?:[^"\\]|\\.){0,300})')
+ARG_RANK = [b"description", b"file_path", b"pattern", b"url", b"query", b"skill", b"subagent_type", b"command", b"prompt"]
+TEXT = re.compile(rb'"type"\s*:\s*"text"\s*,\s*"text"\s*:\s*"')
+TITLE = re.compile(rb'"(aiTitle|customTitle)"\s*:\s*"((?:[^"\\]|\\.){1,200})"')
+
+
+class Live:
+    def __init__(self, root: str):
+        self.root = Path(root)
+        self.files = {}
+        self.activity = {}
+        self.titles = {}
+
+    def refresh(self):
+        cutoff = time.time() - MAX_AGE_DAYS * 86400
+        for p in self.root.rglob("*.jsonl"):
+            try:
+                st = p.stat()
+            except OSError:
+                continue
+            f = self.files.get(p)
+            if f is None:
+                if st.st_mtime < cutoff:
+                    continue
+                f = self.files[p] = {"offset": 0, "ino": st.st_ino}
+            if st.st_ino != f["ino"] or st.st_size < f["offset"]:
+                f.update(offset=0, ino=st.st_ino)
+            if st.st_size == f["offset"]:
+                continue
+            try:
+                with open(p, "rb") as fh:
+                    fh.seek(f["offset"])
+                    for line in fh:
+                        if not line.endswith(b"\n"):
+                            break
+                        f["offset"] += len(line)
+                        self._line(line)
+            except OSError:
+                continue
+        for p in [p for p in self.files if not p.exists()]:
+            del self.files[p]
+        return self
+
+    def _activity(self, line: bytes):
+        sid, ts = SESSION.search(line), FULL_STAMP.search(line)
+        if not sid or not ts:
+            return
+        tool = None
+        for tool in TOOL.finditer(line):
+            pass
+        if tool:
+            args = {k: v for k, v in ARG.findall(line[tool.end():tool.end() + 4000])[:12]}
+            raw = next((args[k] for k in ARG_RANK if k in args), b"")
+            try:
+                what = json.loads(b'"' + raw + b'"')
+            except ValueError:
+                what = raw.decode(errors="replace")
+            step = {"tool": tool.group(1).decode(errors="replace")[:40], "what": " ".join(what.split())[:160]}
+        elif TEXT.search(line):
+            step = {"tool": "", "what": "Writing a reply"}
+        else:
+            return
+        key, t = sid.group(1).decode(), ts.group(1).decode()
+        if t >= self.activity.get(key, {}).get("t", ""):
+            self.activity[key] = {"t": t, **step}
+
+    def _line(self, line: bytes):
+        if b'Title"' in line[:400] and (t := TITLE.search(line)):
+            sid = SESSION.search(line)
+            if sid:
+                try:
+                    title = json.loads(b'"' + t.group(2) + b'"')
+                except ValueError:
+                    title = t.group(2).decode(errors="replace")
+                self.titles.setdefault(sid.group(1).decode(), {})[t.group(1).decode()] = " ".join(title.split())
+            return
+        if USAGE.search(line) and ROLE.search(line):
+            self._activity(line)
+
+    def title(self, session: str) -> str:
+        t = self.titles.get(session) or {}
+        return t.get("customTitle") or t.get("aiTitle") or ""
+
+
+def session_totals(st: dict) -> dict:
+    out = {}
+    for sid, rec in st["sessions"].items():
+        t = {"input": 0, "output": 0, "cache_write": 0, "cache_read": 0, "messages": 0}
+        for v in rec["d"].values():
+            t["input"] += v.get("in", 0)
+            t["cache_read"] += v.get("cr", 0)
+            t["cache_write"] += v.get("cw", 0)
+            t["messages"] += v.get("n", 0)
+            t["output"] += sum(v.get(f, 0) for f in FAMILIES)
+        out[sid] = t
+    return out
+
+
+def deck_totals(st: dict, day: str) -> dict:
+    r = _dayrow(st, day)
+    return {"input": r["in"], "output": r["out"], "cache_write": r["cache_write"], "cache_read": r["cache_read"], "messages": r["n"]}
+
+
+def deck_numbers(budget_s: float = 2) -> dict:
+    st = refresh(budget_s=budget_s)
+    sessions = session_totals(st)
+    total = {"input": 0, "output": 0, "cache_write": 0, "cache_read": 0, "messages": 0}
+    for t in sessions.values():
+        for k in total:
+            total[k] += t[k]
+    return {"sessions": sessions, "today": deck_totals(st, time.strftime("%Y-%m-%d")), "total": total}
 
 
 def _fmt(n) -> str:
@@ -336,7 +462,7 @@ def text(rep: dict) -> str:
 def hook_line():
     try:
         st = json.loads(STATE.read_text(encoding="utf-8"))
-        if st.get("v") != 1 or not st.get("at"):
+        if st.get("v") != 2 or not st.get("at"):
             return None
         rep = _report(st)
     except (OSError, ValueError, KeyError, TypeError):
@@ -360,11 +486,13 @@ def job(now, cfg, add=None, background=True):
     def run():
         try:
             rep = _report(refresh(cap=100 * 1024 * 1024, budget_s=20))
+            jobs.mark("tokens", True)
             if rep["flags"] and add:
                 day = now.strftime("%Y-%m-%d")
                 add("system", "Claude token use: " + rep["flags"][0]["text"].split(":")[0][:100], "\n".join(f["text"] for f in rep["flags"])[:580], "#/tokens",
                     key=f"tokens:{day}", now=now, desktop=False)
         except Exception as e:
+            jobs.mark("tokens", False, f"{type(e).__name__}: {e}")
             print(f"token flag inbox post failed: {type(e).__name__}: {e}")
     if not background:
         run()

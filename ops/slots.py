@@ -378,6 +378,26 @@ def restart_service():
     return False
 
 
+def _systemctl(*args):
+    return subprocess.run(["systemctl", "--user", *args], capture_output=True, text=True, timeout=30)
+
+
+def restart_units():
+    done = []
+    try:
+        if not shutil.which("systemctl"):
+            return done
+        for u in sorted((SLOT[active()] / "ops" / "units").glob("*.service")):
+            try:
+                _systemctl("try-restart", u.name)
+                done.append(u.name)
+            except Exception as e:
+                log_event("unit-restart-failed", unit=u.name, error=str(e)[:200])
+    except Exception as e:
+        log_event("unit-restart-failed", error=str(e)[:200])
+    return done
+
+
 def wait_healthy(slot: str, seconds=90) -> bool:
     t0 = time.time()
     time.sleep(3)
@@ -406,6 +426,7 @@ def switch(force=False):
     log_event("switch", frm=live, to=idle, head=head(idle))
     restart_service()
     if wait_healthy(idle):
+        restart_units()
         _board_call("release", f"slot-{idle}", force=True)
         _board_call("post", f"switched Rosie to slot {idle} ({head(idle)}); slot {live} is idle now", "done")
         return {"ok": True, "active": idle, "head": head(idle), "probation_minutes": PROBATION_MIN, "note": f"If anything goes wrong in the next {PROBATION_MIN} minutes I go back automatically."}
@@ -426,6 +447,8 @@ def rollback(reason="requested"):
     _board_call("post", f"Rosie went back from slot {cur} to slot {prev}: {reason}", "note", "all")
     restart_service()
     ok = wait_healthy(prev)
+    if ok:
+        restart_units()
     return {"ok": ok, "active": prev, "reason": reason}
 
 

@@ -9,8 +9,9 @@ import httpx
 
 import config
 import testguard
+import ollama_url
 
-OLLAMA = "http://127.0.0.1:11434"
+OLLAMA = ollama_url.BASE
 DEFAULT_CTX = 32768
 LADDER = (8192, 16384, 24576, 32768, 49152, 65536, 98304, 131072, 196608, 262144)
 STEP = 4096

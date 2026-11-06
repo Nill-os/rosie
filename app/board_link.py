@@ -1,4 +1,5 @@
 # board #714 owner-shared-board-2026-10-23
+import jobs
 import datetime as dt
 import json
 import os
@@ -13,6 +14,7 @@ from pathlib import Path
 import httpx
 
 import agentboard
+import atomic
 import config
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -66,7 +68,6 @@ def _load() -> dict:
 
 
 def _save(st: dict):
-    import atomic
     atomic.write_text(STATE, json.dumps(st, indent=1))
 
 
@@ -249,9 +250,7 @@ def _post_file(folder: Path, meta: dict):
     final = folder / f"{meta['id']:010d}.json"
     if final.exists():
         return
-    tmp = folder / f".{meta['id']}.writing"  # board #714 why-write-then-rename
-    tmp.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
-    tmp.replace(final)
+    atomic.write_text(final, json.dumps(meta, ensure_ascii=False))
 
 
 def _read_post(f: Path) -> dict | None:
@@ -328,8 +327,10 @@ def _loop():
     while True:
         try:
             sync()
+            jobs.mark("board_link", True)
         except Exception as e:
             status.update(error=f"{type(e).__name__}: {str(e)[:160]}")
+            jobs.mark("board_link", False, status["error"])
         time.sleep(EVERY_S)
 
 

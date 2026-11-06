@@ -10,9 +10,10 @@ import corner_browse
 import ctxsize
 import testguard
 import workflows
+import ollama_url
 
 DEFAULT = "qwen3.5:9b"
-OLLAMA = "http://127.0.0.1:11434"
+OLLAMA = ollama_url.BASE
 GPU_FIT_BYTES = 7_000_000_000  # board #749 why-gpu-fit-size
 _lock = threading.Lock()
 _caps: dict[str, list] = {}

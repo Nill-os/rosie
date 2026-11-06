@@ -4,7 +4,6 @@ from pathlib import Path
 
 import asyncio
 import collections
-import hashlib
 import hmac
 import json
 import os
@@ -53,6 +52,8 @@ import terminals
 import stt
 import workflows
 import gcal
+import ollama_url
+import sessionkey
 
 STATIC = Path(__file__).resolve().parent.parent / "static"
 app = FastAPI()
@@ -125,10 +126,7 @@ _fails_lock = threading.Lock()
 
 
 def _session_value():
-    key = (SECRETS / "session_key").read_text().strip().encode()
-    if len(key) < 32:  # board #771 safety-short-key-refused
-        raise OSError("secrets/session_key is missing or too short")
-    return hmac.new(key, b"assistant-ok", hashlib.sha256).hexdigest()
+    return sessionkey.value(SECRETS)
 
 
 def _same(a: str, b: str) -> bool:
@@ -478,7 +476,7 @@ def _synth_ollama(text):
     import urllib.request
     body = __import__("json").dumps({"model": "lfm3-audio", "input": text}).encode()
     req = urllib.request.Request(
-        "http://localhost:11434/v1/audio/speech",
+        ollama_url.BASE + "/v1/audio/speech",
         data=body,
         headers={"Content-Type": "application/json"},
     )

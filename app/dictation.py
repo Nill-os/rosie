@@ -19,6 +19,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import config  # noqa: E402
 import overlay_ipc  # noqa: E402
+import sessionkey  # noqa: E402
 import stt  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -303,10 +304,7 @@ class Dictation:
             time.sleep(0.08)
 
     def _api(self, path, body):
-        import hashlib
-        import hmac
-        key = (ROOT / "secrets" / "session_key").read_text().strip().encode()
-        cookie = hmac.new(key, b"assistant-ok", hashlib.sha256).hexdigest()
+        cookie = sessionkey.value(ROOT / "secrets")
         req = urllib.request.Request(f"http://127.0.0.1:{PORT}{path}", data=json.dumps(body).encode(), headers={"Content-Type": "application/json", "Cookie": f"assistant_session={cookie}"})
         with urllib.request.urlopen(req, timeout=180) as r:
             return r.read()

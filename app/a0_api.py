@@ -14,10 +14,11 @@ import agentboard
 import config
 import ctxsize
 import power
+import ollama_url
 
 router = APIRouter()
 CONTAINER = "agent-zero"
-OLLAMA = "http://127.0.0.1:11434"
+OLLAMA = ollama_url.BASE
 AUDIT = Path(__file__).resolve().parent.parent / "data" / "mcp_audit.log"
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 ACTIVITY = re.compile(r"(External API message|User message|Using tool|Error|error:|Exception|MCPClientBase|Stopped after|step cap|Tools updated)")

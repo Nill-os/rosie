@@ -8,6 +8,8 @@ from urllib.parse import urlsplit
 
 import httpx
 
+import atomic
+
 ROOT = Path(__file__).resolve().parent.parent
 SECRET = ROOT / "secrets" / "canvas.json"
 EXTRA = ROOT / "data" / "canvas_extra.json"
@@ -26,11 +28,7 @@ def _read(p: Path, default):
 
 def _write(p: Path, data, private=False):
     p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data, indent=1))
-    if private:
-        tmp.chmod(0o600)
-    tmp.replace(p)
+    atomic.write_text(p, json.dumps(data, indent=1), mode=0o600 if private else 0o644)
 
 
 def feed_url() -> str:

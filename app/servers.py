@@ -13,6 +13,7 @@ from pathlib import Path
 import httpx
 
 import security_watch
+import atomic
 import testguard
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -59,9 +60,7 @@ def load() -> dict:
 def save(d: dict):
     testguard.check(STATE)
     STATE.parent.mkdir(parents=True, exist_ok=True)
-    tmp = STATE.with_suffix(".tmp")
-    tmp.write_text(json.dumps(d, indent=1))
-    tmp.replace(STATE)
+    atomic.write_text(STATE, json.dumps(d, indent=1))
 
 
 def _host_address() -> str:

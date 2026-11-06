@@ -28,6 +28,7 @@ import skills
 import tasks
 import testguard
 import workflows
+import ollama_url
 
 router = APIRouter()
 ROOT = Path(__file__).resolve().parent.parent
@@ -659,7 +660,7 @@ def _cached(key, ttl, fn):
 
 
 def _model_info():
-    r = httpx.get("http://127.0.0.1:11434/api/ps", timeout=3).json()
+    r = httpx.get(ollama_url.BASE + "/api/ps", timeout=3).json()
     ms = [m for m in r.get("models", []) if agent.MODEL in (m.get("name"), m.get("model"))]
     if not ms:
         return {"model": agent.MODEL, "loaded": False, "where": "not loaded (loads on first message)"}
@@ -1275,6 +1276,13 @@ def _health_summary():
         return health.summary(health.cached())
     except Exception:
         return {"bad": [], "warn": [], "level": "ok"}
+
+
+@router.get("/api/jobs")
+def jobs_get():
+    import jobs
+    rows = jobs.listing()
+    return {"rows": rows, **jobs.summary(rows)}
 
 
 @router.get("/api/health")
