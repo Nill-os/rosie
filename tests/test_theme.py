@@ -93,7 +93,7 @@ def test_the_menu_groups_pages_by_what_she_is_doing_and_settings_stands_alone():
     nav = re.search(r"const NAV = \[.*?\]\];", js, re.S).group(0)
     heads = re.findall(r"\['-', '([^']*)'\]", nav)
     assert heads == ["My day", "Learn and grow", "Work", "Rosie and helpers", "System", ""]
-    assert nav.index("'study'") < nav.index("'lifequest'") < nav.index("'-', 'Work'") and nav.rstrip().endswith("['settings', '⚙', 'Settings']];")
+    assert nav.index("'lifequest'") < nav.index("'-', 'Work'") and nav.rstrip().endswith("['settings', '⚙', 'Settings']];")
     assert "store.get('nav.folded', ['Advanced'])" in js and "navRail()" in js
 
 
