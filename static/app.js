@@ -1783,43 +1783,74 @@ VIEWS.tokens = async () => {
 };
 
 let claudeTasksPollT = null;
+let claudeTasksFilter = 'running';
+const ctState = (t) => t.status === 'running' ? 'running' : t.status === 'failed' ? 'failed' : 'done';
+const ctDur = (sec) => { const m = Math.round(sec / 60); if (m < 1) return '<1 min'; if (m < 60) return m + ' min'; const hr = Math.floor(m / 60), r = m % 60; return hr + ' h' + (r ? ' ' + r + ' min' : ''); };
 VIEWS.claudetasks = async () => {
   setHeader('Claude Tasks', []);
+  claudeTasksFilter = 'running';
   const here = () => /^#\/claudetasks\/?$/.test(location.hash);
-  if (!document.getElementById('ct-style')) document.head.insertAdjacentHTML('beforeend', '<style id="ct-style">' + `.ct-wrap{display:flex;flex-direction:column;gap:12px}.ct-card{background:var(--card);border:1px solid var(--line,rgba(255,255,255,.08));border-radius:12px;padding:16px 18px;display:flex;flex-direction:column;gap:8px}.ct-head{display:flex;align-items:center;gap:10px}.ct-dot{width:10px;height:10px;border-radius:50%;flex:none}.ct-dot.run{background:var(--ok)}.ct-dot.done{background:var(--mute)}.ct-dot.failed{background:var(--bad)}.ct-label{font-weight:600;flex:1}.ct-track{height:8px;border-radius:6px;background:rgba(255,255,255,.08);overflow:hidden;position:relative}.ct-bar{height:100%;border-radius:6px;background:linear-gradient(90deg,var(--acc),var(--pur));transition:width .6s ease;position:relative;overflow:hidden}.ct-bar.run::after{content:'';position:absolute;top:0;left:-60%;width:60%;height:100%;background:linear-gradient(90deg,transparent,rgba(255,255,255,.25),transparent);animation:ct-shimmer 1.4s linear infinite}@keyframes ct-shimmer{to{left:160%}}.ct-info{font-size:calc(12px*var(--ts,1));color:var(--mute)}.ct-current{font-size:calc(12px*var(--ts,1));color:var(--mute);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}` + '</style>');
+  const css = `.ct-wrap{display:flex;flex-direction:column;gap:12px}.ct-card{background:var(--card);border:1px solid var(--line,rgba(255,255,255,.08));border-radius:12px;padding:16px 18px;display:flex;flex-direction:column;gap:8px;backdrop-filter:blur(14px)}.ct-head{display:flex;align-items:center;gap:10px}.ct-dot{width:10px;height:10px;border-radius:50%;flex:none}.ct-dot.run{background:var(--ok);box-shadow:0 0 8px var(--ok)}.ct-dot.done{background:var(--mute)}.ct-dot.failed{background:var(--bad)}.ct-label{font-weight:600;flex:1}.ct-track{height:8px;border-radius:6px;background:rgba(255,255,255,.08);overflow:hidden;position:relative}.ct-bar{height:100%;border-radius:6px;background:linear-gradient(90deg,var(--acc),var(--pur));transition:width .6s ease;position:relative;overflow:hidden}.ct-bar.failed{background:var(--bad)}.ct-bar.run::after{content:'';position:absolute;top:0;left:-60%;width:60%;height:100%;background:linear-gradient(90deg,transparent,rgba(255,255,255,.25),transparent);animation:ct-shimmer 1.4s linear infinite}@keyframes ct-shimmer{to{left:160%}}.ct-info{font-size:calc(12px*var(--ts,1));color:var(--mute)}.ct-current{font-size:calc(12px*var(--ts,1));color:var(--mute);opacity:.8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.ct-filters{display:inline-flex;gap:6px;flex-wrap:wrap;margin:0 0 12px}.ct-filter{border-radius:8px;padding:4px 14px;background:transparent;border:1px solid var(--line);color:var(--mute);cursor:pointer;font:inherit;font-size:calc(13px*var(--ts,1));font-weight:600;transition:background .12s,color .12s,border-color .12s}.ct-filter:hover{color:inherit}.ct-filter.on{background:color-mix(in srgb,var(--acc) 18%,transparent);border-color:color-mix(in srgb,var(--acc) 45%,transparent);color:var(--acc)}.ct-filter .ct-n{opacity:.7;margin-left:6px;font-variant-numeric:tabular-nums}.ct-empty{text-align:center;padding:28px 18px;align-items:center}.ct-empty .ct-hint{font-size:calc(12px*var(--ts,1));color:var(--mute);opacity:.7}@media (prefers-reduced-motion:reduce){.ct-bar.run::after{animation:none}.ct-bar{transition:none}}`;
+  let st = document.getElementById('ct-style');
+  if (!st) { st = document.createElement('style'); st.id = 'ct-style'; document.head.appendChild(st); }
+  st.textContent = css;
+  let tasks = [];
+  const card = (t) => {
+    const pct = Math.min(100, Math.max(0, t.pct || 0));
+    const state = ctState(t);
+    const isRun = state === 'running';
+    const dotCls = isRun ? 'run' : state;
+    const barCls = 'ct-bar' + (isRun ? ' run' : state === 'failed' ? ' failed' : '');
+    const row1 = [];
+    if (t.done != null && t.total != null) row1.push(t.done + ' / ' + t.total + ' games');
+    else if (t.done != null) row1.push(t.done + ' games');
+    row1.push(pct + '%');
+    if (t.free_gb != null) row1.push(t.free_gb + ' GB free');
+    const row2 = [];
+    if (t.started_at) row2.push('Started ' + t.started_at);
+    if (isRun) {
+      if (t.elapsed != null) row2.push(ctDur(t.elapsed) + ' elapsed');
+      if (t.speed != null) row2.push(t.speed + ' games/min');
+      if (t.eta_sec != null) row2.push('~' + ctDur(t.eta_sec) + ' left');
+    } else {
+      const word = state === 'failed' ? 'Failed' : 'Finished';
+      row2.push(t.elapsed != null ? word + ' after ' + ctDur(t.elapsed) : word);
+      if (t.speed != null) row2.push(t.speed + ' games/min');
+    }
+    return h('div', { class: 'ct-card' },
+      h('div', { class: 'ct-head' },
+        h('span', { class: 'ct-dot ' + dotCls }),
+        h('span', { class: 'ct-label' }, t.label),
+        h('span', { class: 'ct-info' }, isRun ? 'Running' : state === 'failed' ? 'Failed' : 'Done')),
+      h('div', { class: 'ct-track' }, h('div', { class: barCls, style: 'width:' + pct + '%' })),
+      h('div', { class: 'ct-info' }, row1.join(' · ')),
+      row2.length ? h('div', { class: 'ct-info' }, row2.join(' · ')) : null,
+      t.current ? h('div', { class: 'ct-current', title: t.current }, t.current) : null);
+  };
+  const render = () => {
+    const counts = { running: 0, done: 0, failed: 0 };
+    tasks.forEach((t) => { counts[ctState(t)]++; });
+    const filters = h('div', { class: 'ct-filters', role: 'group', 'aria-label': 'Filter jobs' },
+      ...[['running', 'Running'], ['done', 'Done'], ['failed', 'Failed']].map(([k, label]) => h('button', {
+        type: 'button', class: 'ct-filter' + (k === claudeTasksFilter ? ' on' : ''), 'aria-pressed': k === claudeTasksFilter ? 'true' : 'false',
+        onclick: () => { if (claudeTasksFilter === k) return; claudeTasksFilter = k; render(); schedule(); },
+      }, label, h('span', { class: 'ct-n' }, String(counts[k])))));
+    const list = tasks.filter((t) => ctState(t) === claudeTasksFilter);
+    let body;
+    if (list.length) body = h('div', { class: 'ct-wrap' }, ...list.map(card));
+    else if (claudeTasksFilter === 'running') body = h('div', { class: 'ct-card ct-empty' }, h('div', { class: 'muted' }, 'No jobs running right now.'), h('div', { class: 'ct-hint' }, 'This page checks again every 5 seconds.'));
+    else body = h('div', { class: 'ct-card ct-empty' }, h('div', { class: 'muted' }, 'No ' + claudeTasksFilter + ' jobs.'));
+    show(h('div', { class: 'pagehead' }, h('h2', {}, 'Claude Tasks'), h('span', { class: 'muted' }, tasks.length + ' job' + (tasks.length !== 1 ? 's' : ''))), filters, body);
+  };
+  const schedule = () => { clearTimeout(claudeTasksPollT); if (here()) claudeTasksPollT = setTimeout(draw, claudeTasksFilter === 'running' ? 5000 : 30000); };
   const draw = async () => {
     clearTimeout(claudeTasksPollT);
     if (!here()) return;
     if (document.hidden) { claudeTasksPollT = setTimeout(draw, 15000); return; }
-    let tasks;
-    try { tasks = await J('/api/claude-tasks'); } catch (e) { if (here()) show(h('div', { class: 'card' }, 'Couldn\'t read tasks: ' + e.message)); return; }
+    try { tasks = await J('/api/claude-tasks'); } catch (e) { if (here()) show(h('div', { class: 'card' }, 'Couldn\'t read tasks: ' + e.message)); claudeTasksPollT = setTimeout(draw, 15000); return; }
     if (!here()) return;
-    if (!tasks.length) {
-      show(h('div', { class: 'card ct-wrap' }, h('div', { class: 'muted' }, 'No active Claude-launched jobs found.')));
-      claudeTasksPollT = setTimeout(draw, 5000);
-      return;
-    }
-    const cards = tasks.map((t) => {
-      const pct = Math.min(100, Math.max(0, t.pct || 0));
-      const isRun = t.status === 'running';
-      const dotCls = isRun ? 'run' : t.status === 'failed' ? 'failed' : 'done';
-      const barCls = 'ct-bar' + (isRun ? ' run' : '');
-      const parts = [];
-      if (t.done != null && t.total != null) parts.push(t.done + ' / ' + t.total + ' games');
-      parts.push(pct + '%');
-      if (t.free_gb != null) parts.push(t.free_gb + ' GB free');
-      const info = parts.join(' · ');
-      return h('div', { class: 'ct-card' },
-        h('div', { class: 'ct-head' },
-          h('span', { class: 'ct-dot ' + dotCls }),
-          h('span', { class: 'ct-label' }, t.label),
-          h('span', { class: 'ct-info' }, isRun ? 'Running' : t.status === 'failed' ? 'Failed' : 'Done')),
-        h('div', { class: 'ct-track' }, h('div', { class: barCls, style: 'width:' + pct + '%' })),
-        h('div', { class: 'ct-info' }, info),
-        t.current ? h('div', { class: 'ct-current' }, t.current) : null);
-    });
-    show(h('div', { class: 'pagehead' }, h('h2', {}, 'Claude Tasks'), h('span', { class: 'muted' }, tasks.length + ' job' + (tasks.length !== 1 ? 's' : ''))), h('div', { class: 'ct-wrap' }, ...cards));
-    claudeTasksPollT = setTimeout(draw, 5000);
+    render();
+    schedule();
   };
   show(h('div', { class: 'muted' }, 'Reading tasks…'));
   draw();

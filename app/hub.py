@@ -1442,6 +1442,39 @@ def _parse_claude_task_log(log_path: Path, svc_name: str) -> dict:
     }
 
 
+def _task_times(lines: list, running: bool) -> dict:
+    stamps = [m.group(1) for m in (re.match(r"\[(\d{1,2}:\d{2}:\d{2})\]", ln) for ln in lines) if m]
+    out = {"started_at": None, "elapsed": None}
+    if not stamps:
+        return out
+    day = dt.date.today()
+    for ln in lines[:60]:
+        if "===" in ln:
+            m = re.search(r"(\d{4}-\d{2}-\d{2})", ln)
+            if m:
+                try:
+                    day = dt.date.fromisoformat(m.group(1))
+                except ValueError:
+                    pass
+                break
+    t0 = dt.datetime.strptime(stamps[0], "%H:%M:%S").time()
+    start = dt.datetime.combine(day, t0)
+    now = dt.datetime.now()
+    if start > now:
+        start -= dt.timedelta(days=1)
+    if running:
+        elapsed = int(time.time() - start.timestamp())
+    else:
+        t1 = dt.datetime.strptime(stamps[-1], "%H:%M:%S").time()
+        end = dt.datetime.combine(start.date(), t1)
+        if end < start:
+            end += dt.timedelta(days=1)
+        elapsed = int((end - start).total_seconds())
+    out["started_at"] = start.strftime("%I:%M %p").lstrip("0")
+    out["elapsed"] = max(0, elapsed)
+    return out
+
+
 @router.get("/api/claude-tasks")
 def claude_tasks():
     import glob
@@ -1459,5 +1492,15 @@ def claude_tasks():
             status = _svc_active(svc_name)
             task = _parse_claude_task_log(p, svc_name)
             task["status"] = status
+            try:
+                lines = p.read_text(errors="replace").splitlines()
+            except OSError:
+                lines = []
+            task.update(_task_times(lines, status == "running"))
+            el, d, tot = task["elapsed"], task.get("done"), task.get("total")
+            speed = round(d / (el / 60), 1) if d is not None and tot and el else None
+            task["speed"] = speed
+            rem = (tot - d) if d is not None and tot else 0
+            task["eta_sec"] = int(rem / (speed / 60)) if speed and rem > 0 else None
             results.append(task)
     return results
