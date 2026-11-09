@@ -1,5 +1,6 @@
 import datetime as dt
 import json
+import os
 import re
 import secrets
 import shutil
@@ -1360,7 +1361,13 @@ def mcp_info():
 
 
 def _svc_active(name: str) -> str:
-    r = subprocess.run(["systemctl", "--user", "is-active", name], capture_output=True, text=True)
+    run_dir = f"/run/user/{os.getuid()}"
+    env = {**os.environ, "XDG_RUNTIME_DIR": os.environ.get("XDG_RUNTIME_DIR") or run_dir,
+           "DBUS_SESSION_BUS_ADDRESS": os.environ.get("DBUS_SESSION_BUS_ADDRESS") or f"unix:path={run_dir}/bus"}
+    try:
+        r = subprocess.run(["systemctl", "--user", "is-active", name], capture_output=True, text=True, timeout=5, env=env)
+    except (OSError, subprocess.TimeoutExpired):
+        return "done"
     s = r.stdout.strip()
     if s == "active":
         return "running"

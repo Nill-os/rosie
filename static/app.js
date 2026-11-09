@@ -1786,16 +1786,16 @@ let claudeTasksPollT = null;
 VIEWS.claudetasks = async () => {
   setHeader('Claude Tasks', []);
   const here = () => /^#\/claudetasks\/?$/.test(location.hash);
-  const style = h('style', {}, `.ct-wrap{display:flex;flex-direction:column;gap:12px}.ct-card{background:var(--card);border:1px solid var(--line,rgba(255,255,255,.08));border-radius:12px;padding:16px 18px;display:flex;flex-direction:column;gap:8px}.ct-head{display:flex;align-items:center;gap:10px}.ct-dot{width:10px;height:10px;border-radius:50%;flex:none}.ct-dot.run{background:var(--ok)}.ct-dot.done{background:var(--mute)}.ct-dot.failed{background:var(--bad)}.ct-label{font-weight:600;flex:1}.ct-track{height:8px;border-radius:6px;background:rgba(255,255,255,.08);overflow:hidden;position:relative}.ct-bar{height:100%;border-radius:6px;background:linear-gradient(90deg,var(--acc),var(--pur));transition:width .6s ease;position:relative;overflow:hidden}.ct-bar.run::after{content:'';position:absolute;top:0;left:-60%;width:60%;height:100%;background:linear-gradient(90deg,transparent,rgba(255,255,255,.25),transparent);animation:ct-shimmer 1.4s linear infinite}@keyframes ct-shimmer{to{left:160%}}.ct-info{font-size:calc(12px*var(--ts,1));color:var(--mute)}.ct-current{font-size:calc(12px*var(--ts,1));color:var(--mute);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}`);
+  if (!document.getElementById('ct-style')) document.head.insertAdjacentHTML('beforeend', '<style id="ct-style">' + `.ct-wrap{display:flex;flex-direction:column;gap:12px}.ct-card{background:var(--card);border:1px solid var(--line,rgba(255,255,255,.08));border-radius:12px;padding:16px 18px;display:flex;flex-direction:column;gap:8px}.ct-head{display:flex;align-items:center;gap:10px}.ct-dot{width:10px;height:10px;border-radius:50%;flex:none}.ct-dot.run{background:var(--ok)}.ct-dot.done{background:var(--mute)}.ct-dot.failed{background:var(--bad)}.ct-label{font-weight:600;flex:1}.ct-track{height:8px;border-radius:6px;background:rgba(255,255,255,.08);overflow:hidden;position:relative}.ct-bar{height:100%;border-radius:6px;background:linear-gradient(90deg,var(--acc),var(--pur));transition:width .6s ease;position:relative;overflow:hidden}.ct-bar.run::after{content:'';position:absolute;top:0;left:-60%;width:60%;height:100%;background:linear-gradient(90deg,transparent,rgba(255,255,255,.25),transparent);animation:ct-shimmer 1.4s linear infinite}@keyframes ct-shimmer{to{left:160%}}.ct-info{font-size:calc(12px*var(--ts,1));color:var(--mute)}.ct-current{font-size:calc(12px*var(--ts,1));color:var(--mute);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}` + '</style>');
   const draw = async () => {
     clearTimeout(claudeTasksPollT);
     if (!here()) return;
     if (document.hidden) { claudeTasksPollT = setTimeout(draw, 15000); return; }
     let tasks;
-    try { tasks = await J('/api/claude-tasks'); } catch (e) { if (here()) show(style, h('div', { class: 'card' }, 'Couldn\'t read tasks: ' + e.message)); return; }
+    try { tasks = await J('/api/claude-tasks'); } catch (e) { if (here()) show(h('div', { class: 'card' }, 'Couldn\'t read tasks: ' + e.message)); return; }
     if (!here()) return;
     if (!tasks.length) {
-      show(style, h('div', { class: 'card ct-wrap' }, h('div', { class: 'muted' }, 'No active Claude-launched jobs found.')));
+      show(h('div', { class: 'card ct-wrap' }, h('div', { class: 'muted' }, 'No active Claude-launched jobs found.')));
       claudeTasksPollT = setTimeout(draw, 5000);
       return;
     }
@@ -1818,10 +1818,10 @@ VIEWS.claudetasks = async () => {
         h('div', { class: 'ct-info' }, info),
         t.current ? h('div', { class: 'ct-current' }, t.current) : null);
     });
-    show(style, h('div', { class: 'pagehead' }, h('h2', {}, 'Claude Tasks'), h('span', { class: 'muted' }, tasks.length + ' job' + (tasks.length !== 1 ? 's' : ''))), h('div', { class: 'ct-wrap' }, ...cards));
+    show(h('div', { class: 'pagehead' }, h('h2', {}, 'Claude Tasks'), h('span', { class: 'muted' }, tasks.length + ' job' + (tasks.length !== 1 ? 's' : ''))), h('div', { class: 'ct-wrap' }, ...cards));
     claudeTasksPollT = setTimeout(draw, 5000);
   };
-  show(style, h('div', { class: 'muted' }, 'Reading tasks…'));
+  show(h('div', { class: 'muted' }, 'Reading tasks…'));
   draw();
 };
 
