@@ -1840,7 +1840,7 @@ VIEWS.claudetasks = async () => {
     if (list.length) body = h('div', { class: 'ct-wrap' }, ...list.map(card));
     else if (claudeTasksFilter === 'running') body = h('div', { class: 'ct-card ct-empty' }, h('div', { class: 'muted' }, 'No jobs running right now.'), h('div', { class: 'ct-hint' }, 'This page checks again every 5 seconds.'));
     else body = h('div', { class: 'ct-card ct-empty' }, h('div', { class: 'muted' }, 'No ' + claudeTasksFilter + ' jobs.'));
-    show(h('div', { class: 'pagehead' }, h('h2', {}, 'Claude Tasks'), h('span', { class: 'muted' }, tasks.length + ' job' + (tasks.length !== 1 ? 's' : ''))), filters, body);
+    keepScroll(() => show(h('div', { class: 'pagehead' }, h('h2', {}, 'Claude Tasks'), h('span', { class: 'muted' }, tasks.length + ' job' + (tasks.length !== 1 ? 's' : ''))), filters, body));
   };
   const schedule = () => { clearTimeout(claudeTasksPollT); if (here()) claudeTasksPollT = setTimeout(draw, claudeTasksFilter === 'running' ? 5000 : 30000); };
   const draw = async () => {
