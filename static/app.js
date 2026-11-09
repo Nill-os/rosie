@@ -99,7 +99,7 @@ const NAV = [['-', 'My day'], ['home', '⌂', 'Home'], ['inbox', '🔔', 'Inbox'
   ['-', 'System'], ['deck', '◫', 'Agent Deck'],
   ['-', ''], ['settings', '⚙', 'Settings']];
 const TABS = { home: [['home', 'Home'], ['chats', 'Chats']], brief: [['brief', 'Morning'], ['paper', 'Morning Paper']], memory: [['memory', 'Memory'], ['graph', 'Memory graph']],
-  deck: [['deck', 'Agent Deck'], ['servers', 'Servers'], ['jobs', 'Jobs'], ['tokens', 'Tokens'], ['terminal', 'Terminal']] };
+  deck: [['deck', 'Agent Deck'], ['servers', 'Servers'], ['jobs', 'Jobs'], ['tokens', 'Tokens'], ['claudetasks', 'Claude Tasks'], ['terminal', 'Terminal']] };
 const TAB_GROUP = {}; for (const [g, list] of Object.entries(TABS)) for (const [k] of list) TAB_GROUP[k] = g;
 let menuLayout = [];
 function menuGroups(nav, layout) {
@@ -1779,6 +1779,49 @@ VIEWS.tokens = async () => {
     tokensPollT = setTimeout(draw, 60000);
   };
   show(h('div', { class: 'muted' }, 'Reading the token report…'));
+  draw();
+};
+
+let claudeTasksPollT = null;
+VIEWS.claudetasks = async () => {
+  setHeader('Claude Tasks', []);
+  const here = () => /^#\/claudetasks\/?$/.test(location.hash);
+  const style = h('style', {}, `.ct-wrap{display:flex;flex-direction:column;gap:12px}.ct-card{background:var(--card);border:1px solid var(--line,rgba(255,255,255,.08));border-radius:12px;padding:16px 18px;display:flex;flex-direction:column;gap:8px}.ct-head{display:flex;align-items:center;gap:10px}.ct-dot{width:10px;height:10px;border-radius:50%;flex:none}.ct-dot.run{background:var(--ok)}.ct-dot.done{background:var(--mute)}.ct-dot.failed{background:var(--bad)}.ct-label{font-weight:600;flex:1}.ct-track{height:8px;border-radius:6px;background:rgba(255,255,255,.08);overflow:hidden;position:relative}.ct-bar{height:100%;border-radius:6px;background:linear-gradient(90deg,var(--acc),var(--pur));transition:width .6s ease;position:relative;overflow:hidden}.ct-bar.run::after{content:'';position:absolute;top:0;left:-60%;width:60%;height:100%;background:linear-gradient(90deg,transparent,rgba(255,255,255,.25),transparent);animation:ct-shimmer 1.4s linear infinite}@keyframes ct-shimmer{to{left:160%}}.ct-info{font-size:calc(12px*var(--ts,1));color:var(--mute)}.ct-current{font-size:calc(12px*var(--ts,1));color:var(--mute);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}`);
+  const draw = async () => {
+    clearTimeout(claudeTasksPollT);
+    if (!here()) return;
+    if (document.hidden) { claudeTasksPollT = setTimeout(draw, 15000); return; }
+    let tasks;
+    try { tasks = await J('/api/claude-tasks'); } catch (e) { if (here()) show(style, h('div', { class: 'card' }, 'Couldn\'t read tasks: ' + e.message)); return; }
+    if (!here()) return;
+    if (!tasks.length) {
+      show(style, h('div', { class: 'card ct-wrap' }, h('div', { class: 'muted' }, 'No active Claude-launched jobs found.')));
+      claudeTasksPollT = setTimeout(draw, 5000);
+      return;
+    }
+    const cards = tasks.map((t) => {
+      const pct = Math.min(100, Math.max(0, t.pct || 0));
+      const isRun = t.status === 'running';
+      const dotCls = isRun ? 'run' : t.status === 'failed' ? 'failed' : 'done';
+      const barCls = 'ct-bar' + (isRun ? ' run' : '');
+      const parts = [];
+      if (t.done != null && t.total != null) parts.push(t.done + ' / ' + t.total + ' games');
+      parts.push(pct + '%');
+      if (t.free_gb != null) parts.push(t.free_gb + ' GB free');
+      const info = parts.join(' · ');
+      return h('div', { class: 'ct-card' },
+        h('div', { class: 'ct-head' },
+          h('span', { class: 'ct-dot ' + dotCls }),
+          h('span', { class: 'ct-label' }, t.label),
+          h('span', { class: 'ct-info' }, isRun ? 'Running' : t.status === 'failed' ? 'Failed' : 'Done')),
+        h('div', { class: 'ct-track' }, h('div', { class: barCls, style: 'width:' + pct + '%' })),
+        h('div', { class: 'ct-info' }, info),
+        t.current ? h('div', { class: 'ct-current' }, t.current) : null);
+    });
+    show(style, h('div', { class: 'pagehead' }, h('h2', {}, 'Claude Tasks'), h('span', { class: 'muted' }, tasks.length + ' job' + (tasks.length !== 1 ? 's' : ''))), h('div', { class: 'ct-wrap' }, ...cards));
+    claudeTasksPollT = setTimeout(draw, 5000);
+  };
+  show(style, h('div', { class: 'muted' }, 'Reading tasks…'));
   draw();
 };
 

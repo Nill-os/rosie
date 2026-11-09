@@ -1357,3 +1357,100 @@ def mcp_info():
     return {"registered": registered, "root": str(fsguard.HOME), "tools": ["search_notes", "read_note", "recent_meetings", "list_directory", "read_file", "find_files", "search_in_files"],
             "blocked": sorted(fsguard.DENY_PARTS | set(fsguard.DENY_PREFIXES)), "audit": tail,
             "command": f"{ROOT}/.venv/bin/python {ROOT}/app/mcp_server.py"}
+
+
+def _svc_active(name: str) -> str:
+    r = subprocess.run(["systemctl", "--user", "is-active", name], capture_output=True, text=True)
+    s = r.stdout.strip()
+    if s == "active":
+        return "running"
+    if s in ("failed", "inactive"):
+        return s
+    return "done"
+
+
+def _parse_claude_task_log(log_path: Path, svc_name: str) -> dict:
+    lines = log_path.read_text(errors="replace").splitlines()
+    last = lines[-30:] if len(lines) > 30 else lines
+
+    done = total = pct = free_gb = None
+    current = None
+    total_from_start = None
+
+    for line in lines[:60]:
+        m = re.search(r"===.*started\s*===\s*(\d+)\s*games", line)
+        if m:
+            total_from_start = int(m.group(1))
+            break
+
+    for line in reversed(last):
+        if done is None:
+            m = re.search(r"Progress:\s*(\d+)/(\d+)", line)
+            if m:
+                done, total = int(m.group(1)), int(m.group(2))
+                pct = min(100, round(done / total * 100)) if total else 0
+        if pct is None:
+            m = re.search(r"(\d+)%\s+used", line)
+            if m:
+                pct = min(100, int(m.group(1)))
+        if free_gb is None:
+            m = re.search(r"(\d+)MB\s+free", line)
+            if m:
+                free_gb = round(int(m.group(1)) / 1024, 1)
+        if free_gb is None:
+            m = re.search(r"[Ff]ree[:\s]+(\d+\.?\d*)\s*GB", line)
+            if m:
+                free_gb = float(m.group(1))
+        if done is None:
+            m = re.search(r"Progress:\s*(\d+)\s+copied", line)
+            if m:
+                done = int(m.group(1))
+                if total_from_start:
+                    total = total_from_start
+                    pct = min(100, round(done / total * 100))
+        if current is None:
+            m = re.match(r"\[\d+:\d+:\d+\]\s{2,}(\S.+)", line)
+            if m and "Progress:" not in line and "===" not in line:
+                current = m.group(1).strip()
+        if done is not None and pct is not None and free_gb is not None and current is not None:
+            break
+
+    slug = svc_name.replace("-", "_")
+    labels = {
+        "fill_sd_curated": "SD Fill (Curated)",
+        "fill_r4_curated": "R4 Fill (Curated)",
+        "fill_sd": "SD Fill",
+    }
+    label = labels.get(slug) or svc_name.replace("-", " ").title()
+
+    return {
+        "name": svc_name,
+        "label": label,
+        "pct": pct or 0,
+        "done": done,
+        "total": total,
+        "current": current,
+        "free_gb": free_gb,
+        "log": str(log_path),
+    }
+
+
+@router.get("/api/claude-tasks")
+def claude_tasks():
+    import glob
+    patterns = ["/tmp/fill_*.log", "/tmp/rom_download*.log"]
+    seen = set()
+    results = []
+    for pat in patterns:
+        for lp in sorted(glob.glob(pat)):
+            p = Path(lp)
+            stem = p.stem
+            svc_name = stem.replace("_", "-")
+            if svc_name in seen:
+                continue
+            seen.add(svc_name)
+            status = _svc_active(svc_name)
+            task = _parse_claude_task_log(p, svc_name)
+            task["status"] = status
+            results.append(task)
+    return results
