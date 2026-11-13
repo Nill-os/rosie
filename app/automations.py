@@ -339,6 +339,18 @@ def job_security_watch(now, cfg):
 JOBS.insert(JOBS.index(job_mail), job_security_watch)
 
 
+def job_net_quality(now, cfg):
+    import jobs
+    import netquality
+    import testguard
+    if testguard.active():
+        return
+    netquality.job(now, cfg, mark=lambda ok, err=None: jobs.mark("net_quality", ok, err))
+
+
+JOBS.insert(JOBS.index(job_mail), job_net_quality)
+
+
 def job_tokens(now, cfg):
     # board #711 owner-token-report
     import tokens

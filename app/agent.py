@@ -404,11 +404,18 @@ TOOLS = {
                   {"task": ("string", "task id or words from its title"), "new_due": ("string", "e.g. tomorrow, friday, 2026-10-09")}),
 }
 
+TOOLS.update({
+    "space_weather": (lambda: __import__("spaceweather").tool(), "Space weather and HF radio conditions now, from NOAA: geomagnetic storm level (Kp), aurora chances, which HF bands are open (solar flux), radio blackouts, recent solar flares, and the storm forecast.", {}),
+    "internet_quality": (lambda hours=24: __import__("netquality").tool(hours), "Checks the home internet now (delay, jitter, packet loss to the internet and the home router, DNS lookup time) and sums up the background checks: how many had problems and the worst one.",
+                         {"hours": ("integer", "how far back to look, default 24, max 168")}),
+})
+
 GROUPS = {n: "core" for n in ("what_now", "add_task", "list_tasks", "overdue_tasks", "find_task", "complete_task", "move_task", "capture", "remember", "recall", "forget", "lessons",
                                "set_reminder", "list_reminders", "cancel_reminder", "start_my_day", "wrap_up_day", "run_sync", "search_chats", "propose_task", "get_schedule")}
 GROUPS.update({n: "calendar" for n in ("find_free_time", "search_events", "add_event", "move_event", "delete_event", "shift_day", "propose_event")})
 GROUPS.update({n: "pc" for n in ("run_command", "read_file", "write_file", "list_dir", "open_on_desktop")})
 GROUPS.update({n: "web" for n in ("web_search", "fetch_url", "get_weather", "find_recipe")})
+GROUPS.update({"space_weather": "radio", "internet_quality": "net"})
 GROUPS.update({"search_notes": "notes"})
 GROUPS["corner_memory"] = "corner"
 GROUPS["plan_with_claude"] = "plan"
@@ -443,6 +450,8 @@ GROUP_RE = {
     "lifequest": r"\b(life ?quest|xp|level(?:ed)? up|my stats|quests?|character sheet|log (?:a |my )?wins?|i (?:just )?(?:went (?:for|to)|ran|worked out|exercised|studied|meditated|practiced|finished|completed))\b",
     "projects": r"\b(projects?|milestones?|roadmap|plan\w*|finish line|next action|goal|areas?|weekly review)\b",
     "corner": r"\b(corner|your finds?|you(?:'ve| have)? found|did you find|you(?:'ve| have)? (?:been )?read(?:ing)?|did you read|you saw|browsing|into lately|interested in lately|that [\w .,'-]{0,40}\b(?:page|site|article|picture|link)\b)",
+    "radio": r"\b(space weather|solar (?:storm|flares?|flux|wind|activity|cycle)|geomagnetic|k-?index|kp|aurora|northern lights|propagation|hf|bands? (?:open|conditions)|ham radio|radio (?:conditions|blackout)|sunspots?|cme)\b",
+    "net": r"\b(internet|connection|ping|latency|lag(?:gy)?|jitter|packet loss|dropping|drops|buffering|isp|wi-?fi (?:slow|bad|down)|is the (?:internet|wifi) (?:slow|down|bad|ok))\b",
 }
 SKILL_GROUPS = {"build-something": {"pc", "web", "term", "projects"}, "plan-my-day": {"calendar"}, "test-an-idea": {"web", "projects"},
                 "project-planning": {"projects", "calendar", "term", "pc", "web"}, "meal-planning": {"web"}, "life-support": set(),

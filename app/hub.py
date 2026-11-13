@@ -832,7 +832,7 @@ def reminder_cancel(rid: int):
     return inbox.cancel_reminder(rid)
 
 
-AUTO_BOOL = ("model_scout", "security_watch", "security_autopatch", "brief_on", "remind_events", "nudge_overdue", "desktop_notify", "mail_on", "mail_flag", "mail_find_tasks", "mail_digest", "mail_organize", "mail_organize_archive", "taint_guard", "agents_notify", "weekly_review_on", "dictation_on", "dictation_cleanup", "meeting_keep_audio", "ai_on", "ai_orb_on", "ai_speak", "ai_use_selection")
+AUTO_BOOL = ("model_scout", "security_watch", "net_quality_on", "security_autopatch", "brief_on", "remind_events", "nudge_overdue", "desktop_notify", "mail_on", "mail_flag", "mail_find_tasks", "mail_digest", "mail_organize", "mail_organize_archive", "taint_guard", "agents_notify", "weekly_review_on", "dictation_on", "dictation_cleanup", "meeting_keep_audio", "ai_on", "ai_orb_on", "ai_speak", "ai_use_selection")
 AUTO_TIME = ("brief_time", "nudge_overdue_time", "wrapup_time", "quiet_from", "quiet_to", "weekly_review_time")
 AUTO_MODE = {"scratch_mode": ("off", "nudge", "auto"), "wrapup_mode": ("off", "nudge", "auto"), "dictation_hotkey": ("Control_R", "Alt_R", "Super_R", "Pause", "Scroll_Lock", "Menu", "F8", "F9", "F10", "Shift_L+Super_L+F23", "Shift_L+Super_L+keycode:201", "Shift_L+Super_L+F9"),
              "ai_hotkey": ("Alt_R", "Control_R", "Super_R", "Pause", "Scroll_Lock", "Menu", "F8", "F9", "F10", "Shift_L+Super_L+keycode:201"),

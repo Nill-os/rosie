@@ -44,7 +44,7 @@ PATCHES = [("config", "PATH", "config.json"), ("tasks", "DB", "tasks.db"), ("lif
            ("mailclean", "UNDO", "mail_undo.json"), ("mailorganize", "UNDO", "mail_organize_undo.json"), ("board_link", "STATE", "board_link.json"), ("mailwatch", "BACKUPS", "email_task_backups"), ("usertools", "DIR", "user_tools"), ("usertools", "SITE", "user_tools/site"),
            ("meetings", "DIR", "meetings"), ("meetings", "ACTIVE", "meetings/active.json"), ("health", "DATES", "login_dates.json"),
            ("dictation", "LOG", "dictation.log"), ("dictation", "STATUS", "dictation.status.json"), ("dictation", "STATUS_AI", "ai.status.json"),
-           ("dictation", "LOCK", "dictation.lock"), ("corner", "DIR", "corner"),
+           ("dictation", "LOCK", "dictation.lock"), ("corner", "DIR", "corner"), ("netquality", "FILE", "netquality.jsonl"),
            ("corner_graph", "SECRET", "secrets/graphiti_falkordb_password"),
            ("a0", "SECRETS", "secrets/agent_zero.json"), ("a0_host", "FILE", "a0_host.json"), ("a0", "CONTEXTS", "a0_contexts.json"), ("a0", "OUTSIDE", "a0_outside.json"), ("a0", "INCLUDE", "rosie.promptinclude.md"),
            ("a0", "INCLUDE_TOOLS", "rosie-tools.promptinclude.md"), ("a0", "INCLUDE_CLAUDE", "claude.promptinclude.md"),

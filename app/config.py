@@ -12,6 +12,7 @@ DEFAULTS = {
     "token_spike_factor": 2.0,
     "model_scout": True,
     "security_watch": True,
+    "net_quality_on": True,
     "security_autopatch": True,
     "proxmox_ssh": "",
     "proxmox_ssh_key": "",

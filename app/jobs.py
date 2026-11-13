@@ -111,6 +111,7 @@ MARKED = [
     ("canvas", "Syncs school due dates", _canvas_on, D),
     ("model_scout", "Looks for better models", _cfg_on("model_scout"), 12 * H),
     ("security_watch", "Checks for security holes", _cfg_on("security_watch"), D),
+    ("net_quality", "Checks your internet quality", _cfg_on("net_quality_on"), 15 * 60),
     ("tokens", "Counts Claude token use", _cfg_on("token_report_on"), H),
     ("schedules", "Runs your scheduled prompts", _always, None),
     ("skill_sync", "Shares skills with helpers", _always, 20 * 60),
