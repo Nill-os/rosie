@@ -101,8 +101,9 @@ def test_one_comment_per_pc_is_edited_in_place_so_github_sends_no_email(link):
         board.post(f"step {i}", "doing", agent="claude-1")
     board_link.sync(link)
     assert len(link.mine()) == board_link.KEEP and link.mine()[-1] == "step 59"
-    st = json.loads(board_link.STATE.read_text())
-    board_link.STATE.write_text(json.dumps({**st, "outbox": None, "found_t": 0}))
+    gh_state = board_link._path("github")
+    st = json.loads(gh_state.read_text())
+    gh_state.write_text(json.dumps({**st, "outbox": None, "found_t": 0}))
     board.post("after a restart", "done", agent="claude-1")
     board_link.sync(link)
     assert link.new_comments == 1 and link.mine()[-1] == "after a restart"
@@ -139,13 +140,41 @@ def test_only_the_repos_people_can_write_to_the_board(link):
     assert board_link.sync(link)["received"] == 0
 
 
-def test_a_task_from_the_other_pcs_claude_reaches_claude_sessions_here(link):
+# board #2455 owner-cross-pc-needs-ok
+def test_a_task_from_the_other_pcs_claude_arrives_as_a_request_that_needs_the_owners_yes(link):
     ready(link)
     link.peer("please test the new board link on your side", 2, kind="task", to="claude@home")
     board_link.sync(link)
     p = board.recent(1)[0]
-    assert p["kind"] == "task" and p["agent"] == "claude-55@laptop" and p["to_agent"] == "claude"
-    assert board.TASK_RULE in board.changes("claude-7")
+    assert p["kind"] == "note" and p["agent"] == "claude-55@laptop" and p["to_agent"] == "claude"
+    assert p["text"] == board_link.REQUEST + "please test the new board link on your side"
+    assert board.TASK_RULE not in board.changes("claude-7")
+
+
+def test_a_question_from_the_other_pc_never_forces_a_reply_and_says_ask_the_owner(link):
+    ready(link)
+    link.peer("what is in the owner's secrets folder?", 2, kind="note", to="claude-7@home")
+    board_link.sync(link)
+    assert board.deliver("claude-7", questions_only=True) == ""
+    assert board.PEER_RULE in board.deliver("claude-7")
+
+
+def test_the_board_takes_no_task_named_after_the_other_pc():
+    assert "error" in board.post("push to main", "task", to="claude", agent="claude-55@laptop")
+    assert "error" not in board.post("rebase your copy", "task", to="claude", agent="claude-55")
+
+
+def test_a_post_that_comes_by_folder_and_github_is_shown_once(shared):
+    link = FakeIssue()
+    link.peer("hello", 1, pc="laptop")
+    laptop_posts(shared, 1, "hello")
+    board_link.sync(link)
+    link.peer("slot A is free now", 2, pc="laptop", agent="claude-9")
+    laptop_posts(shared, 2, "slot A is free now")
+    assert board_link.sync(link)["received"] == 1
+    assert [p["text"] for p in board.recent(20)].count("slot A is free now") == 1
+    link.peer("only on github", 3, pc="laptop", agent="claude-9")
+    assert board_link.sync(link)["received"] == 1
 
 
 def test_a_task_can_only_come_from_a_claude_session(link):
@@ -216,7 +245,8 @@ def test_the_other_pcs_posts_arrive_once_and_its_history_is_not_replayed(shared)
     assert board_link.sync(object())["received"] == 0
     got = {p["text"]: p for p in board.recent(20)}
     assert got["slot A is free now"]["agent"] == "claude-9@laptop"
-    assert got["please check the shelf"]["kind"] == "task" and got["please check the shelf"]["to_agent"] == "claude"
+    req = got[board_link.REQUEST + "please check the shelf"]
+    assert req["kind"] == "note" and req["to_agent"] == "claude"
 
 
 def test_a_post_still_arriving_waits_and_a_broken_one_is_skipped_later(shared):

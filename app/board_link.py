@@ -29,6 +29,7 @@ KEEP = 40
 MAX_BODY = 60000
 FIND_EVERY_S = 600
 NAME = re.compile(r"[^a-z0-9-]+")
+REQUEST = agentboard.PEER_REQUEST
 status = {"on": False, "last": "", "error": "", "sent": 0, "received": 0}
 _token = {"value": "", "t": 0.0}
 
@@ -60,15 +61,37 @@ def token() -> str:
     return _token["value"]
 
 
-def _load() -> dict:
+def _path(name: str) -> Path:
+    return STATE if name == "folder" else STATE.with_name(f"board_link_{name}.json")
+
+
+def _load(name: str = "folder") -> dict:
     try:
-        return json.loads(STATE.read_text(encoding="utf-8"))
+        return json.loads(_path(name).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
 
 
-def _save(st: dict):
-    atomic.write_text(STATE, json.dumps(st, indent=1))
+def _save(st: dict, name: str = "folder"):
+    atomic.write_text(_path(name), json.dumps(st, indent=1))
+
+
+def _deliver(meta: dict, mine: str) -> bool:
+    got_ = incoming(meta, mine)
+    if not got_:
+        return False
+    agent, kind, to, text = got_
+    pc = agent.rsplit("@", 1)[1]
+    done = _load("delivered")
+    if meta["id"] <= int(done.get(pc) or 0):
+        return False
+    res = agentboard.post(text, kind=kind, to=to, agent=agent)
+    done[pc] = meta["id"]
+    _save(done, "delivered")
+    if not res.get("ok"):
+        return False
+    agentboard.checkin(agent=agent, task=meta["text"] if kind == "doing" else None)
+    return True
 
 
 def render(p: dict, pc: str) -> str:
@@ -111,7 +134,9 @@ def incoming(meta: dict, mine: str) -> tuple | None:
         return None
     elif to not in ("", "all"):
         to = f"{to}@{pc}"
-    return f"{agent}@{pc}", meta["kind"], to
+    if meta["kind"] == "task":
+        return f"{agent}@{pc}", "note", to, REQUEST + meta["text"]
+    return f"{agent}@{pc}", meta["kind"], to, meta["text"]
 
 
 def _after(post_id: int, n=50) -> list[dict]:
@@ -164,12 +189,27 @@ def _comments(client, url) -> list[dict]:
 # board #714 owner-no-email-spam
 def sync(client=None) -> dict:
     s = settings()
-    if s["dir"]:
-        return folder_sync(s)
-    if not s["repo"]:
+    if not s["dir"] and not s["repo"]:
         status.update(on=False, error="")
-        return {"ok": False, "note": "The board link is off (Settings: board_link_repo)."}
-    st = _load()
+        return {"ok": False, "note": "The board link is off (Settings: board_link_repo or board_link_dir)."}
+    res = folder_sync(s) if s["dir"] else None
+    if not s["repo"]:
+        return res
+    try:
+        gh = github_sync(s, client)
+    except Exception as e:
+        if res is None:
+            raise
+        status.update(error=f"GitHub: {type(e).__name__}: {str(e)[:120]}")
+        return {**res, "github": "failed"}
+    if res is None:
+        return gh
+    return {"ok": res.get("ok") or gh.get("ok"), "sent": res.get("sent", 0) + gh.get("sent", 0),
+            "received": res.get("received", 0) + gh.get("received", 0), "via": "folder+github"}
+
+
+def github_sync(s: dict, client=None) -> dict:
+    st = _load("github")
     if st.get("repo") != s["repo"] or st.get("issue") != s["issue"] or st.get("v") != 2:
         st = {"v": 2, "repo": s["repo"], "issue": s["issue"], "out": agentboard.top_id(), "outbox": None, "keep": [], "peers": {},
               "seen": {}, "found_t": 0}
@@ -206,7 +246,7 @@ def sync(client=None) -> dict:
                 r.raise_for_status()
                 st["outbox"] = (r.json() or {}).get("id")
             sent = len(new)
-        _save(st)
+        _save(st, "github")
         for pc, cid in list(st["peers"].items()):
             r = client.get(f"{base}/comments/{cid}")
             if getattr(r, "status_code", 200) == 404:
@@ -226,15 +266,9 @@ def sync(client=None) -> dict:
                 if meta["id"] <= last:
                     continue
                 st["seen"][pc] = meta["id"]
-                got_ = incoming(meta, s["pc"])
-                if not got_:
-                    continue
-                agent, kind, to = got_
-                res = agentboard.post(meta["text"], kind=kind, to=to, agent=agent)
-                if res.get("ok"):
-                    agentboard.checkin(agent=agent, task=meta["text"] if kind == "doing" else None)
+                if _deliver(meta, s["pc"]):
                     got += 1
-        _save(st)
+        _save(st, "github")
     finally:
         if own:
             client.close()
@@ -310,13 +344,7 @@ def folder_sync(s: dict) -> dict:
                 st["seen"][pc] = i
                 continue
             st["seen"][pc] = i
-            got_ = incoming({**meta, "pc": pc}, s["pc"])
-            if not got_:
-                continue
-            agent, kind, to = got_
-            res = agentboard.post(meta["text"], kind=kind, to=to, agent=agent)
-            if res.get("ok"):
-                agentboard.checkin(agent=agent, task=meta["text"] if kind == "doing" else None)
+            if _deliver({**meta, "pc": pc}, s["pc"]):
                 got += 1
     _save(st)
     status.update(on=True, last=time.strftime("%H:%M"), error="", sent=status["sent"] + sent, received=status["received"] + got)
