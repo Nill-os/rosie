@@ -57,6 +57,8 @@ PATCHES = [("config", "PATH", "config.json"), ("tasks", "DB", "tasks.db"), ("lif
 PATCHES += [("health", "BACKUP_REPO_NAME", "secrets/backup_repo"), ("jobs", "FILE", "jobs.json")]
 ALWAYS = ("config", "tasks", "inbox", "chats", "memory", "lessons", "proposals", "skills", "pc_tools", "server",
           "briefs", "projects", "mailwatch", "mailorganize", "gcal", "gmail", "workflows", "corner_graph", "a0", "paper", "agentboard", "skill_sync", "vector_pod", "vector_pad", "lifequest", "board_link", "canvas", "schedules", "standing")
+ALWAYS += ("peer_tasks",)
+PATCHES += [("peer_tasks", "DIR", "peer_tasks"), ("peer_tasks", "RUNS", "peer_tasks/runs.json")]
 
 
 # board #830 owner-linux-only-tests

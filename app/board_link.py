@@ -30,6 +30,7 @@ MAX_BODY = 60000
 FIND_EVERY_S = 600
 NAME = re.compile(r"[^a-z0-9-]+")
 REQUEST = agentboard.PEER_REQUEST
+TRUSTED_RUN = "Task from the other PC's Claude. Rosie's own Claude worker runs it because the owner allows that PC; leave it alone: "
 status = {"on": False, "last": "", "error": "", "sent": 0, "received": 0}
 _token = {"value": "", "t": 0.0}
 
@@ -85,6 +86,12 @@ def _deliver(meta: dict, mine: str) -> bool:
     done = _load("delivered")
     if meta["id"] <= int(done.get(pc) or 0):
         return False
+    handled = ""
+    if meta["kind"] == "task":
+        import peer_tasks
+        handled = peer_tasks.received(pc, agent.rsplit("@", 1)[0], meta["id"], meta["text"])
+        if handled == "trusted":
+            text = TRUSTED_RUN + meta["text"]
     res = agentboard.post(text, kind=kind, to=to, agent=agent)
     done[pc] = meta["id"]
     _save(done, "delivered")

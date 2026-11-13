@@ -82,7 +82,7 @@ const DOWN = 'Can\'t reach the assistant. Is the PC on?';
 
 let chatId = store.get('chat_id', null), chatSpace = null, chatTitle = 'New chat';
 let meetTimer = null;
-let dirty = false, prevHash = location.hash, sideData = { chats: [], spaces: [] }, overdueCount = 0, unreadCount = 0, studyDue = 0, pagesOff = [], pagesHidden = [], loginHint = 'run ~/assistant/login.sh', gmailHint = 'run ~/assistant/login-gmail.sh main';
+let dirty = false, prevHash = location.hash, sideData = { chats: [], spaces: [] }, overdueCount = 0, unreadCount = 0, approveCount = 0, studyDue = 0, pagesOff = [], pagesHidden = [], loginHint = 'run ~/assistant/login.sh', gmailHint = 'run ~/assistant/login-gmail.sh main';
 const log = $('#log'), t = $('#t');
 const fit = () => { if (!t.value) { t.style.height = ''; return; } t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight + 2, innerHeight * 0.45) + 'px'; };
 { const d = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value');
@@ -272,13 +272,19 @@ function navFold(label) {
   renderNav(navActive());
 }
 const navActive = () => { const n = (location.hash.replace(/^#\/?/, '') || 'home').split('/')[0].replace('chat', ''); return TAB_GROUP[n] || n; };
+function renderNeedOk() {
+  const b = $('#needok'); if (!b) return;
+  b.hidden = !approveCount; b.textContent = approveCount + ' need' + (approveCount === 1 ? 's' : '') + ' your OK';
+  b.title = 'Open the Inbox to approve or dismiss'; b.onclick = () => go('#/inbox');
+}
 function renderNav(active) {
+  renderNeedOk();
   $('#nav').replaceChildren(...navShown(active).map(([k, ic, label]) => k === '-' ? (ic && !navRail()
     ? h('button', { class: 'navhead', 'aria-expanded': String(!navFolded.includes(ic)), title: navFolded.includes(ic) ? 'Show this group' : 'Fold this group away', onclick: () => navFold(ic) },
         ic, h('span', { class: 'fold', 'aria-hidden': 'true' }, navFolded.includes(ic) ? '▸' : '▾'))
     : h('div', { class: 'navhead', role: 'presentation' }, ic)) : h('button', { class: 'nav' + (k === active ? ' on' : ''), title: label, 'aria-label': label, onclick: () => go('#/' + k) },
     h('span', { class: 'ic' }, ic), label, k === 'tasks' && overdueCount ? h('span', { class: 'cnt', title: 'Overdue tasks' }, overdueCount) : null,
-    k === 'inbox' && unreadCount ? h('span', { class: 'cnt', style: 'background:var(--pur);color:#fff', title: 'Unread' }, unreadCount) : null,
+    k === 'inbox' && approveCount ? h('span', { class: 'cnt', style: 'background:var(--warn);color:#000', title: 'Needs your OK' }, '!' + approveCount) : k === 'inbox' && unreadCount ? h('span', { class: 'cnt', style: 'background:var(--pur);color:#fff', title: 'Unread' }, unreadCount) : null,
     k === 'study' && studyDue ? h('span', { class: 'cnt', style: 'background:var(--acc);color:#000', title: 'Flash cards due' }, studyDue) : null)));
 }
 function go(hash) { if (location.hash === hash) route(); else location.hash = hash; }
@@ -310,7 +316,7 @@ async function route() {
 async function refreshSide() {
   try { sideData = await J('/api/chats'); } catch (e) { $('#dot').className = 'off'; return; }
   $('#dot').className = '';
-  try { const b = await J('/api/badges'); overdueCount = b.overdue; unreadCount = b.inbox; studyDue = b.study_due || 0; if (b.ui_theme && b.ui_theme !== installTheme) { installTheme = b.ui_theme; store.set('rosie.theme.default', installTheme); applyLook(look()); } pagesOff = b.pages_off || []; loginHint = b.google_login || loginHint; gmailHint = b.gmail_login || gmailHint; pagesHidden = b.pages_hidden || []; menuLayout = b.menu_layout || []; } catch (e) { }
+  try { const b = await J('/api/badges'); overdueCount = b.overdue; unreadCount = b.inbox; approveCount = b.proposals || 0; studyDue = b.study_due || 0; if (b.ui_theme && b.ui_theme !== installTheme) { installTheme = b.ui_theme; store.set('rosie.theme.default', installTheme); applyLook(look()); } pagesOff = b.pages_off || []; loginHint = b.google_login || loginHint; gmailHint = b.gmail_login || gmailHint; pagesHidden = b.pages_hidden || []; menuLayout = b.menu_layout || []; } catch (e) { }
   renderNav(navActive());
   renderTabs((location.hash.replace(/^#\/?/, '') || 'home').split('/')[0]);
   drawChats();
@@ -526,18 +532,19 @@ function remindForm(onDone) {
     txt, when, btn('Remind', 'pur', null, 'submit'));
 }
 VIEWS.inbox = async () => {
-  const [d, pr] = await Promise.all([J('/api/inbox'), J('/api/proposals')]);
+  const [d, pr, pt] = await Promise.all([J('/api/inbox'), J('/api/proposals'), J('/api/peer_tasks').catch(() => null)]);
   const again = async () => { await keepScroll(() => VIEWS.inbox()); refreshSide(); };
   setHeader('Inbox', [btn('Mark all read', 'sm dim', async () => { await post('/api/inbox/read-all'); again(); }), btn('Clear read', 'sm dim', async () => { await post('/api/inbox/clear'); again(); })]);
   const ICON = { brief: '☀', event: '▦', reminder: '⏰', nudge: '👋', sync: '🔄', wrapup: '🌙', system: '⚙' };
   show(h('div', { class: 'pagehead' }, h('h2', {}, 'Inbox'), h('span', { class: 'muted' }, 'Things I reach out to you about. Desktop pop-ups come from here too.')),
     pr.proposals.length ? h('div', { class: 'card', style: 'border-color:var(--warn);margin-bottom:14px' }, h('h3', { style: 'color:var(--warn)' }, 'Needs your OK · ' + pr.proposals.length),
-      h('div', { class: 'muted', style: 'margin-bottom:8px' }, 'Suggestions from me or from your mail. Nothing is added until you approve.'),
-      h('div', { class: 'list' }, pr.proposals.map((p) => h('div', { class: 'item', style: 'align-items:flex-start' }, h('span', { style: 'width:24px' }, p.kind === 'event' ? '▦' : p.kind === 'plan' ? '🧭' : '✓'),
+      h('div', { class: 'muted', style: 'margin-bottom:8px' }, 'Suggestions from me or your mail, and tasks from the linked PC\'s Claude. Nothing happens until you approve.'),
+      h('div', { class: 'list' }, pr.proposals.map((p) => h('div', { class: 'item', style: 'align-items:flex-start' }, h('span', { style: 'width:24px' }, p.kind === 'event' ? '▦' : p.kind === 'plan' ? '🧭' : p.kind === 'peer_task' ? '🔗' : '✓'),
         h('div', { class: 'tx' }, h('div', { style: 'color:#fff' }, p.title), p.detail ? h('div', { class: 'muted md', style: 'font-size:calc(13px*var(--ts,1))' }, p.detail) : null, p.source.startsWith('email:') ? (p.email && p.email.link ? h('a', { class: 'chip', href: p.email.link, target: '_blank', rel: 'noopener noreferrer', title: [p.email.from, p.email.subject].filter(Boolean).join(' · ') }, 'from email: open it') : h('span', { class: 'chip' }, 'from email')) : null,
           p.email && (p.email.from || p.email.subject) ? h('div', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1))' }, [p.email.from, p.email.subject].filter(Boolean).join(' · ')) : null),
-        btn(p.kind === 'event' ? 'Add to calendar' : 'Approve', 'sm ok', async () => { try { await post(`/api/proposals/${p.id}/approve`); toast('Done'); again(); } catch (e) { toast(e.message, 1); } }),
+        btn(p.kind === 'event' ? 'Add to calendar' : p.kind === 'peer_task' ? 'Run it' : 'Approve', 'sm ok', async () => { try { await post(`/api/proposals/${p.id}/approve`); toast(p.kind === 'peer_task' ? 'Started. My Claude worker is on it; the result shows up here.' : 'Done'); again(); } catch (e) { toast(e.message, 1); } }),
         btn(p.kind === 'event' ? 'Skip' : 'Dismiss', 'sm dim', async () => { await post(`/api/proposals/${p.id}/dismiss`); again(); }))))) : null,
+    peerCard(pt, again),
     h('div', { class: 'card' }, h('h3', {}, 'Reminders'), remindForm(again),
       d.reminders.length ? h('div', { class: 'list', style: 'margin-top:10px' }, d.reminders.map((r) => h('div', { class: 'item' }, h('span', { class: 'time' }, r.due.slice(5, 16).replace('T', ' ')), h('span', { class: 'tx' }, r.text),
         h('button', { class: 'x', 'aria-label': 'Cancel reminder', onclick: async () => { await del('/api/reminders/' + r.id); again(); } }, '✕')))) : h('div', { class: 'empty', style: 'margin-top:8px' }, 'No upcoming reminders. You can also just say "remind me in 20 minutes to…".')),
@@ -547,6 +554,25 @@ VIEWS.inbox = async () => {
       h('span', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1));white-space:nowrap' }, ago(i.created)),
       h('button', { class: 'x', 'aria-label': 'Delete', onclick: async (e) => { e.stopPropagation(); await del('/api/inbox/' + i.id); again(); } }, '✕')))) : h('div', { class: 'empty' }, 'Nothing here yet. I\'ll post your daily brief, meeting reminders and nudges here.')));
 };
+
+function peerCard(pt, again) {
+  if (!pt || (!pt.pcs.length && !pt.runs.length)) return null;
+  const ST = { queued: 'waiting', running: 'working…', done: 'done', failed: 'not finished' };
+  const trust = async (pc, on) => {
+    if (on && !confirm(`Let ${pc}'s Claude start tasks on this PC without asking you each time? They still run under this PC's own Claude permission settings. You can turn this off here any time.`)) return;
+    try { const r = await post('/api/peer_tasks/trust', { pc, on }); if (r.error) throw new Error(r.error); toast(on ? `Tasks from ${pc} now run without asking` : `Tasks from ${pc} wait for your OK again`); again(); } catch (e) { toast(e.message, 1); }
+  };
+  const open = async (r) => { try { const o = await J('/api/peer_tasks/' + encodeURIComponent(r.id)); const box = $('#pt-' + r.id); if (box) box.replaceChildren(h('pre', { style: 'white-space:pre-wrap;max-height:320px;overflow:auto;margin:6px 0 0' }, o.output || 'No result saved.')); } catch (e) { toast(e.message, 1); } };
+  return h('div', { class: 'card', style: 'margin-bottom:14px' }, h('h3', {}, 'Linked PC tasks'),
+    h('div', { class: 'muted', style: 'margin-bottom:8px' }, 'Tasks the other PC\'s Claude sends here. Each one waits for your OK unless you allow that PC.'),
+    h('div', { class: 'list' }, pt.pcs.map((pc) => { const on = pt.trusted.includes(pc); return h('div', { class: 'item' }, h('span', { style: 'width:24px' }, '🔗'),
+      h('div', { class: 'tx' }, h('div', { style: 'color:#fff' }, pc), h('div', { class: 'muted' }, on ? 'Runs without asking' : 'Asks you first')),
+      btn(on ? 'Ask me first' : 'Allow without asking', on ? 'sm ok' : 'sm dim', () => trust(pc, !on))); })),
+    pt.runs.length ? h('div', { class: 'list', style: 'margin-top:10px' }, pt.runs.slice(0, 10).map((r) => h('div', { class: 'item', style: 'align-items:flex-start;cursor:pointer', onclick: () => open(r) },
+      h('span', { style: 'width:24px' }, r.status === 'done' ? '✓' : r.status === 'failed' ? '✕' : '…'),
+      h('div', { class: 'tx' }, h('div', { style: 'color:#fff' }, r.text.slice(0, 140)), h('div', { class: 'muted' }, `from ${r.pc} · ${ST[r.status] || r.status}${r.summary ? ' · ' + r.summary.slice(0, 160) : ''}`), h('div', { id: 'pt-' + r.id })),
+      h('span', { class: 'muted', style: 'font-size:calc(12px*var(--ts,1));white-space:nowrap' }, ago(new Date(r.created * 1000).toISOString()))))) : null);
+}
 
 function draftFlow(m) {
   const ins = prompt('What should the reply say? (leave empty for a neutral draft)', ''); if (ins === null) return;
@@ -1609,8 +1635,8 @@ talkBtn.addEventListener('click', toggleTalk);
 
 async function refreshBadges() {
   try {
-    const b = await J('/api/badges'); const changed = b.overdue !== overdueCount || b.inbox !== unreadCount;
-    overdueCount = b.overdue; unreadCount = b.inbox;
+    const b = await J('/api/badges'); const changed = b.overdue !== overdueCount || b.inbox !== unreadCount || (b.proposals || 0) !== approveCount;
+    overdueCount = b.overdue; unreadCount = b.inbox; approveCount = b.proposals || 0;
     if (changed) { renderNav(navActive()); if (location.hash.startsWith('#/inbox') && !dirty) keepScroll(() => VIEWS.inbox()); }
   } catch (e) { $('#dot').className = 'off'; }
 }

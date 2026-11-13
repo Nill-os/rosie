@@ -1021,6 +1021,32 @@ def proposal_dismiss(pid: int):
     return {"ok": True}
 
 
+class PeerTrust(BaseModel):
+    pc: str
+    on: bool
+
+
+@router.get("/api/peer_tasks")
+def peer_tasks_list():
+    import peer_tasks
+    return {"runs": peer_tasks.listing(), "trusted": peer_tasks.trusted(), "pcs": peer_tasks.known_pcs()}
+
+
+@router.get("/api/peer_tasks/{rid}")
+def peer_task_output(rid: str):
+    import peer_tasks
+    return {"output": peer_tasks.output(rid)}
+
+
+@router.post("/api/peer_tasks/trust")
+def peer_tasks_trust(t: PeerTrust):
+    import peer_tasks
+    try:
+        return {"trusted": peer_tasks.set_trust(t.pc, t.on)}
+    except ValueError as e:
+        return err(str(e))
+
+
 import terminals  # noqa: E402
 
 _NAME_RE = re.compile(r"^[a-z0-9-]{1,40}$")

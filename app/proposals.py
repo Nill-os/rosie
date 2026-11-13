@@ -80,6 +80,8 @@ def adjusted_limit(kind, base):
 
 
 def _throttled(c, kind):
+    if kind == "peer_task":
+        return False
     r = _rate(kind)
     if r is None or r >= LOW_RATE:
         return False
@@ -187,6 +189,14 @@ def _approve(pid, p):
             with _db() as c:
                 c.execute("UPDATE proposals SET status='pending' WHERE id=?", (pid,))
             return {"error": str(result.get("message") or "It wasn't added.")}
+    elif p["kind"] == "peer_task":
+        import peer_tasks
+        try:
+            result = peer_tasks.start(pl["pc"], pl.get("agent") or "", pl.get("id") or 0, pl["text"], "approved", pl.get("issue"), pl.get("repo") or "")
+        except ValueError as e:
+            with _db() as c:
+                c.execute("UPDATE proposals SET status='pending' WHERE id=?", (pid,))
+            return {"error": str(e)}
     elif p["kind"] == "plan":
         import projects
         result = projects.apply_plan(pl)
