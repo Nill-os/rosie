@@ -25,6 +25,6 @@ pillow>=10.2
 # Vector robot (Settings > Vector): his voice, settings and SDK ports are gRPC; the generated code in app/vector_pb needs these versions or newer.
 # His Ogg Opus audio is decoded with the system libopus (apt install libopus0).
 grpcio>=1.85.1
-protobuf>=7.35.1
+protobuf>=7.36.2
 fsrs>=6.3.2
 psutil>=7.2.2; sys_platform == "win32"
