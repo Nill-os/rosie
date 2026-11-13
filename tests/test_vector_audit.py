@@ -190,7 +190,7 @@ def test_risk3_an_old_answer_ending_keeps_the_new_one_marked_busy(monkeypatch):
     second_playing = threading.Event()
 
     def block(n):
-        if n == 2 * (160 + len("Newer answer is long.")):
+        if n == 2 * (160 + len("The newer answer runs longer.")):
             second_playing.set()
             gate2.wait(3)
     bot = _converse_env(monkeypatch, plays, block=block)
@@ -199,7 +199,7 @@ def test_risk3_an_old_answer_ending_keeps_the_new_one_marked_busy(monkeypatch):
         yield "Older answer is long. "
         gate1.wait(3)
         yield "Older tail is here."
-    monkeypatch.setattr(vector_pod, "brain_stream", lambda text: older(text) if text == "hello" else iter(["Newer answer is long."]))
+    monkeypatch.setattr(vector_pod, "brain_stream", lambda text: older(text) if text == "hello" else iter(["The newer answer runs longer."]))
     t1 = threading.Thread(target=vector_pod._converse, args=("hello", bot, None), daemon=True)
     t1.start()
     assert _wait(lambda: len(plays) == 1)
