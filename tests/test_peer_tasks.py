@@ -139,3 +139,11 @@ def test_the_inbox_page_can_list_allow_and_stop_a_linked_pc(tmp_path):
     assert c.get("/api/peer_tasks").json()["pcs"] == ["laptop"]
     assert c.post("/api/peer_tasks/trust", json={"pc": "laptop", "on": False}).json() == {"trusted": []}
     assert c.post("/api/peer_tasks/trust", json={"pc": "no way", "on": True}).status_code == 400
+
+
+def test_a_pc_seen_in_the_shared_folder_or_on_github_shows_up_before_it_sends_a_task(monkeypatch, tmp_path):
+    monkeypatch.setattr(board_link, "STATE", tmp_path / "board_link.json")
+    config.save({**config.load(), "board_link_pc": "home"})
+    board_link._save({"v": 3, "seen": {"laptop": 4, "home": 1, "Bad Name!": 2}})
+    board_link._save({"v": 2, "peers": {"desk": 9}}, "github")
+    assert peer_tasks.known_pcs() == ["desk", "laptop"]

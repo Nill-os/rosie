@@ -54,7 +54,8 @@ def set_trust(pc: str, on: bool) -> list[str]:
 
 def known_pcs() -> list[str]:
     import board_link
-    seen = [p for p in board_link._load("delivered") if PC.fullmatch(p)]
+    seen = [p for p in (*board_link._load("delivered"), *(board_link._load().get("seen") or {}), *(board_link._load("github").get("peers") or {}))
+            if isinstance(p, str) and PC.fullmatch(p)]
     mine = board_link.settings()["pc"]
     return sorted({*seen, *trusted()} - {mine})
 
