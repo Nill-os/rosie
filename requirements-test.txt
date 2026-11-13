@@ -16,7 +16,7 @@ mcp
 pyyaml
 pillow
 grpcio>=1.85.1
-protobuf>=7.35.1
+protobuf>=7.36.2
 tzdata; sys_platform == "win32"
 scrapling[fetchers]>=0.5
 fsrs
