@@ -1,0 +1,17 @@
+title = "rosie"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "test fixtures, vendored libraries and gitleaks itself"
+paths = ['''^tests/''', '''^static/vendor/''', '''^gitleaks$''']
+
+[[allowlists]]
+description = "the public app key from the Anki Vector SDK"
+regexTarget = "match"
+regexes = ['''oDoa0quieSeir6goowai7f''']
+
+[[allowlists]]
+description = "keyword arguments that look like keys"
+stopwords = ["max_bytes"]

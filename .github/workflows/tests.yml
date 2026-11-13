@@ -1,24 +1,47 @@
 name: tests
 on: [push, pull_request]
+permissions:
+  contents: read
 jobs:
   pytest:
     runs-on: ubuntu-latest
+    timeout-minutes: 50
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
+      - name: gitleaks
+        run: |
+          curl -sSfL -o gitleaks.tgz https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  gitleaks.tgz" | sha256sum -c -
+          tar -xzf gitleaks.tgz gitleaks && rm gitleaks.tgz
+          ./gitleaks dir --no-banner --redact --config .gitleaks.toml .
+      - name: zizmor
+        run: |
+          pip install --require-hashes -r ci/zizmor-requirements.txt
+          zizmor --offline .github/workflows/
+      - name: pip-audit (advisory)
+        continue-on-error: true
+        run: |
+          pip install pip-audit==2.10.1
+          pip-audit -r requirements.txt -r requirements-test.txt --progress-spinner off
       - run: sudo apt-get update -qq && sudo apt-get install -y -qq poppler-utils libopus0
       - run: pip install -r requirements-test.txt
       - run: python -m pytest -q
   # Windows copies update themselves only to commits where every check passed (tools/windows/launcher.py), so these two guard them
   windows:
     runs-on: windows-latest
+    timeout-minutes: 60
     env:
       PYTHONUTF8: "1"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
       - run: tzutil /s "Pacific Standard Time"
@@ -26,11 +49,14 @@ jobs:
       - run: python -m pytest -q -p no:cacheprovider
   windows-start:
     runs-on: windows-latest
+    timeout-minutes: 30
     env:
       PYTHONUTF8: "1"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
       - run: pip install -r requirements.txt

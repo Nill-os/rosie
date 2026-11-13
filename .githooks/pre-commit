@@ -1,0 +1,5 @@
+#!/bin/sh
+command -v gitleaks >/dev/null 2>&1 || { echo "pre-commit: gitleaks not installed, secret scan skipped" >&2; exit 0; }
+cfg=""
+[ -f .gitleaks.toml ] && cfg="--config .gitleaks.toml"
+exec gitleaks git --pre-commit --staged --no-banner --redact $cfg
