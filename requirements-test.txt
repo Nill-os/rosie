@@ -18,6 +18,6 @@ pillow
 grpcio>=1.85.1
 protobuf>=7.35.1
 tzdata; sys_platform == "win32"
-scrapling[fetchers]>=0.5
+scrapling[fetchers]>=0.5.1
 fsrs
 psutil; sys_platform == "win32"
