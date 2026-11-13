@@ -1,5 +1,5 @@
 # Rosie runtime requirements (direct dependencies only). For the tests alone see requirements-test.txt
-fastapi>=0.142.2
+fastapi>=0.162.0
 uvicorn>=0.54.0
 websockets>=15.0      # Agent Zero's page through Rosie (a0_proxy) and every websocket uvicorn serves
 python-multipart>=0.0.33
