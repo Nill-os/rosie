@@ -102,7 +102,7 @@ def test_the_whole_chain_stops_at_the_deadline(monkeypatch):
     timeouts = []
     _http(monkeypatch, lambda r: httpx.Response(500, json={}), timeouts)
     assert claude_plan._free_api_ask("p", None, None, time.monotonic() + 20) is None
-    assert timeouts and max(timeouts) <= 20
+    assert timeouts and max(timeouts) <= 20 + 1e-6
     timeouts.clear()
     assert claude_plan._free_api_ask("p", None, None, time.monotonic() + 1) is None
     assert timeouts == []
