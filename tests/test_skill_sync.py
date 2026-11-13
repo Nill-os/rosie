@@ -181,3 +181,14 @@ def test_a_symlink_loop_inside_a_skill_is_skipped_not_fatal(tmp_path):
     except OSError:
         pytest.skip("no symlinks here")
     assert set(ss._files({"dir": d, "text": "x"})) == {"SKILL.md"}
+
+
+def test_a_claude_skill_marked_no_share_stays_on_claude_and_old_copies_go(world):
+    d = _skill(ss.CLAUDE_SKILLS, "pack-aws", "Rules for AWS.", "Use roles.")
+    ss.sync()
+    assert (skills.DIR / "pack-aws.md").exists() and (ss.A0_SKILLS / "pack-aws").exists()
+    (d / ss.NO_SHARE).write_text("")
+    out = ss.sync()
+    assert {"rosie:pack-aws", "agent-zero:pack-aws"} <= set(out["removed"])
+    assert not (skills.DIR / "pack-aws.md").exists() and not (ss.A0_SKILLS / "pack-aws").exists()
+    assert (d / "SKILL.md").exists()

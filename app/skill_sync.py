@@ -28,6 +28,7 @@ BUNDLE = Path(__file__).resolve().parent.parent / "skills"
 STATE = Path(__file__).resolve().parent.parent / "data" / "skill_sync.json"
 APPROVED = STATE.with_name("skill_sync_approved.json")
 MARK = ".mirrored-from"
+NO_SHARE = ".no-share"
 RENDER = "|r3"
 ROUND_S = 600
 MAX_FILE = 2_000_000
@@ -92,7 +93,7 @@ def _skill_dirs(root: Path) -> list[Path]:
 
 
 def claude_skills() -> dict:
-    dirs = [d for d in _skill_dirs(CLAUDE_SKILLS) if not (d / MARK).exists()]
+    dirs = [d for d in _skill_dirs(CLAUDE_SKILLS) if not (d / MARK).exists() and not (d / NO_SHARE).exists()]
     dirs += [d for b in sorted((CLAUDE_SKILLS / "synced").glob("*")) if b.is_dir() for d in _skill_dirs(b)]
     try:
         enabled = json.loads((CLAUDE / "settings.json").read_text(encoding="utf-8")).get("enabledPlugins") or {}
