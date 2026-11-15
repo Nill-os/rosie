@@ -231,6 +231,59 @@ def check_tailscale():
         return _row("Tailscale (phone access)", "off", "not available")
 
 
+RESTART_RECENT_MIN = 15
+RESTART_WINDOW_S = 24 * 3600
+RESTARTS = ROOT / "data" / "restart_seen.json"
+
+
+def _load_restarts() -> dict:
+    try:
+        raw = json.loads(RESTARTS.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    out = {}
+    if isinstance(raw, dict):
+        for name, rows in raw.items():
+            if isinstance(name, str) and isinstance(rows, list):
+                keep = []
+                for r in rows:
+                    try:
+                        if isinstance(r, (list, tuple)) and len(r) == 2 and not any(isinstance(x, bool) for x in r):
+                            keep.append((float(r[0]), int(r[1])))
+                    except (TypeError, ValueError, OverflowError):
+                        continue
+                out[name] = keep
+    return out
+
+
+def _save_restarts():
+    try:
+        atomic.write_text(RESTARTS, json.dumps(_restart_seen))
+    except OSError:
+        pass
+
+
+_restart_seen: dict = _load_restarts()
+
+
+def _restarts_in_window(name, n, now=None):
+    now = time.time() if now is None else now
+    seen = [(t, c) for t, c in _restart_seen.get(name, []) if now - t <= RESTART_WINDOW_S and c <= n]
+    seen.append((now, n))
+    _restart_seen[name] = seen
+    _save_restarts()
+    return n - seen[0][1]
+
+
+def _minutes_since(stamp: str):
+    try:
+        base, _, frac = stamp.strip().rstrip("Z").partition(".")
+        t = dt.datetime.fromisoformat(base).replace(tzinfo=dt.timezone.utc)
+        return max(0.0, (dt.datetime.now(dt.timezone.utc) - t).total_seconds() / 60)
+    except (ValueError, AttributeError):
+        return None
+
+
 def check_containers():
     import socket
 
@@ -238,11 +291,24 @@ def check_containers():
     rows = []
     for name, label in ((a0_host.container(), "Agent Zero (her brain)"), ("rosie-graph", "Memory graph database")):
         try:
-            st = subprocess.run(["docker", "inspect", "-f", "{{.State.Status}}", name], capture_output=True, text=True, timeout=10)
-            state = st.stdout.strip() if st.returncode == 0 else ("not found" if "No such" in st.stderr else "unknown: " + st.stderr.strip()[:80])
+            st = subprocess.run(["docker", "inspect", "-f", "{{.State.Status}}|{{.RestartCount}}|{{.State.StartedAt}}", name], capture_output=True, text=True, timeout=10)
+            ok = st.returncode == 0
+            state = st.stdout.strip() if ok else ("not found" if "No such" in st.stderr else "unknown: " + st.stderr.strip()[:80])
         except (OSError, subprocess.SubprocessError) as e:
-            state = f"unknown ({type(e).__name__})"
-        rows.append(_row(label, "ok" if state == "running" else "bad", state, "" if state == "running" else f"docker start {name}"))
+            ok, state = False, f"unknown ({type(e).__name__})"
+        state, restarts, started = (state.split("|") + ["", ""])[:3] if ok else (state, "", "")
+        if state == "running":
+            mins = _minutes_since(started)
+            n = int(restarts) if restarts.isdigit() else 0
+            grew = _restarts_in_window(name, n)
+            if n > 0 and mins is not None and mins < RESTART_RECENT_MIN:
+                rows.append(_row(label, "warn", f"running, restarted {n} times, last start {mins:.0f} min ago", f"docker logs {name}"))
+            elif grew > 0:
+                rows.append(_row(label, "warn", f"running, restarted {grew} times in the last day ({n} in all)", f"docker logs {name}"))
+            else:
+                rows.append(_row(label, "ok", state))
+            continue
+        rows.append(_row(label, "bad", state, f"docker start {name}"))
     try:
         import a0_mcp
         with socket.create_connection((a0_mcp.HOST, a0_mcp.PORT), timeout=2):

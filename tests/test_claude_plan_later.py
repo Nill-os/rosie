@@ -434,3 +434,62 @@ def test_a_404_from_a_listed_model_marks_it_gone_and_says_so(monkeypatch):
     assert claude_plan._free_api_ask("p") is None
     assert calls == [1]
     assert "Gemini no longer offers its model" in claude_plan.status()["line"]
+
+
+def _listing(monkeypatch, groq_ids, gemini_names, fail=False):
+    def get(url, **k):
+        req = httpx.Request("GET", url)
+        if fail:
+            raise httpx.ConnectError("down", request=req)
+        if "groq" in url:
+            return httpx.Response(200, request=req, json={"data": [{"id": i} for i in groq_ids]})
+        return httpx.Response(200, request=req, json={"models": [{"name": f"models/{n}"} for n in gemini_names]})
+    monkeypatch.setattr(httpx, "get", get)
+
+
+def test_model_check_marks_the_job_bad_only_when_the_provider_answers_without_the_model(monkeypatch):
+    import jobs
+    marks = []
+    monkeypatch.setattr(jobs, "mark", lambda name, ok, err=None: marks.append((name, ok, err)))
+    _setup(monkeypatch, gemini=True)
+    _listing(monkeypatch, [claude_plan._FREE_GROQ_MODEL], [claude_plan._FREE_GEMINI_MODEL])
+    claude_plan.validate_free_keys()
+    assert marks[-1] == ("model_ids", True, None)
+    _listing(monkeypatch, ["something-else"], [claude_plan._FREE_GEMINI_MODEL])
+    claude_plan.validate_free_keys()
+    assert marks[-1][:2] == ("model_ids", False) and "Groq" in marks[-1][2]
+    _setup(monkeypatch, gemini=True)
+    _listing(monkeypatch, [], [], fail=True)
+    claude_plan.validate_free_keys()
+    assert marks[-1] == ("model_ids", True, None)
+    print("PASS: model_ids marked bad only for a missing id")
+
+
+def test_model_check_runs_once_a_day_from_the_jobs_loop(monkeypatch):
+    _setup(monkeypatch)
+    ran = []
+    monkeypatch.setattr(claude_plan, "validate_free_keys", lambda: ran.append(1) or {})
+
+    class Now:
+        def __init__(self, target, daemon=None):
+            self.target = target
+
+        def start(self):
+            self.target()
+    monkeypatch.setattr(claude_plan.threading, "Thread", Now)
+    monkeypatch.setitem(claude_plan._model_check, "at", 0.0)
+    cfg = config.load()
+    claude_plan.model_check_job(None, cfg)
+    claude_plan._model_check["at"] = time.time()
+    claude_plan.model_check_job(None, cfg)
+    assert ran == [1]
+    claude_plan._model_check["at"] = time.time() - 23 * 3600
+    claude_plan.model_check_job(None, cfg)
+    assert ran == [1, 1]
+    cfg["claude_planning"] = False
+    claude_plan._model_check["at"] = 0.0
+    claude_plan.model_check_job(None, cfg)
+    assert ran == [1, 1]
+    import automations
+    assert automations.job_model_ids in automations.JOBS
+    print("PASS: model check runs daily")

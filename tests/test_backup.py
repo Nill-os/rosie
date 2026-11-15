@@ -97,3 +97,21 @@ def test_passphrase_is_created_once_with_private_permissions(world):
     first = p.read_text(encoding="utf-8")
     assert len(first.strip()) >= 40 and oct(p.stat().st_mode)[-3:] == "600"
     assert backup.passphrase_file().read_text(encoding="utf-8") == first
+
+
+def test_cli_backup_exits_nonzero_and_says_why_when_the_check_fails(world, monkeypatch, capsys):
+    monkeypatch.setattr(backup, "BACKUPS", world["dest"])
+    monkeypatch.setattr(backup, "_paths", lambda: (world["data"], world["vault"], world["sec"]))
+    monkeypatch.setattr(backup, "verify", lambda f, passfile=None: {"ok": False, "problems": ["changed config.json"]})
+    assert backup.main(["backup"]) == 1
+    assert "changed config.json" in capsys.readouterr().err
+    assert json.loads((world["dest"] / "last_verify.json").read_text())["ok"] is False
+    print("PASS: failed backup check exits 1 with the reason")
+
+
+def test_cli_backup_exits_zero_when_the_check_passes(world, monkeypatch, capsys):
+    monkeypatch.setattr(backup, "BACKUPS", world["dest"])
+    monkeypatch.setattr(backup, "_paths", lambda: (world["data"], world["vault"], world["sec"]))
+    assert backup.main(["backup"]) == 0
+    assert "rosie-data-" in capsys.readouterr().out
+    print("PASS: good backup exits 0")

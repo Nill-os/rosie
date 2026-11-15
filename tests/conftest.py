@@ -54,7 +54,7 @@ PATCHES = [("config", "PATH", "config.json"), ("tasks", "DB", "tasks.db"), ("lif
            ("server", "VECTOR_CHAT", "vector_chat.json"), ("server", "ICON", "icon.svg"), ("vector_pod", "DIR", "vector"), ("vector_pod", "CERT", "vector/cert.pem"), ("vector_pod", "KEY", "vector/key.pem"),
            ("vector_pod", "DOCS", "vector/jdocs.json"), ("vector_pod", "TOKEN", "vector/client_token"), ("vector_pod", "SSH_KEY", "vector/ssh_root_key"), ("vector_pod", "WIREPOD", "wire-pod"), ("vector_pod", "EP_CERT", "vector/ep.crt"), ("vector_pod", "EP_KEY", "vector/ep.key"), ("vector_pod", "HEY_ROSIE", "vector/hey_rosie_1-5.ppn"), ("vector_pod", "LAST_HEARD", "vector/last_heard.wav"),
            ("vector_pad", "SYS", "input"), ("vector_pad", "DEV", "dev-input"), ("schedules", "DB", "schedules.db"), ("standing", "DB", "standing.db")]
-PATCHES += [("health", "BACKUP_REPO_NAME", "secrets/backup_repo"), ("jobs", "FILE", "jobs.json")]
+PATCHES += [("health", "BACKUP_REPO_NAME", "secrets/backup_repo"), ("jobs", "FILE", "jobs.json"), ("health", "RESTARTS", "restart_seen.json")]
 ALWAYS = ("config", "tasks", "inbox", "chats", "memory", "lessons", "proposals", "skills", "pc_tools", "server",
           "briefs", "projects", "mailwatch", "mailorganize", "gcal", "gmail", "workflows", "corner_graph", "a0", "paper", "agentboard", "skill_sync", "vector_pod", "vector_pad", "lifequest", "board_link", "canvas", "schedules", "standing")
 ALWAYS += ("peer_tasks",)
@@ -108,6 +108,8 @@ def isolated(tmp_path, monkeypatch):
         m = sys.modules.get(mod)
         if m is not None and hasattr(m, attr):
             monkeypatch.setattr(m, attr, tmp_path / stand_in)
+    if "health" in sys.modules:
+        monkeypatch.setattr(sys.modules["health"], "_restart_seen", {})
     import inbox
     monkeypatch.setattr(inbox, "notify_desktop", lambda *a, **k: False)
     import pchealth

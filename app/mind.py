@@ -40,6 +40,7 @@ AUTO_CHARS = 1200
 _transport = None
 _lock = threading.RLock()
 _migrated: set = set()
+_init_lock = threading.Lock()
 _cache = {"ver": None, "ids": None, "mat": None}
 state = {"doing": "", "waiting": "", "last_error": "", "retained": 0, "consolidated": 0, "started": False}
 
@@ -74,19 +75,32 @@ def _db():
     testguard.check(DB)
     DB.parent.mkdir(parents=True, exist_ok=True)
     c = sqlite3.connect(DB, timeout=30)
-    c.row_factory = sqlite3.Row
-    c.executescript(SCHEMA)
-    if str(DB) not in _migrated:
-        if "trust" not in {r[1] for r in c.execute("PRAGMA table_info(units)")}:
-            c.execute("ALTER TABLE units ADD COLUMN trust TEXT DEFAULT 'auto'")
-        if "pinned" not in {r[1] for r in c.execute("PRAGMA table_info(units)")}:
-            c.execute("ALTER TABLE units ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0")
-        if "recalls" not in {r[1] for r in c.execute("PRAGMA table_info(units)")}:
-            c.execute("ALTER TABLE units ADD COLUMN recalls INTEGER NOT NULL DEFAULT 0")
-        _migrated.add(str(DB))
-    for name, q in MODELS.items():
-        c.execute("INSERT OR IGNORE INTO models(name, question) VALUES(?, ?)", (name, q))
-    return c
+    try:
+        c.row_factory = sqlite3.Row
+        c.execute("PRAGMA busy_timeout=30000")
+        c.execute("PRAGMA journal_mode=WAL")
+        st = DB.stat()
+        key = (str(DB), st.st_dev, st.st_ino)
+        if key in _migrated:
+            return c
+        with _init_lock:
+            if key in _migrated:
+                return c
+            c.executescript(SCHEMA)
+            if "trust" not in {r[1] for r in c.execute("PRAGMA table_info(units)")}:
+                c.execute("ALTER TABLE units ADD COLUMN trust TEXT DEFAULT 'auto'")
+            if "pinned" not in {r[1] for r in c.execute("PRAGMA table_info(units)")}:
+                c.execute("ALTER TABLE units ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0")
+            if "recalls" not in {r[1] for r in c.execute("PRAGMA table_info(units)")}:
+                c.execute("ALTER TABLE units ADD COLUMN recalls INTEGER NOT NULL DEFAULT 0")
+            for name, q in MODELS.items():
+                c.execute("INSERT OR IGNORE INTO models(name, question) VALUES(?, ?)", (name, q))
+            c.commit()
+            _migrated.add(key)
+        return c
+    except BaseException:
+        c.close()
+        raise
 
 
 _now = util.now_dt
@@ -903,8 +917,10 @@ def _intake_a0(last: float) -> float:
         return last
     try:
         mind_a0.collect()
+        jobs.mark("mind_a0", True)
     except Exception as e:
         state["last_error"] = f"a0 intake: {type(e).__name__}: {e}"[:300]
+        jobs.mark("mind_a0", False, state["last_error"])
     return time.time()
 
 
@@ -1150,6 +1166,7 @@ def forget(unit_id: int, reason: str = "the owner asked", force: bool = False) -
                 rest = [s for s in src if s != r["id"]]
                 if rest:
                     c.execute("UPDATE units SET consolidated_at=NULL, failed_at=NULL WHERE invalidated_at IS NULL AND id IN (%s)" % ",".join("?" * len(rest)), rest)
+        c.execute("UPDATE models SET content='', refreshed_at=NULL, seen_upto=0")
     _bump()
     return {"status": "forgotten", "id": r["id"], "text": r["text"]}
 

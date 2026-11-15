@@ -125,7 +125,7 @@ def rosie_skills() -> dict:
             text = p.read_text(errors="replace", encoding="utf-8")
         except OSError:
             continue
-        if _marked(text):
+        if _marked(text) or (skills.DIR / (p.stem + NO_SHARE)).exists() or (skills.DIR / p.stem / NO_SHARE).exists():
             continue
         desc, _, body = text.partition("\n")
         if not _name(p.stem):
@@ -141,7 +141,7 @@ def rosie_skills() -> dict:
 def a0_skills() -> dict:
     out = {}
     for d in _skill_dirs(_a0_dir()):
-        if (d / MARK).exists():
+        if (d / MARK).exists() or (d / NO_SHARE).exists():
             continue
         try:
             text = (d / "SKILL.md").read_text(errors="replace", encoding="utf-8")
@@ -280,18 +280,40 @@ def _write_a0(name: str, src: dict, files: dict) -> bool:
     return True
 
 
-def _remove(agent: str, name: str):
+def _remove(agent: str, name: str) -> bool:
     if agent == "rosie":
         p = skills.DIR / f"{name}.md"
         if p.exists() and _marked(p.read_text(errors="replace", encoding="utf-8")):
             p.unlink()
+            return True
     elif agent == "claude":
         d = CLAUDE_SKILLS / name
         if (d / MARK).exists():
             shutil.rmtree(d)
+            return True
     elif agent == "agent-zero" and (_a0_dir() / name / MARK).exists():
         if _docker("exec", _container(), "rm", "-rf", f"{A0_PATH}/{name}").returncode != 0:
             raise OSError("docker exec rm failed")
+        return True
+    return False
+
+
+def _private_names() -> set:
+    names = set()
+    for root in (CLAUDE_SKILLS, _a0_dir()):
+        for d in _skill_dirs(root):
+            if (d / NO_SHARE).exists() and not (d / MARK).exists():
+                try:
+                    meta, _ = frontmatter((d / "SKILL.md").read_text(errors="replace", encoding="utf-8"))
+                except OSError:
+                    continue
+                names.add(_name(meta.get("name") or d.name))
+    if skills.DIR.is_dir():
+        for p in skills.DIR.glob("*.md"):
+            if (skills.DIR / (p.stem + NO_SHARE)).exists() or (skills.DIR / p.stem / NO_SHARE).exists():
+                names.add(_name(p.stem))
+    names.discard("")
+    return names
 
 
 def _state() -> dict:
@@ -357,6 +379,15 @@ def sync() -> dict:
                 out["removed"].append(key)
             except (OSError, subprocess.SubprocessError):
                 new[key] = st[key]
+        for n in sorted(_private_names() - set(everything)):
+            for agent in ("claude", "rosie", "agent-zero"):
+                if agent == "agent-zero" and not a0_ok:
+                    continue
+                try:
+                    if _remove(agent, n):
+                        out["removed"].append(f"{agent}:{n}")
+                except (OSError, subprocess.SubprocessError):
+                    out.setdefault("errors", []).append(f"{agent}:{n}: could not remove")
         testguard.check(STATE)
         STATE.parent.mkdir(parents=True, exist_ok=True)
         atomic.write_text(STATE, json.dumps(new, indent=1, sort_keys=True))

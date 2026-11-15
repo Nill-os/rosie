@@ -130,7 +130,7 @@ def test_watchdog_rolls_back_only_after_repeated_failures_inside_the_probation(w
     slots.save_state(previous="A", probation_until=time.time() + 600, wd_fails=0)
     slots.set_active("B")
     rolled = []
-    monkeypatch.setattr(watchdog.slots, "rollback", lambda reason: rolled.append(reason) or {"ok": True})
+    monkeypatch.setattr(watchdog.slots, "rollback", lambda reason, **k: rolled.append(reason) or {"ok": True})
     monkeypatch.setattr(watchdog.slots, "healthz", lambda port=None, timeout=3: None)
     monkeypatch.setattr(watchdog.subprocess, "run", lambda *a, **k: None)
     for _ in range(2):
@@ -144,7 +144,7 @@ def test_watchdog_does_nothing_after_the_probation_or_when_healthy(world, monkey
     slots.save_state(previous="A", probation_until=time.time() - 5)
     monkeypatch.setattr(watchdog.slots, "healthz", lambda port=None, timeout=3: None)
     called = []
-    monkeypatch.setattr(watchdog.slots, "rollback", lambda reason: called.append(1))
+    monkeypatch.setattr(watchdog.slots, "rollback", lambda reason, **k: called.append(1))
     watchdog.main()
     slots.save_state(probation_until=time.time() + 600)
     slots.set_active("B")
@@ -277,3 +277,115 @@ def test_a_unit_that_is_running_now_is_not_restarted(world, monkeypatch):
     monkeypatch.setattr(slots, "_systemctl", fake)
     assert slots.restart_units() == ["idle.service"]
     assert ("try-restart", "busy.service") not in calls and ("try-restart", "idle.service") in calls
+
+
+def _failed_rollback_world(world, monkeypatch):
+    slots.save_state(previous="A", previous_head=slots.head("A"), previous_dirty=0, probation_until=time.time() + 600, wd_fails=0)
+    slots.set_active("B")
+    posts, notes = [], []
+    monkeypatch.setattr(slots, "wait_healthy", lambda slot, seconds=90: False)
+    monkeypatch.setattr(slots, "_board_call", lambda fn, *a, **k: posts.append((fn, a)))
+    monkeypatch.setattr(slots, "restart_units", lambda: None)
+    return posts
+
+
+def test_a_rollback_to_a_dead_slot_keeps_the_probation_open_and_says_so(world, monkeypatch):
+    posts = _failed_rollback_world(world, monkeypatch)
+    r = slots.rollback("it died")
+    st = slots.load_state()
+    assert r["ok"] is False and r["probation_open"] is True
+    assert st["probation_until"] > time.time() and st["wd_fails"] == 0
+    assert slots.events(10)[-1]["kind"] == "rollback-unhealthy"
+    assert any(fn == "post" and "not answering either" in a[0] for fn, a in posts)
+    print("PASS: dead rollback keeps probation open")
+
+
+def test_a_healthy_rollback_still_closes_the_probation(world, monkeypatch):
+    _failed_rollback_world(world, monkeypatch)
+    monkeypatch.setattr(slots, "wait_healthy", lambda slot, seconds=90: True)
+    assert slots.rollback("back")["ok"] is True
+    assert slots.load_state()["probation_until"] == 0
+
+
+def test_watchdog_notifies_for_a_failed_rollback_too(world, monkeypatch):
+    slots.save_state(previous="A", probation_until=time.time() + 600, wd_fails=2)
+    slots.set_active("B")
+    sent = []
+    monkeypatch.setattr(watchdog.slots, "rollback", lambda reason, **k: {"ok": False, "probation_open": True})
+    monkeypatch.setattr(watchdog.slots, "healthz", lambda port=None, timeout=3: None)
+    monkeypatch.setattr(watchdog.subprocess, "run", lambda cmd, **k: sent.append(cmd))
+    watchdog.main()
+    assert len(sent) == 1 and sent[0][0] == "notify-send" and "not answering" in sent[0][3] + sent[0][4]
+    print("PASS: watchdog notifies on failed rollback")
+
+
+def test_a_failed_backup_stops_the_switch_unless_forced(world, monkeypatch):
+    slots.prepare("x")
+    edit_b(world, "print('v2')\n")
+    slots.commit("v2")
+    slots.save_state(last_stage={"ok": True, "head": slots.head("B")})
+    posts = []
+    monkeypatch.setattr(slots, "_board_call", lambda *a, **k: posts.append(a))
+    real = slots.run
+
+    def run(cmd, **kw):
+        if "backup.py" in " ".join(map(str, cmd)):
+            if kw.get("check"):
+                raise RuntimeError("gpg failed: no passphrase")
+            return subprocess.CompletedProcess(cmd, 2, "", "gpg failed")
+        return real(cmd, **kw)
+    monkeypatch.setattr(slots, "run", run)
+    r = slots.switch()
+    assert r.get("backup_failed") and slots.active() == "A"
+    assert any(p[0] == "post" and "backup" in p[1] for p in posts)
+    assert slots.switch(force=True)["ok"] and slots.active() == "B"
+    print("PASS: a failed backup stops the switch unless forced")
+
+
+def test_a_second_failed_rollback_does_not_flip_again(world, monkeypatch):
+    posts = _failed_rollback_world(world, monkeypatch)
+    restarts = []
+    monkeypatch.setattr(slots, "restart_service", lambda: restarts.append(1))
+    assert slots.rollback("it died")["probation_open"] is True
+    live = slots.active()
+    r = slots.rollback("still dead", auto=True)
+    st = slots.load_state()
+    assert r["ok"] is False and r.get("gave_up") is True and "probation_open" not in r
+    assert slots.active() == live and st["probation_until"] == 0
+    assert slots.events(10)[-1]["kind"] == "rollback-gave-up"
+    assert len(restarts) == 2
+    print("PASS: second failed rollback stays put")
+
+
+def test_a_new_switch_clears_the_gave_up_mark(world, monkeypatch):
+    calls = []
+    _unit_world(world, monkeypatch, calls)
+    slots.save_state(rb_failed=True)
+    assert slots.switch()["ok"]
+    assert slots.load_state()["rb_failed"] is False
+
+
+def test_watchdog_notifies_a_refused_rollback_once(world, monkeypatch):
+    slots.save_state(previous="A", probation_until=time.time() + 600, wd_fails=2)
+    slots.set_active("B")
+    sent = []
+    monkeypatch.setattr(watchdog.slots, "rollback", lambda reason, **k: {"ok": False, "error": "Slot A no longer holds the previous version"})
+    monkeypatch.setattr(watchdog.slots, "healthz", lambda port=None, timeout=3: None)
+    monkeypatch.setattr(watchdog.subprocess, "run", lambda cmd, **k: sent.append(cmd))
+    monkeypatch.setattr(watchdog.time, "sleep", lambda s: None)
+    watchdog.main()
+    watchdog.main()
+    assert len(sent) == 1 and "Neither" not in sent[0][3] + sent[0][4]
+    assert slots.load_state()["probation_until"] == 0
+    print("PASS: refused rollback notified once")
+
+
+def test_a_manual_rollback_still_goes_back_after_the_watchdog_gave_up(world, monkeypatch):
+    _failed_rollback_world(world, monkeypatch)
+    monkeypatch.setattr(slots, "restart_service", lambda: None)
+    slots.rollback("it died")
+    live = slots.active()
+    monkeypatch.setattr(slots, "wait_healthy", lambda slot, seconds=90: True)
+    r = slots.rollback("owner fixed it")
+    assert r["ok"] is True and slots.active() != live and not slots.load_state()["rb_failed"]
+    print("PASS: manual rollback goes back")

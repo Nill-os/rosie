@@ -197,17 +197,28 @@ def run_backup() -> Path:
     return out
 
 
-if __name__ == "__main__":
-    cmd = sys.argv[1] if len(sys.argv) > 1 else ""
+def main(argv) -> int:
+    cmd = argv[0] if argv else ""
     if cmd == "backup":
-        print(run_backup())
-    elif cmd == "verify" and len(sys.argv) > 2:
-        r = verify(Path(sys.argv[2]))
+        try:
+            print(run_backup())
+        except SystemExit as e:
+            if e.code not in (None, 0):
+                print(e.code, file=sys.stderr)
+            return 1
+        return 0
+    if cmd == "verify" and len(argv) > 1:
+        r = verify(Path(argv[1]))
         print(json.dumps(r, indent=1))
-        sys.exit(0 if r["ok"] else 1)
-    elif cmd == "restore" and len(sys.argv) > 3:
-        print("Restored into", restore(Path(sys.argv[2]), Path(sys.argv[3])))
+        return 0 if r["ok"] else 1
+    if cmd == "restore" and len(argv) > 2:
+        print("Restored into", restore(Path(argv[1]), Path(argv[2])))
     elif cmd == "status":
         print(json.dumps(status()))
     else:
         print(__doc__)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

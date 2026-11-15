@@ -1,5 +1,6 @@
 import datetime as dt
 import json
+import re
 import subprocess
 import sys
 import time
@@ -170,7 +171,7 @@ def test_the_check_finds_holes_patches_the_containers_and_starts_her_own_patch(l
     keys = set(d["findings"])
     assert any(k.startswith("osv:Rosie:jinja2:GHSA-jin") for k in keys) and any(k.startswith("osv:~/tool:requests") for k in keys)
     assert any(k.startswith("ghsa:immich (container 101):immich:GHSA-imm") for k in keys) and not any("GHSA-old" in k for k in keys)
-    assert lab["ssh"] == [("pct exec 101 -- sh -s", sw.apt_security_cmd(["openssl", "libc6"]) + "\n")]
+    assert [x for x in lab["ssh"] if x[1]] == [("pct exec 101 -- sh -s", sw.apt_security_cmd(["openssl", "libc6"]) + "\n")]
     assert d["machines"]["immich (container 101)"]["security"] == [] and d["patched"][-1]["where"] == "immich (container 101)"
     assert lab["started"] == [{"Jinja2": ("3.1.2", "3.1.6")}]
     t = titles(lab)
@@ -224,7 +225,7 @@ def test_due_only_at_night_once_and_while_the_owner_is_away(lab, monkeypatch, tm
     monkeypatch.setattr(corner, "STAGE_FLAG", tmp_path / "no-stage")
     monkeypatch.setattr(corner, "owner_recent", lambda s: False)
     assert sw.due({}, NIGHT) is None
-    assert sw.due({}, NIGHT.replace(hour=14)) == "outside the night window"
+    assert sw.due({"ran_on": "2026-10-23"}, NIGHT.replace(hour=14)) == "outside the night window"
     assert sw.due({"ran_on": "2026-10-23"}, NIGHT) == "already checked today"
     monkeypatch.setattr(corner, "owner_recent", lambda s: True)
     assert sw.due({}, NIGHT) == "the owner was here recently"
@@ -289,3 +290,84 @@ def test_the_home_server_setting_is_checked(lab, monkeypatch, ssh, key, ok):
     saved = []
     monkeypatch.setattr(config, "save", saved.append)
     assert sw.set_server(ssh, key)["ok"] is ok and bool(saved) is ok
+
+
+def test_due_catches_up_outside_the_window_when_overdue(lab, monkeypatch, tmp_path):
+    monkeypatch.setattr(corner, "STAGE_FLAG", tmp_path / "no-stage")
+    monkeypatch.setattr(corner, "owner_recent", lambda s: False)
+    monkeypatch.setattr(sw.pchealth, "input_idle_s", lambda: 3600)
+    noon = NIGHT.replace(hour=9)
+    assert sw.due({"ran_on": "2026-10-22"}, NIGHT) is None
+    assert sw.due({"ran_on": "2026-10-23"}, noon) == "outside the night window"
+    assert sw.due({"ran_on": "2026-10-22"}, noon) == "outside the night window"
+    assert sw.due({"ran_on": "2026-10-21"}, noon) is None
+    assert sw.due({"ran_on": "2026-10-20"}, noon) is None
+    assert sw.due({}, noon) is None
+    monkeypatch.setattr(corner, "owner_recent", lambda s: True)
+    assert sw.due({"ran_on": "2026-10-20"}, noon) == "the owner was here recently"
+    monkeypatch.setattr(corner, "owner_recent", lambda s: False)
+    for idle in (60, None):
+        monkeypatch.setattr(sw.pchealth, "input_idle_s", lambda idle=idle: idle)
+        assert sw.due({"ran_on": "2026-10-20"}, noon) == "outside the night window"
+        assert sw.due({}, noon) == "outside the night window"
+    print("PASS: security watch catches up")
+
+
+def test_a_container_gets_a_snapshot_before_its_updates_and_old_ones_are_pruned(monkeypatch):
+    calls = []
+    lists = "`-> rosiesec202611010300 2026-11-01\n  `-> rosiesec202611080300 2026-11-08\n    `-> rosiesec202611150300\n     `-> current\n"
+
+    def run(argv, timeout, stdin=None):
+        calls.append(argv[-1])
+        return lists if "listsnapshot" in argv[-1] else ""
+    monkeypatch.setattr(sw, "_ssh_cmd", lambda: ["ssh", "host"])
+    monkeypatch.setattr(sw, "_run", run)
+    out = sw.patch_container("101", ["openssl"])
+    assert calls[0].startswith("pct snapshot 101 rosiesec") and calls[1] == "pct listsnapshot 101"
+    assert calls[2] == "pct delsnapshot 101 rosiesec202611010300" and "pct delsnapshot 101 rosiesec202611080300" not in calls
+    assert calls.index("pct exec 101 -- sh -s") < calls.index("pct exec 101 -- true")
+    assert "snapshot rosiesec" in out
+    print("PASS: snapshot before updates, oldest pruned")
+
+
+def test_a_broken_container_after_updates_names_the_snapshot(monkeypatch):
+    def run(argv, timeout, stdin=None):
+        if argv[-1] == "pct exec 101 -- true":
+            raise RuntimeError("container not running")
+        return ""
+    monkeypatch.setattr(sw, "_ssh_cmd", lambda: ["ssh", "host"])
+    monkeypatch.setattr(sw, "_run", run)
+    with pytest.raises(RuntimeError, match="snapshot rosiesec"):
+        sw.patch_container("101", ["openssl"])
+    print("PASS: a failed check names the snapshot to go back to")
+
+
+def test_storage_without_snapshots_still_patches(monkeypatch):
+    calls = []
+
+    def run(argv, timeout, stdin=None):
+        calls.append(argv[-1])
+        if argv[-1].startswith("pct snapshot"):
+            raise RuntimeError("snapshot feature is not available")
+        return ""
+    monkeypatch.setattr(sw, "_ssh_cmd", lambda: ["ssh", "host"])
+    monkeypatch.setattr(sw, "_run", run)
+    assert "no snapshot" in sw.patch_container("101", ["openssl"])
+    assert "pct exec 101 -- sh -s" in calls
+    print("PASS: no snapshot support still patches")
+
+
+def test_snapshot_names_have_second_resolution_and_prune_handles_both_formats(monkeypatch):
+    calls = []
+    lists = "`-> rosiesec202611010300\n  `-> rosiesec20261108030000\n    `-> rosiesec20261115030007\n     `-> current\n"
+
+    def run(argv, timeout, stdin=None):
+        calls.append(argv[-1])
+        return lists if "listsnapshot" in argv[-1] else ""
+    monkeypatch.setattr(sw, "_ssh_cmd", lambda: ["ssh", "host"])
+    monkeypatch.setattr(sw, "_run", run)
+    out = sw.patch_container("101", ["openssl"])
+    assert re.fullmatch(r"pct snapshot 101 rosiesec\d{14}", calls[0])
+    assert [c for c in calls if "delsnapshot" in c] == ["pct delsnapshot 101 rosiesec202611010300"]
+    assert re.search(r"snapshot rosiesec\d{14} kept", out)
+    print("PASS: second-resolution snapshot names, mixed prune")

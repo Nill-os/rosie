@@ -192,3 +192,42 @@ def test_a_claude_skill_marked_no_share_stays_on_claude_and_old_copies_go(world)
     assert {"rosie:pack-aws", "agent-zero:pack-aws"} <= set(out["removed"])
     assert not (skills.DIR / "pack-aws.md").exists() and not (ss.A0_SKILLS / "pack-aws").exists()
     assert (d / "SKILL.md").exists()
+
+
+def test_no_share_is_honored_for_agent_zero_and_rosie_skills_too(world):
+    _skill(ss.A0_SKILLS, "a0-private", "Only for Agent Zero.", "Keep home.")
+    (ss.A0_SKILLS / "a0-private" / ss.NO_SHARE).write_text("")
+    _skill(ss.A0_SKILLS, "a0-open", "Shared from Agent Zero.", "Share it.")
+    skills.init()
+    (skills.DIR / "rosie-private.md").write_text("Only for Rosie.\n1. Keep home.\n")
+    (skills.DIR / ("rosie-private" + ss.NO_SHARE)).write_text("")
+    (skills.DIR / "rosie-open.md").write_text("Shared from Rosie.\n1. Share it.\n")
+    ss.sync()
+    assert (skills.DIR / "a0-open.md").exists() and (ss.A0_SKILLS / "rosie-open").exists()
+    assert not (skills.DIR / "a0-private.md").exists() and not (ss.CLAUDE_SKILLS / "a0-private").exists()
+    assert not (ss.A0_SKILLS / "rosie-private").exists() and not (ss.CLAUDE_SKILLS / "rosie-private").exists()
+    print("PASS: no-share honored for every origin")
+
+
+def test_no_share_removes_marked_copies_even_when_the_sync_state_is_gone(world):
+    d = _skill(ss.CLAUDE_SKILLS, "pack-gcp", "Rules for GCP.", "Use roles.")
+    ss.sync()
+    assert (skills.DIR / "pack-gcp.md").exists() and (ss.A0_SKILLS / "pack-gcp" / ss.MARK).exists()
+    ss.STATE.unlink()
+    (d / ss.NO_SHARE).write_text("")
+    out = ss.sync()
+    assert {"rosie:pack-gcp", "agent-zero:pack-gcp"} <= set(out["removed"])
+    assert not (skills.DIR / "pack-gcp.md").exists() and not (ss.A0_SKILLS / "pack-gcp").exists()
+    assert (d / "SKILL.md").exists()
+    print("PASS: no-share cleans marked copies without state")
+
+
+def test_no_share_never_deletes_an_unmarked_folder(world):
+    d = _skill(ss.CLAUDE_SKILLS, "pack-dup", "Rules for dup.", "Use roles.")
+    _skill(ss.A0_SKILLS, "pack-dup", "Sam's own copy.", "Mine.")
+    (d / ss.NO_SHARE).write_text("")
+    ss.sync()
+    assert not (ss.A0_SKILLS / "pack-dup" / ss.MARK).exists()
+    assert "Sam's own copy." in (ss.A0_SKILLS / "pack-dup" / "SKILL.md").read_text()
+    assert (d / "SKILL.md").exists()
+    print("PASS: unmarked folders survive no-share cleanup")

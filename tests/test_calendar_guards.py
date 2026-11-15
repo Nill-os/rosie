@@ -102,3 +102,25 @@ def test_made_up_id_is_an_error_not_done(cal):
 def test_double_booking_needs_the_confirm_card(cal):
     r = actions.add_event("Dentist", at(cal, 10), at(cal, 11), double_book=True)
     assert r["status"] == "needs_confirmation" and "overlaps" in r["summary"]
+
+
+def test_shift_day_never_moves_an_appointment_with_a_place_or_guests(cal):
+    cal.add("Haircut", cal.day.replace(hour=13), cal.day.replace(hour=14))["location"] = "Main St"
+    cal.add("Sync", cal.day.replace(hour=15), cal.day.replace(hour=16))["attendees"] = 2
+    cal.add("Deep work", cal.day.replace(hour=16, minute=30), cal.day.replace(hour=17, minute=30))
+    r = actions.shift_day(15, from_time=at(cal, 9), day=cal.day.date().isoformat())
+    assert r["status"] in ("done", "needs_confirmation")
+    by = {e["title"]: e["start"] for e in cal.events}
+    assert by["Haircut"] == cal.day.replace(hour=13).isoformat() and by["Sync"] == cal.day.replace(hour=15).isoformat()
+    assert "Deep work" in r.get("summary", "") and "Haircut ->" not in r.get("summary", "") and "Sync ->" not in r.get("summary", "")
+    print("PASS: appointments with a place or guests stay put")
+
+
+def test_is_fixed_rules():
+    cfg = {"fixed_keywords": []}
+    assert actions._is_fixed({"title": "Haircut", "location": "Main St", "all_day": False}, cfg)
+    assert actions._is_fixed({"title": "Chat", "attendees": 1, "all_day": False}, cfg)
+    assert actions._is_fixed({"title": "Chat", "attendees": ["Sam"]}, cfg)
+    assert actions._is_fixed({"title": "Math class"}, cfg)
+    assert not actions._is_fixed({"title": "Deep work", "location": "", "attendees": 0, "all_day": False}, cfg)
+    assert not actions._is_fixed({"title": "Holiday", "location": "Beach", "all_day": True}, cfg)

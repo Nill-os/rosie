@@ -405,6 +405,7 @@ def validate_free_keys() -> dict:
     result = {"groq": False, "gemini": False}
     if not enabled():
         return result
+    _model_check["at"] = time.time()
     cfg = config.load()
     groq_key = os.environ.get("GROQ_API_KEY") or str(cfg.get("groq_api_key") or "")
     gemini_key = os.environ.get("GEMINI_API_KEY") or str(cfg.get("gemini_api_key") or "")
@@ -428,7 +429,31 @@ def validate_free_keys() -> dict:
             logging.warning("claude_plan: GEMINI_API_KEY invalid or unreachable (%s)", _why(e))
     else:
         logging.warning("claude_plan: GEMINI_API_KEY not set — planning fallback degraded")
+    _mark_model_ids()
     return result
+
+
+MODEL_CHECK_EVERY_S = 22 * 3600
+_model_check: dict = {"at": 0.0, "running": False}
+
+
+def _mark_model_ids():
+    import jobs
+    gone = sorted(_NAMES[n] for n in tuple(_model_gone) if n in _NAMES)
+    jobs.mark("model_ids", not gone, f"{', '.join(gone)} no longer offers the planning model; update claude_plan.py" if gone else None)
+
+
+def model_check_job(now, cfg):
+    if not cfg.get("claude_planning", False) or _model_check["running"] or time.time() - _model_check["at"] < MODEL_CHECK_EVERY_S:
+        return
+
+    def run():
+        try:
+            validate_free_keys()
+        finally:
+            _model_check["running"] = False
+    _model_check["running"] = True
+    threading.Thread(target=run, daemon=True).start()
 
 
 def _clip(s, n) -> str:

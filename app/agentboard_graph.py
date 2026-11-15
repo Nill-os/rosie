@@ -65,6 +65,7 @@ def step() -> int:
         if why:
             state["waiting"] = why
             break
+        before = corner_graph._server_id()
         try:
             res = corner_graph._run(corner_graph._graph["g"].add_episode(group_id=GROUP, **episode(p), **corner_graph._text_type()),
                                     corner_graph.ADD_TIMEOUT_S)
@@ -75,10 +76,10 @@ def step() -> int:
             if corner_graph._model_down(e):
                 state["waiting"] = f"Waiting for the AI model: Ollama isn't answering ({type(e).__name__})."
                 break
-            if corner_graph._loading(e):
+            if corner_graph._loading(e) and not corner_graph._restarted(before):
                 corner_graph._drop(e)
                 break
-            if corner_graph._lost(e):  # board #705 why-crashing-post-tries
+            if corner_graph._lost(e) or corner_graph._loading(e):  # board #705 why-crashing-post-tries
                 _record(p, error=f"the graph database stopped while adding this ({type(e).__name__})")
                 corner_graph._drop(e)
                 break

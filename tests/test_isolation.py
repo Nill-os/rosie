@@ -199,3 +199,21 @@ def test_the_weather_asks_for_a_place_when_none_is_set():
 def test_free_model_keys_from_the_shell_never_reach_tests():
     import os
     assert not os.environ.get("GROQ_API_KEY") and not os.environ.get("GEMINI_API_KEY")
+
+
+@pytest.mark.parametrize("cmd", [["pw-play", "x.wav"], ["/usr/bin/paplay", "x.wav"], ["aplay", "x.wav"], ["ffplay", "-nodisp", "x.wav"], ["mpv", "x.wav"], "mpv x.wav"])
+def test_audio_players_are_refused(cmd, monkeypatch):
+    import subprocess
+    started = []
+    monkeypatch.setattr(subprocess, "_execute_child", lambda *a, **k: started.append(a), raising=False)
+    with pytest.raises(RuntimeError):
+        subprocess.Popen(cmd)
+    with pytest.raises(RuntimeError):
+        subprocess.run(cmd)
+    assert started == []
+    print("PASS: audio player refused")
+
+
+def test_other_programs_still_start():
+    import subprocess
+    assert subprocess.run(["true"]).returncode == 0

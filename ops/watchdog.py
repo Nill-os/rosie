@@ -61,10 +61,19 @@ def main():
     fails = int(st.get("wd_fails", 0)) + 1
     slots.save_state(wd_fails=fails)
     if fails >= 3:
-        res = slots.rollback(f"the new version stopped answering ({fails} checks in a row)")
+        res = slots.rollback(f"the new version stopped answering ({fails} checks in a row)", auto=True)
+        if not res.get("ok") and not res.get("probation_open"):
+            slots.save_state(probation_until=0, wd_fails=0)
         try:
             if res.get("ok"):
-                subprocess.run(["notify-send", "-a", "Rosie", "Rosie went back to the previous version", "The new version stopped answering, so I switched back automatically."], timeout=5)
+                title, body = "Rosie went back to the previous version", "The new version stopped answering, so I switched back automatically."
+            elif res.get("probation_open"):
+                title, body = "Rosie is not answering", "Neither the new nor the previous version is answering. I keep watching and trying."
+            elif res.get("gave_up"):
+                title, body = "Rosie is not answering", "Both versions failed to answer. I restarted Rosie once and stopped switching; she needs a look."
+            else:
+                title, body = "Rosie is not answering", "The new version stopped answering and the previous version is gone, so I could not switch back."
+            subprocess.run(["notify-send", "-a", "Rosie", title, body], timeout=5)
         except Exception:
             pass
         print(json.dumps(res))

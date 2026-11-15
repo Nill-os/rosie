@@ -150,6 +150,7 @@ def step(now: dt.datetime | None = None) -> int:
         return 0
     cg.state.update(waiting="", doing=f"Adding {len(batch)} pieces to the graph")
     t0 = time.time()
+    before = cg._server_id()
     try:
         results = cg._run(_add(_get_writer(), batch), cg.ADD_TIMEOUT_S)
     except cg.OwnerBusy as e:
@@ -159,10 +160,10 @@ def step(now: dt.datetime | None = None) -> int:
         if cg._model_down(e):
             cg.state["waiting"] = f"Waiting for the AI model: Ollama isn't answering ({type(e).__name__})."
             return 0
-        if cg._loading(e):
+        if cg._loading(e) and not cg._restarted(before):
             cg._drop(e)
             return 0
-        if cg._lost(e):
+        if cg._lost(e) or cg._loading(e):
             if len(batch) == 1:
                 cg._record(batch[0], error=f"the graph database stopped while adding this ({type(e).__name__})")
             else:

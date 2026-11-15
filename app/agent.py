@@ -1094,8 +1094,10 @@ def _call_model(t):
         r = httpx.post(OLLAMA, timeout=max(20.0, min(300.0, t.left())), json={
             "model": MODEL, "messages": t.clean(), "tools": _schema(t.active), "stream": False, "think": False,
             "keep_alive": "30m", "options": {**ctxsize.options(MODEL), "temperature": 0.2, "num_predict": t.cx["num_predict"]}}).json()
-    except httpx.HTTPError as e:
+    except (httpx.HTTPError, ValueError) as e:
         return None, (f"My language model is not answering right now ({type(e).__name__}). It usually comes back within a minute: please try again.", t.pending, t.saved())
+    if not isinstance(r, dict):
+        return None, ("The language model did not answer (unexpected reply). Try again in a moment.", t.pending, t.saved())
     m = r.get("message")
     if not m:
         return None, (f"The language model did not answer ({str(r.get('error', 'no reply'))[:120]}). Try again in a moment.", t.pending, t.saved())

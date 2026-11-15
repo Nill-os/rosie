@@ -56,7 +56,7 @@ import ollama_url
 import sessionkey
 
 STATIC = Path(__file__).resolve().parent.parent / "static"
-app = FastAPI()
+app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 app.include_router(hub.router)
 app.include_router(paper_api.router)
 app.include_router(a0_api.router)

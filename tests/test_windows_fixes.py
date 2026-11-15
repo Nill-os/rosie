@@ -58,7 +58,7 @@ def test_the_agent_zero_row_uses_this_pcs_container(monkeypatch):
 
     def run(cmd, **k):
         seen.append(cmd[-1])
-        return subprocess.CompletedProcess(cmd, 0, "running\n", "")
+        return subprocess.CompletedProcess(cmd, 0, "running|0|2026-01-01T00:00:00Z\n", "")
     monkeypatch.setattr(a0_host, "container", lambda: "a0-inst-her-7")
     monkeypatch.setattr(health.subprocess, "run", run)
     rows = {r["name"]: r for r in health.check_containers()}
@@ -142,3 +142,9 @@ def test_scanner_looks_in_the_clamav_folder_on_windows_and_says_how_to_install(m
     assert not ok and "winget install Cisco.ClamAV" in why
     monkeypatch.setattr(plat, "IS_WIN", False)
     assert corner_pics.ready() == (False, corner_pics.NO_SCANNER)
+
+
+def test_restart_history_never_touches_the_real_data_dir():
+    import health
+    assert "restart_seen" in str(health.RESTARTS) and not str(health.RESTARTS).startswith(str(health.ROOT / "data"))
+    print("PASS: restart history file is isolated in tests")

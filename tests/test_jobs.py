@@ -329,13 +329,14 @@ def test_bad_jobs_reach_health_and_inbox_once(monkeypatch):
     sent = []
     now = dt.datetime(2026, 11, 5, 8, 0)
     rows = jobs.listing()
-    jobs.alert(rows, now, lambda *a, **k: sent.append(a))
-    jobs.alert(rows, now, lambda *a, **k: sent.append(a))
+    add = lambda *a, **k: sent.append(a) if "needs attention" in a[1] else None
+    jobs.alert(rows, now, add)
+    jobs.alert(rows, now, add)
     assert len(sent) == 1 and "tokens" in sent[0][1]
     jobs.mark("tokens", True)
-    jobs.alert(jobs.listing(), now, lambda *a, **k: sent.append(a))
+    jobs.alert(jobs.listing(), now, add)
     jobs.mark("tokens", False, "again")
-    jobs.alert(jobs.listing(), now, lambda *a, **k: sent.append(a))
+    jobs.alert(jobs.listing(), now, add)
     assert len(sent) == 2
 
 
@@ -501,3 +502,37 @@ def test_mark_failure_warning_is_rate_limited(monkeypatch, caplog):
         for i in range(5):
             jobs.mark(f"x{i}", False, err="e")
     assert sum("jobs.mark failed" in r.getMessage() for r in caplog.records) == 1
+
+
+def test_late_jobs_alert_once_and_off_rows_do_not():
+    import datetime as dt
+    jobs._alerted.clear()
+    jobs._alerted_late.clear()
+    now = dt.datetime(2026, 11, 15, 8, 0)
+    row = lambda n, st: {"name": n, "state": st, "what": "Sam's job", "result": "129 h overdue"}
+    sent = []
+    add = lambda *a, **k: sent.append((a, k))
+    rows = [row("watch", "late"), row("ondemand", "off")]
+    jobs.alert(rows, now, add)
+    jobs.alert(rows, now, add)
+    assert len(sent) == 1
+    assert sent[0][0][1] == "Background job is overdue: watch" and sent[0][1]["key"] == "joblate:watch:2026-11-15"
+    jobs.alert([row("watch", "bad")], now, add)
+    assert len(sent) == 2 and sent[1][1]["key"] == "jobbad:watch:2026-11-15"
+    print("PASS: late jobs alert once")
+
+
+def test_a_failing_a0_intake_marks_mind_a0_bad_and_a_good_one_marks_it_ok(monkeypatch):
+    import mind
+    import mind_a0
+    assert "mind_a0" in {s[0] for s in jobs.MARKED}
+
+    def boom():
+        raise RuntimeError("a0 down")
+    monkeypatch.setattr(mind_a0, "collect", boom)
+    mind._intake_a0(0.0)
+    assert jobs._marks["mind_a0"]["ok"] is False and "a0 down" in jobs._marks["mind_a0"]["err"]
+    monkeypatch.setattr(mind_a0, "collect", lambda: 0)
+    mind._intake_a0(0.0)
+    assert jobs._marks["mind_a0"]["ok"] is True
+    print("PASS: mind_a0 job tracks the a0 intake")

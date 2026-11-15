@@ -273,6 +273,34 @@ def _loading(e: Exception) -> bool:
     return type(e).__name__ == "BusyLoadingError" or "is loading the dataset" in str(e)
 
 
+_seen_id = {"id": None}
+
+
+def _server_id() -> str | None:
+    if testguard.active():
+        return None
+    for _ in range(2):
+        try:
+            import redis
+            r = redis.Redis(host=HOST, port=PORT, password=_password(), socket_connect_timeout=3, socket_timeout=3)
+            try:
+                rid = str(r.info("server").get("run_id") or "") or None
+            finally:
+                r.close()
+            if rid:
+                _seen_id["id"] = rid
+                return rid
+        except Exception:
+            pass
+    return _seen_id["id"]
+
+
+def _restarted(before: str | None) -> bool:
+    if not before:
+        return _server_id() is not None
+    return _server_id() != before
+
+
 def _starting(e: Exception) -> bool:
     return _loading(e) or "Connect call failed" in str(e) or isinstance(e, ConnectionRefusedError)
 
@@ -512,7 +540,7 @@ def step(now: dt.datetime | None = None) -> int:
             state["waiting"] = why
             break
         state.update(waiting="", doing=f"Adding {it['kind']}: {_clip(it['title'], 80)}")
-        t0 = time.time()
+        t0, before = time.time(), _server_id()
         try:
             res = _run(_graph["g"].add_episode(name=it["name"], episode_body=it["body"], source_description=it["source"],
                                                reference_time=_utc(it["at"]), group_id=GROUP, previous_episode_uuids=[],
@@ -524,10 +552,10 @@ def step(now: dt.datetime | None = None) -> int:
             if _model_down(e):
                 state["waiting"] = f"Waiting for the AI model: Ollama isn't answering ({type(e).__name__})."
                 break
-            if _loading(e):
+            if _loading(e) and not _restarted(before):
                 _drop(e)
                 break
-            if _lost(e):
+            if _lost(e) or _loading(e):
                 # board #722 fix-segfault-retry-cap
                 _record(it, error=f"the graph database stopped while adding this ({type(e).__name__})")
                 _drop(e)

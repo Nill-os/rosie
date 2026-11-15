@@ -864,3 +864,111 @@ def test_fast_path_connection_drops_never_abandon_healthy_pieces(fast, monkeypat
     assert charged <= 1
     monkeypatch.setattr(cg, "_run", real)
     assert len(cg.pending(cg.BATCH)) >= cg.BATCH - 1
+
+
+def _ids(monkeypatch, *seq):
+    it = iter(seq)
+    monkeypatch.setattr(cg, "_server_id", lambda: next(it, seq[-1]))
+
+
+def test_a_piece_that_crashes_the_database_is_charged_a_try(graph, monkeypatch):
+    _seed()
+    graph.fail = BusyLoadingError("Redis is loading the dataset in memory")
+    for i in range(cg.MAX_TRIES + 2):
+        _ids(monkeypatch, f"run{i}", f"run{i}-new")
+        cg.state["checked"] -= cg.RETRY_S + 1
+        cg.step()
+    with cg._db() as db:
+        left = db.execute("SELECT COUNT(*) FROM graph_items WHERE episode IS NULL AND tries < ?", (cg.MAX_TRIES,)).fetchone()[0]
+        first = db.execute("SELECT tries FROM graph_items ORDER BY rowid LIMIT 1").fetchone()[0]
+    assert first == cg.MAX_TRIES and left < cg.BATCH + 1
+
+
+def test_the_same_database_still_loading_charges_no_try(graph, monkeypatch):
+    _seed()
+    _ids(monkeypatch, "same")
+    graph.fail = BusyLoadingError("Redis is loading the dataset in memory")
+    cg.step()
+    assert _tries() == 0
+
+
+def test_a_crash_with_no_id_before_the_write_is_charged_when_an_id_appears_after(graph, monkeypatch):
+    _seed()
+    _ids(monkeypatch, None, "x")
+    graph.fail = BusyLoadingError("Redis is loading the dataset in memory")
+    cg.step()
+    assert _tries() == 1
+    print("PASS: unknown id before then an id after is charged")
+
+
+def test_a_board_post_that_crashes_the_database_is_charged_a_try(graph, monkeypatch):
+    import agentboard_graph as ag
+    tried = []
+    post = {"id": 7, "t": 1.0, "agent": "claude-1", "kind": "done", "to_agent": "", "text": "x"}
+    monkeypatch.setattr(ag, "pending", lambda limit=4: [post])
+    monkeypatch.setattr(ag, "_record", lambda p, ep=None, error="": tried.append(error))
+    _ids(monkeypatch, "before", "after")
+    cg.ready()
+    graph.fail = BusyLoadingError("Redis is loading the dataset in memory")
+    ag.step()
+    assert len(tried) == 1 and "stopped" in tried[0] and cg.state["on"] is False
+
+
+def test_fast_path_single_piece_that_crashes_the_database_is_charged(fast, monkeypatch):
+    _seed()
+    import graph_batch
+    monkeypatch.setitem(graph_batch._solo, "n", 1)
+
+    def crash(coro, timeout):
+        coro.close()
+        raise BusyLoadingError("Redis is loading the dataset in memory")
+    monkeypatch.setattr(cg, "_run", crash)
+    _ids(monkeypatch, "before", "after")
+    cg.state["checked"] -= cg.RETRY_S + 1
+    cg.step()
+    assert _tries() == 1
+
+
+def test_server_id_never_opens_the_real_database_under_tests():
+    assert cg._server_id() is None
+
+
+def test_server_id_keeps_the_last_seen_id_when_info_fails(monkeypatch):
+    import sys
+    import types
+    calls = {"n": 0}
+
+    class R:
+        def __init__(self, **k):
+            pass
+
+        def info(self, section):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return {"run_id": "abc"}
+            raise ConnectionError("timeout")
+
+        def close(self):
+            pass
+    monkeypatch.setitem(sys.modules, "redis", types.SimpleNamespace(Redis=R))
+    monkeypatch.setattr(cg.testguard, "active", lambda: False)
+    monkeypatch.setattr(cg, "_password", lambda: "x")
+    monkeypatch.setitem(cg._seen_id, "id", None)
+    assert cg._server_id() == "abc"
+    assert cg._server_id() == "abc"
+    assert calls["n"] == 3
+
+
+def test_fast_path_batch_that_crashes_the_database_goes_one_by_one(fast, monkeypatch):
+    _seed()
+    import graph_batch
+    monkeypatch.setitem(graph_batch._solo, "n", 0)
+
+    def crash(coro, timeout):
+        coro.close()
+        raise BusyLoadingError("Redis is loading the dataset in memory")
+    monkeypatch.setattr(cg, "_run", crash)
+    _ids(monkeypatch, "before", "after")
+    cg.state["checked"] -= cg.RETRY_S + 1
+    cg.step()
+    assert _tries() == 0 and graph_batch._solo["n"] > 1

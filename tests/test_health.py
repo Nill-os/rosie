@@ -16,6 +16,11 @@ _REAL_UNIT_RESULT = health._unit_result
 
 
 @pytest.fixture(autouse=True)
+def _own_restart_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(health, "RESTARTS", tmp_path / "restart_seen.json")
+
+
+@pytest.fixture(autouse=True)
 def _no_real_units(monkeypatch):
     monkeypatch.setattr(health, "_unit_result", lambda unit, prop="Result": "")
 
@@ -183,7 +188,7 @@ def test_status_shows_her_chat_model_not_the_embedder(monkeypatch):
 
 def test_containers_and_agent_zeros_line_are_checked(monkeypatch):
     import subprocess
-    states = {"agent-zero": (0, "running\n", ""), "rosie-graph": (1, "", "Error: No such object: rosie-graph")}
+    states = {"agent-zero": (0, "running|0|2026-01-01T00:00:00.123456789Z\n", ""), "rosie-graph": (1, "", "Error: No such object: rosie-graph")}
     monkeypatch.setattr(health.subprocess, "run", lambda cmd, **k: subprocess.CompletedProcess(cmd, *states[cmd[-1]]))
 
     def refuse(*a, **k):
@@ -286,3 +291,81 @@ def test_code_backup_row_is_off_when_no_sync_unit_is_installed(monkeypatch):
     monkeypatch.setattr(health, "_unit_result", lambda unit, prop="Result": "not-found" if prop == "LoadState" else "success")
     r = health.check_repo()
     assert r["level"] == "off" and "no daily sync" in r["detail"]
+
+
+def _containers_with(monkeypatch, out):
+    import subprocess
+    import socket
+    monkeypatch.setattr(health, "_restart_seen", {})
+    monkeypatch.setattr(health.subprocess, "run", lambda cmd, **k: subprocess.CompletedProcess(cmd, 0, out, ""))
+    monkeypatch.setattr(socket, "create_connection", lambda *a, **k: (_ for _ in ()).throw(ConnectionRefusedError()))
+    return {r["name"]: r for r in health.check_containers()}
+
+
+def _stamp(minutes):
+    t = dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=minutes)
+    return t.strftime("%Y-%m-%dT%H:%M:%S") + ".123456789Z"
+
+
+def test_a_container_restarting_in_a_loop_warns(monkeypatch):
+    rows = _containers_with(monkeypatch, f"running|870|{_stamp(2)}\n")
+    r = rows["Memory graph database"]
+    assert r["level"] == "warn" and "restarted 870 times" in r["detail"] and r["fix"] == "docker logs rosie-graph"
+    print("PASS: restart loop warns")
+
+
+def test_docker_error_text_with_a_pipe_is_kept_whole(monkeypatch):
+    import subprocess
+    import socket
+    monkeypatch.setattr(health.subprocess, "run", lambda cmd, **k: subprocess.CompletedProcess(cmd, 1, "", "error during connect: a|b"))
+    monkeypatch.setattr(socket, "create_connection", lambda *a, **k: (_ for _ in ()).throw(ConnectionRefusedError()))
+    row = {r["name"]: r for r in health.check_containers()}["Memory graph database"]
+    assert row["level"] == "bad" and "a|b" in row["detail"]
+
+
+def test_old_restarts_and_bad_stamps_stay_ok(monkeypatch):
+    assert _containers_with(monkeypatch, f"running|870|{_stamp(120)}\n")["Memory graph database"]["level"] == "ok"
+    assert _containers_with(monkeypatch, "running|5|garbage\n")["Memory graph database"]["level"] == "ok"
+    assert _containers_with(monkeypatch, f"running|0|{_stamp(1)}\n")["Memory graph database"]["level"] == "ok"
+    assert _containers_with(monkeypatch, f"exited|3|{_stamp(1)}\n")["Memory graph database"]["level"] == "bad"
+
+
+def test_a_crash_loop_with_long_gaps_still_warns(monkeypatch):
+    import subprocess
+    import socket
+    out = {"v": f"running|10|{_stamp(120)}\n"}
+    monkeypatch.setattr(health, "_restart_seen", {})
+    monkeypatch.setattr(health.subprocess, "run", lambda cmd, **k: subprocess.CompletedProcess(cmd, 0, out["v"], ""))
+    monkeypatch.setattr(socket, "create_connection", lambda *a, **k: (_ for _ in ()).throw(ConnectionRefusedError()))
+    rows = lambda: {r["name"]: r for r in health.check_containers()}["Memory graph database"]
+    assert rows()["level"] == "ok"
+    out["v"] = f"running|11|{_stamp(30)}\n"
+    r = rows()
+    assert r["level"] == "warn" and "restarted 1 times in the last day" in r["detail"]
+    t0 = health.time.time()
+    monkeypatch.setattr(health.time, "time", lambda: t0 + 2 * health.RESTART_WINDOW_S)
+    assert rows()["level"] == "ok"
+    print("PASS: a slow crash loop warns for a day")
+
+
+def test_restart_history_survives_a_rosie_restart_and_a_bad_file(monkeypatch, tmp_path):
+    monkeypatch.setattr(health, "_restart_seen", {})
+    now = time.time()
+    health._restarts_in_window("rosie-graph", 10, now - 3600)
+    assert health._restarts_in_window("rosie-graph", 12, now) == 2
+    monkeypatch.setattr(health, "_restart_seen", health._load_restarts())
+    assert health._restarts_in_window("rosie-graph", 13, now + 60) == 3
+    assert not list(tmp_path.glob(".restart_seen*"))
+    for junk in ("{not json", '[1, 2]', '{"rosie-graph": [["x", 1], 5, [1]]}', '{"rosie-graph": "no"}'):
+        health.RESTARTS.write_text(junk)
+        assert health._load_restarts() in ({}, {"rosie-graph": []})
+    health.RESTARTS.unlink()
+    assert health._load_restarts() == {}
+    print("PASS: restart history persisted and tolerant of a bad file")
+
+
+def test_a_restart_file_with_nan_or_huge_numbers_still_loads(tmp_path, monkeypatch):
+    monkeypatch.setattr(health, "RESTARTS", tmp_path / "r.json")
+    health.RESTARTS.write_text('{"a": [[1, NaN], [2, 1e999], [3, 4]], "b": [[1, "x"]]}')
+    assert health._load_restarts() == {"a": [(3.0, 4)], "b": []}
+    print("PASS: bad restart rows are skipped")

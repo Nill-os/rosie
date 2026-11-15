@@ -1402,8 +1402,25 @@ def _svc_active(name: str) -> str:
     return "done"
 
 
-def _parse_claude_task_log(log_path: Path, svc_name: str) -> dict:
-    lines = log_path.read_text(errors="replace").splitlines()
+LOG_HEAD_BYTES = 8 * 1024
+LOG_TAIL_BYTES = 64 * 1024
+
+
+def _read_log_ends(p: Path) -> list:
+    with p.open("rb") as f:
+        size = f.seek(0, 2)
+        f.seek(0)
+        if size <= LOG_HEAD_BYTES + LOG_TAIL_BYTES:
+            return f.read().decode("utf-8", "replace").splitlines()
+        head = f.read(LOG_HEAD_BYTES).decode("utf-8", "replace").splitlines()[:-1]
+        f.seek(size - LOG_TAIL_BYTES)
+        tail = f.read().decode("utf-8", "replace").splitlines()[1:]
+    return head + tail
+
+
+def _parse_claude_task_log(log_path: Path, svc_name: str, lines=None) -> dict:
+    if lines is None:
+        lines = _read_log_ends(log_path)
     last = lines[-30:] if len(lines) > 30 else lines
 
     done = total = pct = free_gb = None
@@ -1449,12 +1466,8 @@ def _parse_claude_task_log(log_path: Path, svc_name: str) -> dict:
             break
 
     slug = svc_name.replace("-", "_")
-    labels = {
-        "fill_sd_curated": "SD Fill (Curated)",
-        "fill_r4_curated": "R4 Fill (Curated)",
-        "fill_sd": "SD Fill",
-    }
-    label = labels.get(slug) or svc_name.replace("-", " ").title()
+    labels = config.load().get("claude_task_labels") or {}
+    label = (labels.get(slug) if isinstance(labels, dict) else None) or svc_name.replace("-", " ").title()
 
     return {
         "name": svc_name,
@@ -1504,7 +1517,7 @@ def _task_times(lines: list, running: bool) -> dict:
 @router.get("/api/claude-tasks")
 def claude_tasks():
     import glob
-    patterns = ["/tmp/fill_*.log", "/tmp/rom_download*.log"]
+    patterns = [x for x in (config.load().get("claude_task_logs") or []) if isinstance(x, str) and x]
     seen = set()
     results = []
     for pat in patterns:
@@ -1515,13 +1528,14 @@ def claude_tasks():
             if svc_name in seen:
                 continue
             seen.add(svc_name)
-            status = _svc_active(svc_name)
-            task = _parse_claude_task_log(p, svc_name)
-            task["status"] = status
             try:
-                lines = p.read_text(errors="replace").splitlines()
+                lines = _read_log_ends(p)
             except OSError:
-                lines = []
+                seen.discard(svc_name)
+                continue
+            status = _svc_active(svc_name)
+            task = _parse_claude_task_log(p, svc_name, lines)
+            task["status"] = status
             task.update(_task_times(lines, status == "running"))
             el, d, tot = task["elapsed"], task.get("done"), task.get("total")
             speed = round(d / (el / 60), 1) if d is not None and tot and el else None

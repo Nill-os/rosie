@@ -339,6 +339,17 @@ def job_security_watch(now, cfg):
 JOBS.insert(JOBS.index(job_mail), job_security_watch)
 
 
+def job_model_ids(now, cfg):
+    import claude_plan
+    import testguard
+    if testguard.active():
+        return
+    claude_plan.model_check_job(now, cfg)
+
+
+JOBS.insert(JOBS.index(job_mail), job_model_ids)
+
+
 def job_net_quality(now, cfg):
     import jobs
     import netquality

@@ -15,6 +15,7 @@ import httpx
 
 import config
 import corner
+import pchealth
 import models
 import atomic
 import testguard
@@ -35,6 +36,7 @@ NOT_CHAT = re.compile(r"lora|control.?vector|encoder|upsampler|embed|reward|draf
 MIN_AGE_H = 24  # board #748 why-wait-day-before-test
 TEST_FROM, TEST_TO = dt.time(0, 30), dt.time(1, 45)
 AWAY_S = 1800
+CATCHUP_DAYS = 3
 MIN_FREE_GB = 25
 PULL_TIMEOUT_S = 3600
 EVAL_TIMEOUT_S = 1800
@@ -155,8 +157,23 @@ def next_candidate(d: dict, now: dt.datetime) -> tuple[str, dict] | None:
     return max(ok)[1:] if ok else None
 
 
+def _overdue(d: dict, now: dt.datetime) -> bool:
+    if "tested_on" not in d:
+        return _pc_away()
+    try:
+        last = dt.date.fromisoformat(d["tested_on"])
+    except (TypeError, ValueError):
+        return False
+    return (now.date() - last).days > CATCHUP_DAYS and _pc_away()
+
+
+def _pc_away() -> bool:
+    idle = pchealth.input_idle_s()
+    return idle is not None and idle >= AWAY_S
+
+
 def test_due(d: dict, now: dt.datetime) -> str | None:
-    if not TEST_FROM <= now.time() <= TEST_TO:
+    if not TEST_FROM <= now.time() <= TEST_TO and not _overdue(d, now):
         return "outside the test window"
     if d.get("tested_on") == now.date().isoformat():
         return "already tested one tonight"

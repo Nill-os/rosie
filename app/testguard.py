@@ -45,6 +45,7 @@ def check(path):
 # board #784 safety-no-network-under-tests
 import ipaddress
 import socket
+import subprocess
 
 _real = {"connect": socket.socket.connect, "connect_ex": socket.socket.connect_ex, "sendto": socket.socket.sendto,
          "sendmsg": getattr(socket.socket, "sendmsg", None), "getaddrinfo": socket.getaddrinfo,
@@ -122,7 +123,32 @@ def _no_uvloop(*a, **k):
     raise NetworkBlocked("testguard: uvloop is blocked in tests (its sockets bypass the guard); use asyncio's own loop")
 
 
-GUARDS = ((socket.socket, "connect", _guarded_connect), (socket.socket, "connect_ex", _guarded_connect_ex),
+AUDIO_PLAYERS = frozenset({"pw-play", "paplay", "aplay", "ffplay", "mpv"})
+_RealPopen = subprocess.Popen
+
+
+def _audio_player(args) -> str:
+    if isinstance(args, (str, bytes, os.PathLike)):
+        args = str(os.fsdecode(args)).split()
+    try:
+        first = next(iter(args), None)
+    except TypeError:
+        return ""
+    if first is None:
+        return ""
+    name = os.path.basename(os.fsdecode(first))
+    return name if name in AUDIO_PLAYERS else ""
+
+
+class _GuardedPopen(_RealPopen):
+    def __init__(self, args, *a, **k):
+        player = _audio_player(args)
+        if player:
+            raise RuntimeError(f"testguard: audio is blocked in tests (tried to run {player})")
+        super().__init__(args, *a, **k)
+
+
+GUARDS = ((subprocess, "Popen", _GuardedPopen), (socket.socket, "connect", _guarded_connect), (socket.socket, "connect_ex", _guarded_connect_ex),
           (socket.socket, "sendto", _guarded_sendto),
           (socket, "getaddrinfo", _guarded_getaddrinfo), (socket, "gethostbyname", _guarded_gethostbyname),
           (socket, "gethostbyname_ex", _guarded_gethostbyname_ex))

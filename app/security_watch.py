@@ -18,6 +18,7 @@ import httpx
 
 import config
 import corner
+import pchealth
 import atomic
 import testguard
 import util
@@ -27,6 +28,7 @@ ROOT = Path(__file__).resolve().parent.parent
 STATE = ROOT / "data" / "security_watch.json"
 RUN_FROM, RUN_TO = dt.time(3, 0), dt.time(6, 0)
 AWAY_S = 1800
+CATCHUP_H = 36
 PORT = int(os.environ.get("ROSIE_PORT") or 8765)
 OSV = "https://api.osv.dev/v1"
 GITHUB = "https://api.github.com/repos/{}/security-advisories"
@@ -379,8 +381,34 @@ def patch_container(ct: str, pkgs: list[str]) -> str:
     ssh = _ssh_cmd()
     if not ssh or not ct.isdigit():
         raise RuntimeError("no home server is set up (Settings > Security)")
-    _run(ssh + [f"pct exec {ct} -- sh -s"], 1800, apt_security_cmd(pkgs) + "\n")
-    return f"installed {len(pkgs)} security update{'s' * (len(pkgs) != 1)}"
+    cmd = apt_security_cmd(pkgs)
+    snap = _snapshot(ssh, ct)
+    keep = f" (snapshot {snap} kept for going back)" if snap else " (no snapshot: the storage does not allow one)"
+    try:
+        _run(ssh + [f"pct exec {ct} -- sh -s"], 1800, cmd + "\n")
+        _run(ssh + [f"pct exec {ct} -- true"], 60)
+    except Exception as e:
+        raise RuntimeError(f"{str(e)[:160]}{keep}") from e
+    return f"installed {len(pkgs)} security update{'s' * (len(pkgs) != 1)}{keep}"
+
+
+SNAP_RE = re.compile(r"\b(rosiesec\d{12}(?:\d{2})?)\b")
+SNAP_KEEP = 2
+
+
+def _snapshot(ssh: list, ct: str) -> str | None:
+    name = "rosiesec" + dt.datetime.now().strftime("%Y%m%d%H%M%S")
+    try:
+        _run(ssh + [f"pct snapshot {ct} {name}"], 600)
+    except Exception:
+        return None
+    try:
+        old = sorted(set(SNAP_RE.findall(_run(ssh + [f"pct listsnapshot {ct}"], 60))))
+        for n in old[:-SNAP_KEEP]:
+            _run(ssh + [f"pct delsnapshot {ct} {n}"], 600)
+    except Exception:
+        pass
+    return name
 
 
 OWNER_PATCHES = {
@@ -619,8 +647,23 @@ def _report_self_patch():
     save(d)
 
 
+def _overdue(d: dict, now: dt.datetime) -> bool:
+    try:
+        last = dt.datetime.combine(dt.date.fromisoformat(d["ran_on"]), dt.time(0, 0), tzinfo=now.tzinfo)
+    except KeyError:
+        return _pc_away()
+    except (TypeError, ValueError):
+        return False
+    return (now - last).total_seconds() > CATCHUP_H * 3600 and _pc_away()
+
+
+def _pc_away() -> bool:
+    idle = pchealth.input_idle_s()
+    return idle is not None and idle >= AWAY_S
+
+
 def due(d: dict, now: dt.datetime) -> str | None:
-    if not RUN_FROM <= now.time() <= RUN_TO:
+    if not RUN_FROM <= now.time() <= RUN_TO and not _overdue(d, now):
         return "outside the night window"
     if d.get("ran_on") == now.date().isoformat():
         return "already checked today"

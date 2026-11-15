@@ -71,6 +71,7 @@ def _fmt(ev):
         "end": e.get("dateTime") or e.get("date"),
         "all_day": all_day,
         "location": ev.get("location", ""),
+        "attendees": sum(1 for a in ev.get("attendees") or [] if not a.get("self") and not a.get("resource")),
     }
 
 

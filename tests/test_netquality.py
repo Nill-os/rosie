@@ -46,14 +46,14 @@ def test_windows_ping_parse(monkeypatch):
 
 def test_all_lost_and_missing_binary(monkeypatch):
     monkeypatch.setattr(nq, "IS_WIN", False)
-    fake_run(monkeypatch, "")
+    fake_run(monkeypatch, "3 packets transmitted, 0 received, 100% packet loss, time 400ms")
     r = nq.ping("1.1.1.1", count=3)
     assert r["got"] == 0 and r["loss"] == 100.0 and r["avg_ms"] is None and r["jitter_ms"] is None
 
     def boom(*a, **k):
         raise FileNotFoundError("ping")
     monkeypatch.setattr(nq.subprocess, "run", boom)
-    assert nq.ping("1.1.1.1", count=3)["loss"] == 100.0
+    assert nq.ping("1.1.1.1", count=3)["loss"] is None
     print("PASS: all lost")
 
 
@@ -160,3 +160,74 @@ def test_tool_clamps_and_errors(monkeypatch):
     monkeypatch.setattr(nq, "report", boom)
     assert nq.tool() == {"error": "Couldn't check the internet: OSError"}
     print("PASS: tool")
+
+
+DE_OUT = "\n".join(["Antwort von 10.0.0.1: Bytes=32 Zeit=12ms TTL=64", "Antwort von 10.0.0.1: Bytes=32 Zeit<1ms TTL=64",
+                    "Antwort von 10.0.0.1: Bytes=32 Zeit=3,5ms TTL=64", "Zeitüberschreitung der Anforderung.",
+                    "Paketstatistik: Gesendet = 4, Empfangen = 3, Verloren = 1 (25% Verlust),",
+                    "Minimum = 1ms, Maximum = 12ms, Mittelwert = 5ms"])
+
+
+def test_localized_ping_output_parses(monkeypatch):
+    monkeypatch.setattr(nq, "IS_WIN", True)
+    fake_run(monkeypatch, DE_OUT)
+    r = nq.ping("10.0.0.1", count=4)
+    assert "status" not in r
+    assert r["got"] == 3 and r["loss"] == 25.0 and r["max_ms"] == 12.0 and r["avg_ms"] == round((12 + 1 + 3.5) / 3, 1)
+    print("PASS: localized ping parsed")
+
+
+def test_missing_ping_binary_is_unreadable_not_total_loss(monkeypatch):
+    def run(argv, **kw):
+        raise FileNotFoundError("ping")
+    monkeypatch.setattr(nq.subprocess, "run", run)
+    r = nq.ping("1.1.1.1", count=4)
+    assert r["status"] == "ping unreadable" and r["loss"] is None
+    assert "100%" not in nq._now_line({"net": r, "dns_ms": 5.0})
+    assert "ping unreadable" in nq.bad({"net": r, "dns_ms": 5.0})
+    print("PASS: missing ping reported unreadable")
+
+
+def test_garbage_output_is_unreadable_but_real_total_loss_is_loss(monkeypatch):
+    fake_run(monkeypatch, "something odd happened")
+    assert nq.ping("1.1.1.1", count=4)["status"] == "ping unreadable"
+    fake_run(monkeypatch, "4 packets transmitted, 0 received, 100% packet loss, time 3000ms")
+    r = nq.ping("1.1.1.1", count=4)
+    assert r["loss"] == 100.0 and "status" not in r
+    print("PASS: garbage vs real loss")
+
+
+def test_windows_ipv6_reply_without_ttl_counts(monkeypatch):
+    monkeypatch.setattr(nq, "IS_WIN", True)
+    fake_run(monkeypatch, "Reply from ::1: time<1ms\nReply from ::1: time=12ms\nRequest timed out.\n    Minimum = 0ms, Maximum = 12ms, Average = 6ms")
+    r = nq.ping("::1", count=3)
+    assert "status" not in r and r["got"] == 2 and r["max_ms"] == 12.0 and r["loss"] == 33.3
+    print("PASS: ipv6 reply without TTL parsed")
+
+
+@pytest.mark.parametrize("out", ["ping: connect: Network is unreachable", "Request timed out.\nRequest timed out.",
+                                 "Reply from 10.0.0.9: Destination host unreachable."])
+def test_every_probe_failing_is_total_loss_not_unreadable(monkeypatch, out):
+    fake_run(monkeypatch, out)
+    r = nq.ping("1.1.1.1", count=4)
+    assert r["loss"] == 100.0 and "status" not in r
+    print("PASS: failed probes are 100 percent loss")
+
+
+def test_ping_timeout_is_unreadable_not_loss(monkeypatch):
+    def run(argv, **kw):
+        raise subprocess.TimeoutExpired(argv, 1)
+    monkeypatch.setattr(nq.subprocess, "run", run)
+    r = nq.ping("1.1.1.1", count=4)
+    assert r["loss"] is None and r["status"] == nq.UNREADABLE
+    print("PASS: ping timeout is unreadable, not loss")
+
+
+def test_average_loss_skips_unreadable_samples():
+    unreadable = {"host": "h", "loss": None, "status": nq.UNREADABLE, "avg_ms": None, "jitter_ms": None}
+    ok = {"host": "h", "loss": 10.0, "avg_ms": 5.0, "jitter_ms": 1.0}
+    now = time.time()
+    nq.save({"at": now - 20, "net": unreadable, "dns_ms": 5.0}, now=now)
+    nq.save({"at": now - 10, "net": ok, "dns_ms": 5.0}, now=now)
+    assert nq.report(hours=1, now=now, fresh=False)["avg_loss"] == 10.0
+    print("PASS: average loss skips unreadable samples")

@@ -103,3 +103,12 @@ def test_without_a_home_server_only_added_machines_show(home, monkeypatch):
     assert d["server"] is False and [m["name"] for m in d["machines"]] == ["Router"]
     with pytest.raises(RuntimeError):
         servers.discover()
+
+
+def test_main_app_serves_no_docs_or_openapi_without_login():
+    from fastapi.testclient import TestClient
+    import server
+    c = TestClient(server.app)
+    for path in ("/docs", "/redoc", "/openapi.json"):
+        assert c.get(path).status_code in (401, 404), path
+    print("PASS: main app hides docs and openapi")

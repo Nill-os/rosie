@@ -23,7 +23,11 @@ BAD_MS = 150.0
 BAD_JITTER = 30.0
 IS_WIN = sys.platform == "win32"
 FILE = Path(__file__).resolve().parent.parent / "data" / "netquality.jsonl"
-RTT_RE = re.compile(r"time[=<]\s*([\d.]+)\s*ms", re.I)
+RTT_RE = re.compile(r"[=<]\s*(\d+(?:[.,]\d+)?)\s*ms", re.I)
+TTL_RE = re.compile(r"\bttl\s*=", re.I)
+LOSS_RE = re.compile(r"\d\s*%")
+REPLY_RE = re.compile(r"\S:\s")
+FAIL_RE = re.compile(r"unreachable|timed out|time out|timeout|no answer|general failure", re.I)
 _busy = threading.Lock()
 _file_lock = threading.Lock()
 
@@ -54,6 +58,9 @@ def gateway():
         return None
 
 
+UNREADABLE = "ping unreadable"
+
+
 def _stats(host, sent, rtts):
     got = len(rtts)
     res = {"host": host, "sent": sent, "got": got, "loss": round(100 * (sent - got) / sent, 1), "avg_ms": None, "jitter_ms": None, "max_ms": None}
@@ -68,11 +75,26 @@ def ping(host, count=COUNT):
     if not host:
         raise ValueError("not an IP address")
     argv = ["ping", "-n", str(count), "-w", "2000", host] if IS_WIN else ["ping", "-n", "-c", str(count), "-i", "0.2", "-W", "2", host]
+    failed = False
     try:
-        out = _run(argv, count * 2.5 + 5).stdout
-    except (OSError, subprocess.SubprocessError):
+        r = _run(argv, count * 2.5 + 5)
+        out = (r.stdout or "") + "\n" + (r.stderr or "")
+    except subprocess.TimeoutExpired:
         out = ""
-    rtts = [float(x) for x in RTT_RE.findall(out)][:count]
+    except subprocess.SubprocessError:
+        out = ""
+        failed = True
+    except OSError:
+        out = ""
+    rtts = []
+    for line in out.splitlines():
+        if TTL_RE.search(line) or REPLY_RE.search(line):
+            m = RTT_RE.search(line)
+            if m:
+                rtts.append(float(m.group(1).replace(",", ".")))
+    rtts = rtts[:count]
+    if not rtts and not (failed or LOSS_RE.search(out) or FAIL_RE.search(out)):
+        return {"host": host, "sent": count, "got": 0, "loss": None, "avg_ms": None, "jitter_ms": None, "max_ms": None, "status": UNREADABLE}
     return _stats(host, count, rtts)
 
 
@@ -135,6 +157,8 @@ def save(s, now=None):
 def bad(s):
     out = []
     net, gw, d = s.get("net") or {}, s.get("gw") or {}, s.get("dns_ms")
+    if net.get("status") == UNREADABLE:
+        out.append(UNREADABLE)
     if (net.get("loss") or 0) >= BAD_LOSS:
         out.append(f"{net['loss']:g}% packet loss")
     if (net.get("avg_ms") or 0) >= BAD_MS:
@@ -150,13 +174,15 @@ def bad(s):
 
 def _now_line(s):
     net, gw = s.get("net") or {}, s.get("gw")
+    if net.get("status") == UNREADABLE:
+        return "Now: the ping result could not be read (ping unreadable)."
     if not net.get("got"):
         return "Now: no replies from the internet (100% loss)."
     loss = net["loss"]
     parts = [f"{net['avg_ms']:g} ms to the internet", f"jitter {net['jitter_ms']:g} ms", "no loss" if not loss else f"{loss:g}% loss"]
     line = "Now: " + ", ".join(parts)
     if gw:
-        line += f"; home network {gw['avg_ms']:g} ms" if gw.get("got") else "; no replies from your router"
+        line += f"; home network {gw['avg_ms']:g} ms" if gw.get("got") else ("; router ping unreadable" if gw.get("status") == UNREADABLE else "; no replies from your router")
         if gw.get("got") and gw["loss"]:
             line += f" ({gw['loss']:g}% loss)"
     d = s.get("dns_ms")
@@ -178,6 +204,7 @@ def report(hours=24, now=None, fresh=True):
         worst = {"at": dt.datetime.fromtimestamp(s["at"]).strftime("%Y-%m-%d %H:%M"), "reasons": r}
     nets = [s["net"] for s in rows if isinstance(s.get("net"), dict)]
     ms = [n["avg_ms"] for n in nets if n.get("avg_ms") is not None]
+    losses = [n["loss"] for n in nets if n.get("loss") is not None]
     jit = [n["jitter_ms"] for n in nets if n.get("jitter_ms") is not None]
     lines = [_now_line(cur)] if cur else []
     if not rows:
@@ -189,7 +216,7 @@ def report(hours=24, now=None, fresh=True):
         lines.append(f"Last {hours} h: the one check was fine." if len(rows) == 1 else f"Last {hours} h: all {len(rows)} checks were fine.")
     return {"now": cur, "window_h": hours, "samples": len(rows), "bad": len(flagged), "worst": worst,
             "median_ms": round(statistics.median(ms), 1) if ms else None, "median_jitter_ms": round(statistics.median(jit), 1) if jit else None,
-            "avg_loss": round(sum(n.get("loss") or 0 for n in nets) / len(nets), 1) if nets else None, "summary": lines}
+            "avg_loss": round(sum(losses) / len(losses), 1) if losses else None, "summary": lines}
 
 
 def job(now_dt, cfg, mark=None):

@@ -422,10 +422,13 @@ def switch(force=False):
     if claimed(idle) and not force:
         return {"error": claimed(idle), "claimed": True}
     try:
-        run([str(SLOT[live] / ".venv" / "bin" / "python"), str(SLOT[live] / "app" / "backup.py"), "backup"], timeout=300)
+        run([str(SLOT[live] / ".venv" / "bin" / "python"), str(SLOT[live] / "app" / "backup.py"), "backup"], timeout=300, check=True)
     except Exception as e:
         log_event("backup-failed", error=str(e)[:200])
-    save_state(previous=live, previous_head=head(live), previous_dirty=len(dirty(live)), switched_at=time.time(), probation_until=time.time() + PROBATION_MIN * 60, wd_fails=0)
+        if not force:
+            _board_call("post", f"Rosie did not switch to slot {idle}: the backup before the switch failed ({str(e)[:160]}). Fix the backup or switch with --force.", "blocked", "all")
+            return {"error": f"Not switched: the backup before the switch failed ({str(e)[:200]}). Fix the backup, or switch with --force.", "backup_failed": True}
+    save_state(previous=live, previous_head=head(live), previous_dirty=len(dirty(live)), switched_at=time.time(), probation_until=time.time() + PROBATION_MIN * 60, wd_fails=0, rb_failed=False)
     set_active(idle)
     log_event("switch", frm=live, to=idle, head=head(idle))
     restart_service()
@@ -438,13 +441,19 @@ def switch(force=False):
     return {"ok": False, "rolled_back": True, "detail": rb}
 
 
-def rollback(reason="requested"):
+def rollback(reason="requested", auto=False):
     st = load_state()
     prev = st.get("previous") or other(active())
     cur = active()
     if st.get("previous_head") and (head(prev) != st["previous_head"] or len(dirty(prev)) != st.get("previous_dirty", 0)):
         log_event("rollback-refused", to=prev, reason=reason)
         return {"ok": False, "error": f"Slot {prev} no longer holds the previous version (it was prepared again), so going back to it is refused."}
+    if auto and st.get("rb_failed"):
+        save_state(probation_until=0, wd_fails=0)
+        log_event("rollback-gave-up", frm=cur, to=prev, reason=reason)
+        _board_call("post", f"Neither slot {cur} nor slot {prev} is answering. I restarted slot {cur} once and stopped switching back and forth; Rosie needs a look.", "blocked", "all")
+        restart_service()
+        return {"ok": False, "active": cur, "reason": reason, "gave_up": True}
     set_active(prev)
     save_state(previous=cur, previous_head=head(cur), previous_dirty=len(dirty(cur)), probation_until=0, wd_fails=0)
     log_event("rollback", frm=cur, to=prev, reason=reason)
@@ -452,8 +461,13 @@ def rollback(reason="requested"):
     restart_service()
     ok = wait_healthy(prev)
     if ok:
+        save_state(rb_failed=False)
         restart_units()
-    return {"ok": ok, "active": prev, "reason": reason}
+        return {"ok": True, "active": prev, "reason": reason}
+    save_state(probation_until=time.time() + PROBATION_MIN * 60, wd_fails=0, rb_failed=True)
+    log_event("rollback-unhealthy", frm=cur, to=prev, reason=reason)
+    _board_call("post", f"Rosie went back from slot {cur} to slot {prev} but slot {prev} is not answering either; the watchdog keeps watching", "note", "all")
+    return {"ok": False, "active": prev, "reason": reason, "probation_open": True}
 
 
 def status():

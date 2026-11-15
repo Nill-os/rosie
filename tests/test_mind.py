@@ -472,3 +472,69 @@ def test_existing_rows_default_to_auto_after_migration(fake, tmp_path, monkeypat
     with mind._db() as c:
         assert c.execute("SELECT trust FROM units").fetchone()["trust"] == "auto"
     assert mind.quarantined() == []
+
+
+def test_forgetting_a_fact_makes_the_owner_summary_refresh_again(fake, monkeypatch):
+    (a,) = mind.add_units([{"text": "Sam is building a Meshtastic handheld.", "kind": "world", "entities": ["Sam"]}], "chat", "2026-10-20T09:00:00-07:00")
+    fake.answers = [{"creates": [{"text": "Sam is building a Meshtastic handheld.", "source_fact_ids": [a]}], "updates": [], "deletes": []}]
+    mind.consolidate_next(background=False)
+    with mind._db() as c:
+        oid = c.execute("SELECT id FROM units WHERE kind='observation'").fetchone()["id"]
+    fake.answers = [{"answer": "- Building a Meshtastic handheld.", "used": [oid], "found": True}]
+    assert mind.refresh_models(background=False)
+    assert not mind.refresh_models(background=False)
+    assert "Meshtastic" in mind.about_owner()
+    mind.forget(a)
+    calls = []
+    monkeypatch.setattr(mind, "reflect", lambda *args, **kw: calls.append(args) or {"found": False})
+    assert mind.refresh_models(background=False)
+    assert calls
+    assert "Meshtastic" not in mind.about_owner()
+    print("PASS: forget resets the model refresh marks")
+
+
+def test_db_sets_up_the_schema_once_per_path_and_uses_wal(tmp_path, monkeypatch):
+    monkeypatch.setattr(mind, "DB", tmp_path / "once.db")
+    monkeypatch.setattr(mind, "_migrated", set())
+    seen = []
+
+    class Spy:
+        def __init__(self, c):
+            self.c = c
+
+        def executescript(self, sql):
+            seen.append(sql)
+            return self.c.executescript(sql)
+
+        def __getattr__(self, name):
+            return getattr(self.c, name)
+
+    real = mind.sqlite3.connect
+    monkeypatch.setattr(mind.sqlite3, "connect", lambda *a, **k: Spy(real(*a, **k)))
+    c1 = mind._db()
+    c2 = mind._db()
+    assert len(seen) == 1
+    assert c2.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+    assert c2.execute("PRAGMA busy_timeout").fetchone()[0] == 30000
+    other = tmp_path / "two.db"
+    monkeypatch.setattr(mind, "DB", other)
+    mind._db()
+    assert len(seen) == 2
+    c1.close()
+    c2.close()
+    print("PASS: schema runs once per path, wal on")
+
+
+def test_a_mind_db_replaced_while_running_gets_its_tables_again(tmp_path, monkeypatch):
+    monkeypatch.setattr(mind, "DB", tmp_path / "swap.db")
+    monkeypatch.setattr(mind, "_migrated", set())
+    with mind._db() as c:
+        c.execute("SELECT count(*) FROM units").fetchone()
+    for p in tmp_path.glob("swap.db*"):
+        p.unlink()
+    c = mind._db()
+    try:
+        assert c.execute("SELECT count(*) FROM units").fetchone()[0] == 0
+    finally:
+        c.close()
+    print("PASS: a replaced mind.db is set up again")

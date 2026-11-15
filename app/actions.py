@@ -22,9 +22,15 @@ ALWAYS_FIXED = re.compile(r"\b(class(?:es)?|lecture|lab|exam|midterm|quiz|course
 SCHOOL = None
 
 
-def _is_fixed(title, cfg):
+def _is_fixed(ev, cfg):
+    title = ev.get("title") or ""
     t = title.lower()
-    return any(k in t for k in cfg["fixed_keywords"]) or bool(ALWAYS_FIXED.search(title)) or bool(SCHOOL and SCHOOL.search(title))
+    if any(k in t for k in cfg["fixed_keywords"]) or ALWAYS_FIXED.search(title) or (SCHOOL and SCHOOL.search(title)):
+        return True
+    if ev.get("all_day"):
+        return False
+    others = ev.get("attendees") or 0
+    return bool(str(ev.get("location") or "").strip()) or (len(others) if isinstance(others, (list, tuple)) else int(others)) > 0
 
 
 PENDING_SECONDS = 600  # board #700 safety-card-expires
@@ -99,7 +105,7 @@ def move_event(event_id, new_start, new_end, double_book=False, _confirmed=False
     ev, err = resolve_event(event_id)
     if err:
         return err
-    if _is_fixed(ev["title"], load()):
+    if _is_fixed(ev, load()):
         return {"status": "refused", "message": f"NOT moved: '{ev['title']}' is a class or an appointment, and those never move (the owner's rule). "
                                                 "Move flexible work blocks or tasks around it instead; if the owner wants it changed, they do that in Google Calendar."}
     s, e = _parse(new_start), _parse(new_end)
@@ -137,7 +143,7 @@ def shift_day(minutes_late: int, from_time=None, day=None, ask_first=False):
     for e in gcal.events_on(day, cal):
         if e["all_day"] or _parse(e["start"]) < cutoff:
             continue
-        if _is_fixed(e["title"], cfg):
+        if _is_fixed(e, cfg):
             skipped.append(e["title"])
             continue
         moves.append({"id": e["id"], "title": e["title"],
@@ -150,7 +156,7 @@ def shift_day(minutes_late: int, from_time=None, day=None, ask_first=False):
                 "same day; offer to move specific items with move_event."}
     clashes = []
     for ev in gcal.events_on(day, cal):
-        if ev["all_day"] or not _is_fixed(ev["title"], cfg):
+        if ev["all_day"] or not _is_fixed(ev, cfg):
             continue
         fs, fe = _parse(ev["start"]), _parse(ev["end"])
         clashes += [f"{m['title']} overlaps {ev['title']}" for m in moves

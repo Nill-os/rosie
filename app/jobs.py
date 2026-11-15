@@ -111,6 +111,7 @@ MARKED = [
     ("canvas", "Syncs school due dates", _canvas_on, D),
     ("model_scout", "Looks for better models", _cfg_on("model_scout"), 12 * H),
     ("security_watch", "Checks for security holes", _cfg_on("security_watch"), D),
+    ("model_ids", "Checks the planning models still exist", _cfg_on("claude_planning", False), D),
     ("net_quality", "Checks your internet quality", _cfg_on("net_quality_on"), 15 * 60),
     ("tokens", "Counts Claude token use", _cfg_on("token_report_on"), H),
     ("schedules", "Runs your scheduled prompts", _always, None),
@@ -129,6 +130,7 @@ MARKED = [
     ("model", "Reconnects the language model", _always, TICK),
     ("calendar", "Reads your Google calendar", _cfg_on("remind_events"), TICK),
     ("mind", "Learns from your chats", _mind_on, H),
+    ("mind_a0", "Learns from Agent Zero chats", _mind_on, 10 * 60),
     ("corner_graph", "Builds the memory graph", _corner_graph_on, H),
     ("brief_scheduler", "Starts the daily brief on time", _brief_scheduler_on, 5 * 60),
     ("servers", "Finds servers on your network", _always, None),
@@ -365,17 +367,23 @@ def summary(rows: list[dict]) -> dict:
 
 
 _alerted: set = set()
+_alerted_late: set = set()
 
 
-def alert(rows: list[dict], now, add):
-    bad = {r["name"]: r for r in rows if r["state"] == "bad"}
-    _alerted.intersection_update(bad)
-    for name, r in bad.items():
-        if name in _alerted:
+def _alert_state(rows, state, seen, title, prefix, now, add):
+    hit = {r["name"]: r for r in rows if r["state"] == state}
+    seen.intersection_update(hit)
+    for name, r in hit.items():
+        if name in seen:
             continue
         try:
-            add("system", f"Background job needs attention: {name}", f"{r['what']}: {r['result']}", "#/jobs", key=f"jobbad:{name}:{now.date().isoformat()}", now=now)
+            add("system", f"{title}: {name}", f"{r['what']}: {r['result']}", "#/jobs", key=f"{prefix}:{name}:{now.date().isoformat()}", now=now)
         except Exception as e:
             log.warning("job alert for %s failed: %s", name, type(e).__name__)
             continue
-        _alerted.add(name)
+        seen.add(name)
+
+
+def alert(rows: list[dict], now, add):
+    _alert_state(rows, "bad", _alerted, "Background job needs attention", "jobbad", now, add)
+    _alert_state(rows, "late", _alerted_late, "Background job is overdue", "joblate", now, add)

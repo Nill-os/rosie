@@ -13,6 +13,8 @@ DEFAULTS = {
     "model_scout": True,
     "security_watch": True,
     "net_quality_on": True,
+    "claude_task_logs": [],
+    "claude_task_labels": {},
     "security_autopatch": True,
     "proxmox_ssh": "",
     "proxmox_ssh_key": "",

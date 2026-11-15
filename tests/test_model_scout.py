@@ -80,7 +80,7 @@ def test_the_best_candidate_a_day_old_is_tested_first():
 
 def test_she_tests_only_at_night_while_the_owner_is_away_once_a_night(monkeypatch):
     assert ms.test_due({}, NIGHT) is None
-    assert ms.test_due({}, NIGHT.replace(hour=2, minute=30)) == "outside the test window"  # board #871 why-test-window-two-am
+    assert ms.test_due({"tested_on": "2026-10-22"}, NIGHT.replace(hour=2, minute=30)) == "outside the test window"  # board #871 why-test-window-two-am
     assert ms.test_due({"tested_on": "2026-10-23"}, NIGHT) == "already tested one tonight"
     monkeypatch.setattr(corner, "GPU_HOLD", "Paused while the context window is being tuned.")
     assert ms.test_due({}, NIGHT) == corner.GPU_HOLD
@@ -200,3 +200,22 @@ def test_a_stage_check_stops_the_scout(monkeypatch, tmp_path):
     assert ms.test_due({}, NIGHT) is None and not ms._staging()
     flag.write_text("x")
     assert ms.test_due({}, NIGHT) == "Paused while a new version of Rosie is tested." and ms._staging()
+
+
+def test_test_due_catches_up_outside_the_window_when_overdue(monkeypatch):
+    monkeypatch.setattr(ms.shutil, "disk_usage", lambda p: type("U", (), {"free": 1e13})())
+    monkeypatch.setattr(ms.pchealth, "input_idle_s", lambda: 3600)
+    late = NIGHT.replace(hour=14)
+    assert ms.test_due({"tested_on": ""}, late) == "outside the test window"
+    assert ms.test_due({"tested_on": "2026-10-22"}, late) == "outside the test window"
+    assert ms.test_due({"tested_on": "2026-10-20"}, late) == "outside the test window"
+    assert ms.test_due({"tested_on": "2026-10-19"}, late) is None
+    assert ms.test_due({}, late) is None
+    monkeypatch.setattr(corner, "owner_recent", lambda s: True)
+    assert ms.test_due({"tested_on": "2026-10-19"}, late) == "the owner was here recently"
+    monkeypatch.setattr(corner, "owner_recent", lambda s: False)
+    for idle in (60, None):
+        monkeypatch.setattr(ms.pchealth, "input_idle_s", lambda idle=idle: idle)
+        assert ms.test_due({"tested_on": "2026-10-19"}, late) == "outside the test window"
+        assert ms.test_due({}, late) == "outside the test window"
+    print("PASS: model scout catches up")
