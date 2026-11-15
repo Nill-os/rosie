@@ -13,7 +13,14 @@ MIN_WORDS = 3
 
 DUMP = r"""
 import glob, json, os
-out = []
+out, sched = [], set()
+try:
+    t = json.load(open("/a0/usr/scheduler/tasks.json"))
+    for task in (t.get("tasks") if isinstance(t, dict) else t) or []:
+        if isinstance(task, dict) and task.get("context_id"):
+            sched.add(str(task["context_id"]))
+except Exception:
+    pass
 for f in sorted(glob.glob("/a0/usr/chats/*/chat.json")):
     try:
         d = json.load(open(f))
@@ -25,7 +32,8 @@ for f in sorted(glob.glob("/a0/usr/chats/*/chat.json")):
     for t in [*(h.get("bulks") or []), *(h.get("topics") or []), h.get("current")]:
         for m in (t or {}).get("messages") or []:
             msgs.append({"id": m.get("id"), "ai": bool(m.get("ai")), "content": m.get("content")})
-    out.append({"id": d.get("id"), "created": d.get("created_at"), "msgs": msgs})
+    auto = "parent_context_id" in str(d.get("output_data") or "") or str(d.get("id")) in sched
+    out.append({"id": d.get("id"), "created": d.get("created_at"), "auto": auto, "msgs": msgs})
 print(json.dumps(out))
 """
 
@@ -85,7 +93,7 @@ def collect(chats: list[dict] | None = None) -> int:
     owner, n = mind._owner(), 0
     for chat in chats:
         cid = str(chat.get("id") or "")
-        if not cid:
+        if not cid or chat.get("auto"):
             continue
         for t in turns(chat):
             # board #746 safety-outside-text-no-memory

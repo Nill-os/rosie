@@ -64,3 +64,11 @@ def test_dump_failure_raises(monkeypatch):
     else:
         raise AssertionError("expected RuntimeError")
     print("PASS: dump failure raises")
+
+
+def test_collect_skips_subordinate_and_scheduled_chats(monkeypatch):
+    got = []
+    monkeypatch.setattr(mind, "queue", lambda *a, **k: got.append(a) or 1)
+    monkeypatch.setattr(mind, "_owner", lambda: "Sam")
+    assert mind_a0.collect([{**CHAT, "auto": True}]) == 0
+    assert got == []
