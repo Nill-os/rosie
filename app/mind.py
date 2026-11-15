@@ -897,9 +897,22 @@ def step(background: bool = True) -> str:
     return ""
 
 
+def _intake_a0(last: float) -> float:
+    import mind_a0
+    if time.time() - last < mind_a0.EVERY_S:
+        return last
+    try:
+        mind_a0.collect()
+    except Exception as e:
+        state["last_error"] = f"a0 intake: {type(e).__name__}: {e}"[:300]
+    return time.time()
+
+
 def _work_loop():
     time.sleep(120)
+    a0_last = 0.0
     while True:
+        a0_last = _intake_a0(a0_last)
         try:
             did = step()
             jobs.mark("mind", True)
