@@ -528,8 +528,9 @@ def test_db_sets_up_the_schema_once_per_path_and_uses_wal(tmp_path, monkeypatch)
 def test_a_mind_db_replaced_while_running_gets_its_tables_again(tmp_path, monkeypatch):
     monkeypatch.setattr(mind, "DB", tmp_path / "swap.db")
     monkeypatch.setattr(mind, "_migrated", set())
-    with mind._db() as c:
-        c.execute("SELECT count(*) FROM units").fetchone()
+    c = mind._db()
+    c.execute("SELECT count(*) FROM units").fetchone()
+    c.close()
     for p in tmp_path.glob("swap.db*"):
         p.unlink()
     c = mind._db()
@@ -538,3 +539,23 @@ def test_a_mind_db_replaced_while_running_gets_its_tables_again(tmp_path, monkey
     finally:
         c.close()
     print("PASS: a replaced mind.db is set up again")
+
+
+def test_a_mind_db_replaced_in_place_with_an_old_schema_gets_its_new_columns(tmp_path, monkeypatch):
+    import sqlite3
+    monkeypatch.setattr(mind, "DB", tmp_path / "old.db")
+    monkeypatch.setattr(mind, "_migrated", set())
+    c = mind._db()
+    c.close()
+    raw = sqlite3.connect(tmp_path / "old.db")
+    raw.execute("DROP TABLE units")
+    raw.execute("CREATE TABLE units (id INTEGER PRIMARY KEY, text TEXT)")
+    raw.commit()
+    raw.close()
+    c = mind._db()
+    try:
+        cols = {r[1] for r in c.execute("PRAGMA table_info(units)")}
+    finally:
+        c.close()
+    assert {"trust", "pinned", "recalls"} <= cols
+    print("PASS: an old-schema mind.db on the same file is migrated")

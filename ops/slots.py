@@ -5,6 +5,7 @@ import os
 import secrets as _secrets
 import shutil
 import signal
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -249,6 +250,33 @@ def diff():
     return {"slot": idle, "files": files, "summary": stat[-1].strip() if stat else "no changes", "dirty": len(dirty(idle))}
 
 
+def _copy_db(p: Path, dst: Path):
+    try:
+        src_db = sqlite3.connect(p.resolve().as_uri() + "?mode=ro", uri=True, timeout=5)
+        try:
+            dst_db = sqlite3.connect(dst)
+            try:
+                src_db.backup(dst_db)
+            finally:
+                dst_db.close()
+        finally:
+            src_db.close()
+    except sqlite3.Error as e:
+        for f in (dst, dst.with_name(dst.name + "-wal"), dst.with_name(dst.name + "-shm")):
+            f.unlink(missing_ok=True)
+        shutil.copy2(p, dst)
+        wal = p.with_name(p.name + "-wal")
+        try:
+            if wal.exists():
+                shutil.copy2(wal, dst.with_name(dst.name + "-wal"))
+        except OSError:
+            pass
+        try:
+            log_event("stage-db-copy-fallback", db=p.name, error=str(e)[:200])
+        except OSError:
+            pass
+
+
 def _build_stage(idle: str) -> Path:
     src = SLOT[idle]
     live_data = SLOT["A"] / "data"
@@ -258,7 +286,7 @@ def _build_stage(idle: str) -> Path:
     (tmp / "vendor").mkdir()
     (tmp / "data").mkdir()
     for p in live_data.glob("*.db"):
-        shutil.copy2(p, tmp / "data" / p.name)
+        _copy_db(p, tmp / "data" / p.name)
     for n in ("config.json",):
         if (live_data / n).exists():
             shutil.copy2(live_data / n, tmp / "data" / n)

@@ -306,11 +306,30 @@ def test_due_catches_up_outside_the_window_when_overdue(lab, monkeypatch, tmp_pa
     monkeypatch.setattr(corner, "owner_recent", lambda s: True)
     assert sw.due({"ran_on": "2026-10-20"}, noon) == "the owner was here recently"
     monkeypatch.setattr(corner, "owner_recent", lambda s: False)
-    for idle in (60, None):
-        monkeypatch.setattr(sw.pchealth, "input_idle_s", lambda idle=idle: idle)
-        assert sw.due({"ran_on": "2026-10-20"}, noon) == "outside the night window"
-        assert sw.due({}, noon) == "outside the night window"
+    monkeypatch.setattr(sw.pchealth, "input_idle_s", lambda: 60)
+    assert sw.due({"ran_on": "2026-10-20"}, noon) == "outside the night window"
+    assert sw.due({}, noon) == "outside the night window"
+    monkeypatch.setattr(sw.pchealth, "input_idle_s", lambda: None)
+    assert sw.due({}, noon) == "outside the night window"
     print("PASS: security watch catches up")
+
+
+def test_due_catches_up_without_an_idle_source_only_after_72_hours(lab, monkeypatch, tmp_path):
+    monkeypatch.setattr(corner, "STAGE_FLAG", tmp_path / "no-stage")
+    monkeypatch.setattr(corner, "owner_recent", lambda s: False)
+    monkeypatch.setattr(sw.pchealth, "input_idle_s", lambda: None)
+    noon = NIGHT.replace(hour=9)
+    ago = lambda n: (noon.date() - dt.timedelta(days=n)).isoformat()
+    assert sw.due({"ran_on": ago(4)}, noon) is None
+    assert sw.due({"ran_on": ago(1)}, noon) == "outside the night window"
+    assert sw.due({"ran_on": ago(2)}, noon) == "outside the night window"
+    assert sw.due({"ran_on": ago(3)}, noon) is None
+    monkeypatch.setattr(corner, "owner_recent", lambda s: True)
+    assert sw.due({"ran_on": ago(4)}, noon) == "the owner was here recently"
+    monkeypatch.setattr(sw.pchealth, "input_idle_s", lambda: 60)
+    monkeypatch.setattr(corner, "owner_recent", lambda s: False)
+    assert sw.due({"ran_on": ago(4)}, noon) == "outside the night window"
+    print("PASS: no idle source catches up after 72 hours")
 
 
 def test_a_container_gets_a_snapshot_before_its_updates_and_old_ones_are_pruned(monkeypatch):

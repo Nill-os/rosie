@@ -123,7 +123,7 @@ def _no_uvloop(*a, **k):
     raise NetworkBlocked("testguard: uvloop is blocked in tests (its sockets bypass the guard); use asyncio's own loop")
 
 
-AUDIO_PLAYERS = frozenset({"pw-play", "paplay", "aplay", "ffplay", "mpv"})
+AUDIO_PLAYERS = frozenset({"pw-play", "paplay", "aplay", "ffplay", "mpv", "play", "sox", "espeak", "espeak-ng", "spd-say", "cvlc", "vlc", "mplayer", "afplay", "pw-cat", "pacat", "gst-play-1.0", "canberra-gtk-play"})
 _RealPopen = subprocess.Popen
 
 

@@ -389,3 +389,105 @@ def test_a_manual_rollback_still_goes_back_after_the_watchdog_gave_up(world, mon
     r = slots.rollback("owner fixed it")
     assert r["ok"] is True and slots.active() != live and not slots.load_state()["rb_failed"]
     print("PASS: manual rollback goes back")
+
+
+def test_stage_copy_of_a_database_includes_rows_only_in_the_wal(world, tmp_path):
+    import sqlite3
+    (world["a"] / "data" / "tasks.db").unlink()
+    keep = sqlite3.connect(world["a"] / "data" / "tasks.db")
+    keep.execute("PRAGMA journal_mode=WAL")
+    keep.execute("PRAGMA wal_autocheckpoint=0")
+    keep.execute("CREATE TABLE t (name TEXT)")
+    keep.commit()
+    keep.execute("INSERT INTO t VALUES ('Sam')")
+    keep.commit()
+    assert (world["a"] / "data" / "tasks.db-wal").stat().st_size > 0
+    slots.SLOT["B"].mkdir()
+    for d in ("app", "static"):
+        (slots.SLOT["B"] / d).mkdir()
+    stage = slots._build_stage("B")
+    try:
+        copy = sqlite3.connect(stage / "data" / "tasks.db")
+        assert copy.execute("SELECT name FROM t").fetchall() == [("Sam",)]
+        copy.close()
+    finally:
+        keep.close()
+    print("PASS: stage copy includes WAL rows")
+
+
+def test_stage_copy_falls_back_to_a_plain_copy_and_reads_odd_folder_names(world, tmp_path, monkeypatch):
+    import sqlite3
+    odd = tmp_path / "Sam #1 %41?x"
+    odd.mkdir()
+    real = sqlite3.connect(odd / "notes.db")
+    real.execute("CREATE TABLE t (name TEXT)")
+    real.execute("INSERT INTO t VALUES ('Sam')")
+    real.commit()
+    real.close()
+    slots._copy_db(odd / "notes.db", tmp_path / "copy.db")
+    copy = sqlite3.connect(tmp_path / "copy.db")
+    assert copy.execute("SELECT name FROM t").fetchall() == [("Sam",)]
+    copy.close()
+    slots.SLOT["B"].mkdir()
+    for d in ("app", "static"):
+        (slots.SLOT["B"] / d).mkdir()
+    stage = slots._build_stage("B")
+    assert (stage / "data" / "tasks.db").read_text() == "precious"
+    events = (slots.OPS / "events.jsonl").read_text()
+    assert "stage-db-copy-fallback" in events and "tasks.db" in events
+    print("PASS: stage copy reads odd folder names and falls back for non-sqlite files")
+
+
+def test_stage_copy_fallback_keeps_wal_rows_and_survives_an_unwritable_log(world, tmp_path, monkeypatch):
+    import sqlite3
+    src = tmp_path / "w"
+    src.mkdir()
+    keep = sqlite3.connect(src / "notes.db")
+    keep.execute("PRAGMA journal_mode=WAL")
+    keep.execute("PRAGMA wal_autocheckpoint=0")
+    keep.execute("CREATE TABLE t (name TEXT)")
+    keep.commit()
+    keep.execute("INSERT INTO t VALUES ('Sam')")
+    keep.commit()
+
+    def refuse(*a, **k):
+        raise sqlite3.OperationalError("unable to open database file")
+
+    def no_log(*a, **k):
+        raise OSError("read-only ops dir")
+
+    monkeypatch.setattr(slots.sqlite3, "connect", refuse)
+    monkeypatch.setattr(slots, "log_event", no_log)
+    out = tmp_path / "out"
+    out.mkdir()
+    slots._copy_db(src / "notes.db", out / "notes.db")
+    keep.close()
+    monkeypatch.undo()
+    copy = sqlite3.connect(out / "notes.db")
+    assert copy.execute("SELECT name FROM t").fetchall() == [("Sam",)]
+    copy.close()
+    print("PASS: fallback copy keeps WAL rows and ignores an unwritable log")
+
+
+def test_stage_copy_fallback_clears_a_stale_wal_next_to_the_copy(world, tmp_path, monkeypatch):
+    import sqlite3
+    src = tmp_path / "s"
+    src.mkdir()
+    db = sqlite3.connect(src / "notes.db")
+    db.execute("CREATE TABLE t (name TEXT)")
+    db.execute("INSERT INTO t VALUES ('Sam')")
+    db.commit()
+    db.close()
+    out = tmp_path / "o"
+    out.mkdir()
+    (out / "notes.db-wal").write_bytes(b"stale")
+    (out / "notes.db-shm").write_bytes(b"stale")
+
+    def refuse(*a, **k):
+        raise sqlite3.OperationalError("unable to open database file")
+
+    monkeypatch.setattr(slots.sqlite3, "connect", refuse)
+    slots._copy_db(src / "notes.db", out / "notes.db")
+    monkeypatch.undo()
+    assert not (out / "notes.db-wal").exists() and not (out / "notes.db-shm").exists()
+    print("PASS: stale -wal and -shm next to the copy are removed")

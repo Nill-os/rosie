@@ -29,6 +29,7 @@ STATE = ROOT / "data" / "security_watch.json"
 RUN_FROM, RUN_TO = dt.time(3, 0), dt.time(6, 0)
 AWAY_S = 1800
 CATCHUP_H = 36
+NO_IDLE_CATCHUP_H = 72
 PORT = int(os.environ.get("ROSIE_PORT") or 8765)
 OSV = "https://api.osv.dev/v1"
 GITHUB = "https://api.github.com/repos/{}/security-advisories"
@@ -654,7 +655,10 @@ def _overdue(d: dict, now: dt.datetime) -> bool:
         return _pc_away()
     except (TypeError, ValueError):
         return False
-    return (now - last).total_seconds() > CATCHUP_H * 3600 and _pc_away()
+    late = (now - last).total_seconds()
+    if pchealth.input_idle_s() is None:
+        return late > NO_IDLE_CATCHUP_H * 3600
+    return late > CATCHUP_H * 3600 and _pc_away()
 
 
 def _pc_away() -> bool:

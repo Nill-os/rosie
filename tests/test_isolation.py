@@ -214,6 +214,17 @@ def test_audio_players_are_refused(cmd, monkeypatch):
     print("PASS: audio player refused")
 
 
+@pytest.mark.parametrize("name", ["play", "sox", "espeak", "espeak-ng", "spd-say", "cvlc", "vlc", "mplayer", "ffplay", "afplay", "pw-cat", "pacat", "gst-play-1.0", "canberra-gtk-play"])
+def test_more_audio_players_are_refused(name, monkeypatch):
+    import subprocess
+    started = []
+    monkeypatch.setattr(subprocess, "_execute_child", lambda *a, **k: started.append(a), raising=False)
+    with pytest.raises(RuntimeError):
+        subprocess.Popen([name, "x.wav"])
+    assert started == []
+    print("PASS: audio player refused:", name)
+
+
 def test_other_programs_still_start():
     import subprocess
     assert subprocess.run(["true"]).returncode == 0
