@@ -225,6 +225,44 @@ def test_more_audio_players_are_refused(name, monkeypatch):
     print("PASS: audio player refused:", name)
 
 
+@pytest.mark.parametrize("cmd", ["nice paplay x", "cd /tmp && paplay x", ["sudo", "paplay", "x"], ["env", "A=1", "aplay", "x"], "sh -c 'paplay x'", ["/usr/bin/bash", "-c", "mpv x"],
+                                 "mpv.exe x", ["FFPLAY.EXE", "x"], "/usr/bin/gst-play-1.0 x", "nice -n 19 ionice -c3 timeout 5 paplay x", "true || aplay x", "echo hi; mpv x"])
+def test_disguised_audio_players_are_found(cmd):
+    import testguard
+    assert testguard._audio_player(cmd)
+    print("PASS: found player in", cmd)
+
+
+@pytest.mark.parametrize("cmd", ["echo play", ["nice", "ls"], "python -m pytest", "sh -c 'echo hi'", ["env", "A=1", "ls"], "", [],
+                                 'echo "a; play b"', "grep 'a|play b' f", "echo 'x && mpv y'"])
+def test_ordinary_commands_are_not_audio_players(cmd):
+    import testguard
+    assert testguard._audio_player(cmd) == ""
+    print("PASS: not a player:", cmd)
+
+
+@pytest.mark.parametrize("cmd", ["paplay x.wav", ["nice", "aplay", "x.wav"], "cd /tmp && mpv x"])
+def test_os_system_refuses_audio_players(cmd, monkeypatch):
+    import os
+    monkeypatch.setenv("PATH", "/nonexistent")
+    with pytest.raises(RuntimeError):
+        os.system(cmd)
+    print("PASS: os.system refused audio")
+
+
+@pytest.mark.parametrize("cmd", [r"C:\tools\play.exe x", r'"C:\Program Files\mpv\mpv.exe" x', 'cmd /c "x" & ffplay y', 'sh -c "paplay x"'])
+def test_windows_style_commands_are_found(cmd, monkeypatch):
+    import testguard
+    monkeypatch.setattr(testguard, "_POSIX", False)
+    assert testguard._audio_player(cmd)
+    print("PASS: found Windows-style player in", cmd)
+
+
+def test_os_system_still_runs_other_commands():
+    import os
+    assert os.system("exit 0") == 0
+
+
 def test_other_programs_still_start():
     import subprocess
     assert subprocess.run(["true"]).returncode == 0

@@ -71,7 +71,7 @@ class Busy(Exception):
     pass
 
 
-def _has_units(c):
+def _is_current(c):
     return c.execute("SELECT 1 FROM pragma_table_info('units') WHERE name='recalls'").fetchone() is not None
 
 
@@ -85,10 +85,10 @@ def _db():
         c.execute("PRAGMA journal_mode=WAL")
         st = DB.stat()
         key = (str(DB), st.st_dev, st.st_ino)
-        if key in _migrated and _has_units(c):
+        if key in _migrated and _is_current(c):
             return c
         with _init_lock:
-            if key in _migrated and _has_units(c):
+            if key in _migrated and _is_current(c):
                 return c
             c.executescript(SCHEMA)
             if "trust" not in {r[1] for r in c.execute("PRAGMA table_info(units)")}:

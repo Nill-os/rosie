@@ -1,4 +1,6 @@
 import os
+import re
+import shlex
 import sys
 from pathlib import Path
 
@@ -127,17 +129,78 @@ AUDIO_PLAYERS = frozenset({"pw-play", "paplay", "aplay", "ffplay", "mpv", "play"
 _RealPopen = subprocess.Popen
 
 
+_WRAPPERS = frozenset({"nice", "ionice", "env", "sudo", "stdbuf", "timeout", "nohup"})
+_SHELLS = frozenset({"sh", "bash", "zsh", "dash", "ksh"})
+_ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+_DURATION = re.compile(r"^\d+(\.\d+)?[smhd]?$")
+
+
+_POSIX = os.name != "nt"
+_SPLIT_AT = frozenset({"&&", "||", ";", "|", "&", ";;"})
+
+
+def _tokens(text: str) -> list:
+    try:
+        lex = shlex.shlex(text, posix=_POSIX, punctuation_chars=True)
+        lex.whitespace_split = True
+        return list(lex)
+    except ValueError:
+        return text.split()
+
+
+def _unquote(token: str) -> str:
+    if len(token) >= 2 and token[0] == token[-1] and token[0] in "'\"":
+        return token[1:-1]
+    return token
+
+
+def _base(token) -> str:
+    name = re.split(r"[\\/]", os.fsdecode(token))[-1].lower()
+    return name[:-4] if name.endswith(".exe") else name
+
+
+def _tokens_player(tokens) -> str:
+    tokens = [os.fsdecode(t) for t in tokens]
+    i = 0
+    while i < len(tokens):
+        t = tokens[i]
+        if _ASSIGN.match(t) or (i > 0 and (t.startswith("-") or _DURATION.match(t)) and _base(tokens[0]) in _WRAPPERS):
+            i += 1
+        elif _base(t) in _WRAPPERS:
+            i += 1
+        else:
+            break
+    rest = tokens[i:]
+    if not rest:
+        return ""
+    name = _base(rest[0])
+    if name in AUDIO_PLAYERS:
+        return name
+    if name in _SHELLS and "-c" in rest[1:-1]:
+        return _text_player(rest[rest.index("-c") + 1])
+    return ""
+
+
+def _text_player(text: str) -> str:
+    segment = []
+    for t in _tokens(text) + [";"]:
+        if t in _SPLIT_AT:
+            found = _tokens_player(segment)
+            if found:
+                return found
+            segment = []
+        else:
+            segment.append(_unquote(t))
+    return ""
+
+
 def _audio_player(args) -> str:
     if isinstance(args, (str, bytes, os.PathLike)):
-        args = str(os.fsdecode(args)).split()
+        return _text_player(str(os.fsdecode(args)))
     try:
-        first = next(iter(args), None)
-    except TypeError:
+        return _tokens_player(list(args))
+    except (TypeError, ValueError):
         return ""
-    if first is None:
-        return ""
-    name = os.path.basename(os.fsdecode(first))
-    return name if name in AUDIO_PLAYERS else ""
 
 
 class _GuardedPopen(_RealPopen):
@@ -148,7 +211,17 @@ class _GuardedPopen(_RealPopen):
         super().__init__(args, *a, **k)
 
 
-GUARDS = ((subprocess, "Popen", _GuardedPopen), (socket.socket, "connect", _guarded_connect), (socket.socket, "connect_ex", _guarded_connect_ex),
+_real_system = os.system
+
+
+def _guarded_system(command):
+    player = _audio_player(command)
+    if player:
+        raise RuntimeError(f"testguard: audio is blocked in tests (tried to run {player})")
+    return _real_system(command)
+
+
+GUARDS = ((subprocess, "Popen", _GuardedPopen), (os, "system", _guarded_system), (socket.socket, "connect", _guarded_connect), (socket.socket, "connect_ex", _guarded_connect_ex),
           (socket.socket, "sendto", _guarded_sendto),
           (socket, "getaddrinfo", _guarded_getaddrinfo), (socket, "gethostbyname", _guarded_gethostbyname),
           (socket, "gethostbyname_ex", _guarded_gethostbyname_ex))
