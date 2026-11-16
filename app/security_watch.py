@@ -30,6 +30,7 @@ RUN_FROM, RUN_TO = dt.time(3, 0), dt.time(6, 0)
 AWAY_S = 1800
 CATCHUP_H = 36
 NO_IDLE_CATCHUP_H = 72
+FORCE_SCAN_H = 120
 PORT = int(os.environ.get("ROSIE_PORT") or 8765)
 OSV = "https://api.osv.dev/v1"
 GITHUB = "https://api.github.com/repos/{}/security-advisories"
@@ -582,7 +583,7 @@ def report(findings: list[dict], patched: list[dict], d: dict, plan: dict | None
     return new
 
 
-def check(now: dt.datetime | None = None, client: httpx.Client | None = None) -> dict:
+def check(now: dt.datetime | None = None, client: httpx.Client | None = None, patch: bool = True) -> dict:
     now = now or _now()
     d = load()
     since = d.get("ran_at") or _iso(now - dt.timedelta(days=FIRST_LOOKBACK_D))
@@ -602,7 +603,11 @@ def check(now: dt.datetime | None = None, client: httpx.Client | None = None) ->
                 findings += fn()
             except Exception as e:
                 problems.append(f"{label}: {type(e).__name__}: {str(e)[:160]}")
-    patched, auto = [], config.load().get("security_autopatch", True)
+    autopatch = bool(config.load().get("security_autopatch", True))
+    patched, auto = [], autopatch and patch
+    waiting = [n for n, m in inv["machines"].items() if m.get("ct") and m["security"]]
+    if autopatch and not patch and waiting:
+        problems.insert(0, "Security updates wait until you are away from the PC: " + ", ".join(waiting))
     for name, m in inv["machines"].items():
         if auto and m.get("ct") and m["security"]:
             state["doing"] = f"Installing security updates on {name}"
@@ -666,12 +671,21 @@ def _pc_away() -> bool:
     return idle is not None and idle >= AWAY_S
 
 
+def _long_overdue(d: dict, now: dt.datetime) -> bool:
+    try:
+        last = dt.datetime.combine(dt.date.fromisoformat(d["ran_on"]), dt.time(0, 0), tzinfo=now.tzinfo)
+    except (KeyError, TypeError, ValueError):
+        return False
+    return (now - last).total_seconds() > FORCE_SCAN_H * 3600
+
+
 def due(d: dict, now: dt.datetime) -> str | None:
-    if not RUN_FROM <= now.time() <= RUN_TO and not _overdue(d, now):
+    forced = _long_overdue(d, now)
+    if not forced and not RUN_FROM <= now.time() <= RUN_TO and not _overdue(d, now):
         return "outside the night window"
     if d.get("ran_on") == now.date().isoformat():
         return "already checked today"
-    if corner.owner_recent(AWAY_S):
+    if not forced and corner.owner_recent(AWAY_S):
         return "the owner was here recently"
     try:
         if time.time() - corner.STAGE_FLAG.stat().st_mtime < 3600:
@@ -709,7 +723,7 @@ def job(now: dt.datetime, cfg: dict):
         return
     _report_self_patch()
     if cfg.get("security_watch", True) and not state["running"] and due(load(), now) is None:
-        start()
+        start(check, (None, None, not corner.owner_recent(AWAY_S)))
 
 
 def status() -> dict:

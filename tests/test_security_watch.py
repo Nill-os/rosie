@@ -390,3 +390,40 @@ def test_snapshot_names_have_second_resolution_and_prune_handles_both_formats(mo
     assert [c for c in calls if "delsnapshot" in c] == ["pct delsnapshot 101 rosiesec202611010300"]
     assert re.search(r"snapshot rosiesec\d{14} kept", out)
     print("PASS: second-resolution snapshot names, mixed prune")
+
+
+def test_a_scan_five_days_late_runs_while_the_owner_is_here_but_does_not_patch(lab, monkeypatch, tmp_path):
+    monkeypatch.setattr(corner, "STAGE_FLAG", tmp_path / "no-stage")
+    monkeypatch.setattr(corner, "owner_recent", lambda s: True)
+    monkeypatch.setattr(sw.pchealth, "input_idle_s", lambda: 60)
+    noon = NIGHT.replace(hour=12)
+    ago = lambda n: (noon.date() - dt.timedelta(days=n)).isoformat()
+    assert sw.due({"ran_on": ago(4)}, noon) == "outside the night window"
+    assert sw.due({"ran_on": ago(6)}, noon) is None
+    assert sw.due({"ran_on": ago(6)}, NIGHT) is None
+    assert sw.due({"ran_on": "bad"}, noon) == "outside the night window"
+    started = []
+    monkeypatch.setattr(sw, "load", lambda: {"ran_on": ago(6)})
+    monkeypatch.setattr(sw, "_report_self_patch", lambda: None)
+    monkeypatch.setattr(sw.testguard, "active", lambda: False)
+    monkeypatch.setattr(sw, "start", lambda target=None, args=(): started.append(args) or True)
+    sw.job(noon, {"security_watch": True})
+    assert started == [(None, None, False)]
+    monkeypatch.setattr(corner, "owner_recent", lambda s: False)
+    monkeypatch.setattr(sw.pchealth, "input_idle_s", lambda: 3600)
+    sw.job(noon, {"security_watch": True})
+    assert started[-1] == (None, None, True)
+    print("PASS: a long-overdue scan runs while the owner is here and leaves patching for later")
+
+
+def test_a_scan_without_patching_installs_nothing_and_keeps_updates_waiting(lab, monkeypatch):
+    def down(*a, **k):
+        raise RuntimeError("feed down")
+    monkeypatch.setattr(sw, "check_nvd", down)
+    sw.check(NIGHT, lab["client"](), patch=False)
+    d = sw.load()
+    assert lab["ssh"] == [] and lab["started"] == [] and d["findings"]
+    assert d["machines"]["immich (container 101)"]["security"] == ["openssl", "libc6"]
+    assert "wait until you are away" in d["problems"][0] and "immich (container 101)" in d["problems"][0]
+    assert any("feed down" in p for p in d["problems"][1:])
+    print("PASS: a scan without patching leaves the updates waiting")

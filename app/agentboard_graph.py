@@ -80,7 +80,8 @@ def step() -> int:
                 corner_graph._drop(e)
                 break
             if corner_graph._lost(e) or corner_graph._loading(e):  # board #705 why-crashing-post-tries
-                _record(p, error=f"the graph database stopped while adding this ({type(e).__name__})")
+                corner_graph.note_crash(f"post:{p['id']}", f"{corner_graph.CRASHED} ({type(e).__name__})")
+                _record(p, error=f"{corner_graph.CRASHED} ({type(e).__name__})")
                 corner_graph._drop(e)
                 break
             state["last_error"] = f"post {p['id']}: {type(e).__name__}: {str(e)[:200]}"

@@ -1984,3 +1984,23 @@ def test_vector_reachability_is_not_asked_every_minute(monkeypatch):
     monkeypatch.setattr(vector_pod.vector_dev, "available", lambda ip: (asks.append(ip), True)[1])
     monkeypatch.setattr(vector_pod, "_probe", {"ip": None, "t": 0.0})
     assert all(vector_pod._reachable("1.2.3.4") for _ in range(10)) and len(asks) == 1
+
+
+def test_corner_db_uses_wal_and_waits_for_a_busy_writer(tmp_path, monkeypatch):
+    import sqlite3
+    import threading
+    monkeypatch.setattr(corner, "DIR", tmp_path / "c")
+    with corner._db() as c:
+        assert c.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+        assert c.execute("PRAGMA busy_timeout").fetchone()[0] == 30000
+    hold = sqlite3.connect(tmp_path / "c" / "corner.db", check_same_thread=False)
+    hold.execute("BEGIN IMMEDIATE")
+    with corner._db() as c:
+        assert c.execute("SELECT COUNT(*) FROM finds").fetchone()[0] == 0
+    threading.Timer(0.5, hold.rollback).start()
+    with corner._db() as c:
+        c.execute("INSERT INTO trail(at, kind, title) VALUES('2026-11-15T10:00:00-08:00', 'read', 'x')")
+    hold.close()
+    with corner._db() as c:
+        assert c.execute("SELECT COUNT(*) FROM trail").fetchone()[0] == 1
+    print("PASS: corner.db reads while a writer holds it and waits its turn to write")

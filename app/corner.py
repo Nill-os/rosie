@@ -227,11 +227,15 @@ def _db():
     path = DIR / "corner.db"
     testguard.check(path)
     DIR.mkdir(parents=True, exist_ok=True)
-    c = sqlite3.connect(path, timeout=10)
+    if not path.exists():
+        _migrated.discard(str(path))
+    c = sqlite3.connect(path, timeout=30)
     c.row_factory = sqlite3.Row
     try:
-        c.executescript(SCHEMA)
+        c.execute("PRAGMA busy_timeout=30000")
         if str(path) not in _migrated:
+            c.execute("PRAGMA journal_mode=WAL")
+            c.executescript(SCHEMA)
             cols = {r[1] for r in c.execute("PRAGMA table_info(finds)")}
             for col, decl in (("grp", "TEXT"), ("grp_by", "TEXT")):
                 if col not in cols:

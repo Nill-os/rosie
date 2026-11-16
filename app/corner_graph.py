@@ -12,6 +12,7 @@ os.environ.setdefault("GRAPHITI_TELEMETRY_ENABLED", "false")
 
 import httpx  # noqa: E402
 
+import atomic  # noqa: E402
 import corner  # noqa: E402
 import ctxsize  # noqa: E402
 import jobs  # noqa: E402
@@ -38,6 +39,8 @@ BACKLOG_ROUND_S = 5
 RETRY_S = 300
 FIND_SETTLE_S = 3600
 MAX_TRIES = 3
+CRASHED = "the graph database stopped while adding this"
+CRASH_KEEP = 200
 EXTRACT_HINT = ("Rosie is the one who found, saved or wrote this; she is not a subject of it. Do not extract Rosie as an entity or a "
                 "fact about Rosie. Extract the things the page, picture or note is about (projects, products, people, organizations, "
                 "places, ideas) and the facts between them.")
@@ -366,7 +369,8 @@ def _db():
     @contextlib.contextmanager
     def cm():
         with corner._db() as db:
-            db.executescript(SCHEMA)
+            if not db.execute("PRAGMA table_info(graph_items)").fetchall():
+                db.executescript(SCHEMA)
             yield db
     return cm()
 
@@ -502,7 +506,41 @@ def skip(its: list[dict], why: str) -> int:
     return len(its)
 
 
+_crash_lock = threading.Lock()
+
+
+def note_crash(key: str, error: str):
+    path = corner.DIR / "graph_crashes.jsonl"
+    with _crash_lock:
+        _write_crash(path, key, error)
+
+
+def _write_crash(path: Path, key: str, error: str):
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()[-(CRASH_KEEP - 1):] if path.exists() else []
+        lines.append(json.dumps({"at": corner._iso(), "key": key, "error": error[:200]}))
+        atomic.write_text(path, "\n".join(lines) + "\n")
+    except OSError:
+        pass
+
+
+def crashes(n: int = 20) -> list[dict]:
+    path = corner.DIR / "graph_crashes.jsonl"
+    out = []
+    try:
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines()[-n:]:
+            try:
+                out.append(json.loads(line))
+            except ValueError:
+                continue
+    except OSError:
+        return []
+    return out
+
+
 def _record(it: dict, episode: str | None = None, error: str = ""):
+    if error.startswith(CRASHED):
+        note_crash(it["key"], error)
     with _db() as db:
         db.execute("INSERT INTO graph_items(key, kind, at, title, urls, grp) VALUES(?,?,?,?,?,?) ON CONFLICT(key) DO NOTHING",
                    (it["key"], it["kind"], it["at"], it["title"][:300], json.dumps(it["urls"][:5]), it["grp"]))
@@ -557,7 +595,7 @@ def step(now: dt.datetime | None = None) -> int:
                 break
             if _lost(e) or _loading(e):
                 # board #722 fix-segfault-retry-cap
-                _record(it, error=f"the graph database stopped while adding this ({type(e).__name__})")
+                _record(it, error=f"{CRASHED} ({type(e).__name__})")
                 _drop(e)
                 break
             state["last_error"] = f"{it['key']}: {type(e).__name__}: {_clip(e, 200)}"
@@ -640,7 +678,7 @@ def status() -> dict:
     else:
         line = "Corner memory is off: " + why
     return {"on": on, "why": why, "line": line, "done": done, "total": total, "failed": failed, "secs_per": state["secs_per"],
-            "last_add": state["last_add"]}
+            "last_add": state["last_add"], "crashes": crashes(5)}
 
 
 RULE = ("Answer only from these facts and finds, and give the source link (url) for each one you use. They are Rosie's own corner records; "

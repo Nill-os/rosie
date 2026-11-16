@@ -882,6 +882,33 @@ def test_a_piece_that_crashes_the_database_is_charged_a_try(graph, monkeypatch):
         left = db.execute("SELECT COUNT(*) FROM graph_items WHERE episode IS NULL AND tries < ?", (cg.MAX_TRIES,)).fetchone()[0]
         first = db.execute("SELECT tries FROM graph_items ORDER BY rowid LIMIT 1").fetchone()[0]
     assert first == cg.MAX_TRIES and left < cg.BATCH + 1
+    log = cg.crashes(50)
+    assert len(log) >= cg.MAX_TRIES and all(x["error"].startswith(cg.CRASHED) and x["key"] for x in log)
+    print("PASS: each charged crash names the piece in the crash log")
+
+
+def test_the_crash_log_keeps_only_the_newest_lines_and_skips_bad_ones(graph, monkeypatch):
+    monkeypatch.setattr(cg, "CRASH_KEEP", 3)
+    for i in range(5):
+        cg.note_crash(f"find:{i}", cg.CRASHED)
+    (corner.DIR / "graph_crashes.jsonl").open("a").write("not json\n")
+    assert [x["key"] for x in cg.crashes()] == ["find:2", "find:3", "find:4"]
+    cg.note_crash("find:9", cg.CRASHED)
+    assert [x["key"] for x in cg.crashes()] == ["find:4", "find:9"]
+    assert [x["key"] for x in cg.status()["crashes"]] == ["find:4", "find:9"]
+    import threading
+    monkeypatch.setattr(cg, "CRASH_KEEP", 200)
+    real = cg._write_crash
+
+    def slow(*a):
+        time.sleep(0.01)
+        real(*a)
+    monkeypatch.setattr(cg, "_write_crash", slow)
+    ts = [threading.Thread(target=cg.note_crash, args=(f"pic:{i}", cg.CRASHED)) for i in range(8)]
+    [t.start() for t in ts]
+    [t.join() for t in ts]
+    assert len([x for x in cg.crashes(50) if x["key"].startswith("pic:")]) == 8
+    print("PASS: the crash log stays short")
 
 
 def test_the_same_database_still_loading_charges_no_try(graph, monkeypatch):
@@ -912,6 +939,7 @@ def test_a_board_post_that_crashes_the_database_is_charged_a_try(graph, monkeypa
     graph.fail = BusyLoadingError("Redis is loading the dataset in memory")
     ag.step()
     assert len(tried) == 1 and "stopped" in tried[0] and cg.state["on"] is False
+    assert [x["key"] for x in cg.crashes()] == ["post:7"]
 
 
 def test_fast_path_single_piece_that_crashes_the_database_is_charged(fast, monkeypatch):
@@ -972,3 +1000,26 @@ def test_fast_path_batch_that_crashes_the_database_goes_one_by_one(fast, monkeyp
     cg.state["checked"] -= cg.RETRY_S + 1
     cg.step()
     assert _tries() == 0 and graph_batch._solo["n"] > 1
+
+
+def test_a_corner_db_recreated_while_running_gets_its_tables_back(graph):
+    with cg._db() as db:
+        db.execute("SELECT COUNT(*) FROM graph_items").fetchone()
+    for f in corner.DIR.glob("corner.db*"):
+        f.unlink()
+    with cg._db() as db:
+        assert db.execute("SELECT COUNT(*) FROM graph_items").fetchone()[0] == 0
+        assert db.execute("SELECT COUNT(*) FROM finds").fetchone()[0] == 0
+        assert db.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+    print("PASS: a recreated corner.db gets its schema again")
+
+
+def test_a_corrupt_crash_log_does_not_break_status_and_gets_new_lines(graph):
+    path = corner.DIR / "graph_crashes.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"\xff\xfe broken\n")
+    assert cg.crashes() == []
+    assert cg.status()["crashes"] == []
+    cg.note_crash("find:5", cg.CRASHED)
+    assert [x["key"] for x in cg.crashes()] == ["find:5"]
+    print("PASS: a corrupt crash log is skipped and new crashes still land")
