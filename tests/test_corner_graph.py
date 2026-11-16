@@ -889,26 +889,121 @@ def test_a_piece_that_crashes_the_database_is_charged_a_try(graph, monkeypatch):
 
 def test_the_crash_log_keeps_only_the_newest_lines_and_skips_bad_ones(graph, monkeypatch):
     monkeypatch.setattr(cg, "CRASH_KEEP", 3)
+    path = corner.DIR / "graph_crashes.jsonl"
     for i in range(5):
         cg.note_crash(f"find:{i}", cg.CRASHED)
-    (corner.DIR / "graph_crashes.jsonl").open("a").write("not json\n")
     assert [x["key"] for x in cg.crashes()] == ["find:2", "find:3", "find:4"]
+    path.open("a").write("not json\n")
+    assert [x["key"] for x in cg.crashes()] == ["find:3", "find:4"]
     cg.note_crash("find:9", cg.CRASHED)
+    assert len(path.read_text().splitlines()) <= 6
     assert [x["key"] for x in cg.crashes()] == ["find:4", "find:9"]
     assert [x["key"] for x in cg.status()["crashes"]] == ["find:4", "find:9"]
-    import threading
-    monkeypatch.setattr(cg, "CRASH_KEEP", 200)
-    real = cg._write_crash
+    for i in range(20):
+        cg.note_crash(f"more:{i}", cg.CRASHED)
+    assert len(path.read_text().splitlines()) <= 6
+    print("PASS: the crash log stays short")
 
-    def slow(*a):
-        time.sleep(0.01)
-        real(*a)
-    monkeypatch.setattr(cg, "_write_crash", slow)
-    ts = [threading.Thread(target=cg.note_crash, args=(f"pic:{i}", cg.CRASHED)) for i in range(8)]
+
+def test_crash_lines_from_two_processes_at_once_are_all_kept(graph, monkeypatch):
+    import threading
+    path = corner.DIR / "graph_crashes.jsonl"
+    real = cg.atomic.write_text
+
+    def slow(*a, **k):
+        time.sleep(0.02)
+        real(*a, **k)
+    monkeypatch.setattr(cg.atomic, "write_text", slow)
+    real_read = Path.read_text
+
+    def slow_read(self, *a, **k):
+        out = real_read(self, *a, **k)
+        time.sleep(0.02)
+        return out
+    monkeypatch.setattr(Path, "read_text", slow_read)
+    ts = [threading.Thread(target=cg._write_crash, args=(path, f"proc:{i}", cg.CRASHED)) for i in range(8)]
     [t.start() for t in ts]
     [t.join() for t in ts]
-    assert len([x for x in cg.crashes(50) if x["key"].startswith("pic:")]) == 8
-    print("PASS: the crash log stays short")
+    assert len([x for x in cg.crashes(50) if x["key"].startswith("proc:")]) == 8
+    print("PASS: crash lines written at once by separate processes are all kept")
+
+
+def test_a_trim_in_one_process_does_not_drop_a_line_another_process_just_wrote(graph, monkeypatch):
+    import threading
+    monkeypatch.setattr(cg, "CRASH_KEEP", 4)
+    path = corner.DIR / "graph_crashes.jsonl"
+    for i in range(8):
+        cg.note_crash(f"old:{i}", cg.CRASHED)
+    real_read = Path.read_text
+    first = threading.Event()
+
+    def stale_read(self, *a, **k):
+        out = real_read(self, *a, **k)
+        if self == path and not first.is_set():
+            first.set()
+            time.sleep(0.3)
+        return out
+    monkeypatch.setattr(Path, "read_text", stale_read)
+    a = threading.Thread(target=cg._write_crash, args=(path, "proc:a", cg.CRASHED))
+    a.start()
+    first.wait(2)
+    b = threading.Thread(target=cg._write_crash, args=(path, "proc:b", cg.CRASHED))
+    b.start()
+    a.join()
+    b.join()
+    keys = [x["key"] for x in cg.crashes(50)]
+    assert "proc:a" in keys and "proc:b" in keys
+    print("PASS: a trim never drops a line another process wrote meanwhile")
+
+
+def test_a_crash_line_is_kept_when_the_lock_cannot_be_taken(graph, monkeypatch):
+    if os.name == "nt":
+        pytest.skip("flock exists only on POSIX")
+    import fcntl
+
+    def stuck(*a, **k):
+        raise OSError("lock busy")
+    monkeypatch.setattr(fcntl, "flock", stuck)
+    cg.note_crash("find:locked-out", cg.CRASHED)
+    assert [x["key"] for x in cg.crashes()] == ["find:locked-out"]
+    print("PASS: a crash line is still written when the lock is busy")
+
+
+def test_a_crash_line_is_kept_when_the_lock_file_cannot_be_opened(graph, monkeypatch):
+    import builtins
+    path = corner.DIR / "graph_crashes.jsonl"
+    real_open = builtins.open
+
+    def no_lock(file, *a, **k):
+        if str(file).endswith(".lock"):
+            raise PermissionError("lock file denied")
+        return real_open(file, *a, **k)
+    monkeypatch.setattr(builtins, "open", no_lock)
+    cg.note_crash("find:no-lock-file", cg.CRASHED)
+    monkeypatch.setattr(builtins, "open", real_open)
+    assert [x["key"] for x in cg.crashes()] == ["find:no-lock-file"]
+    print("PASS: a crash line is still written when the lock file cannot be opened")
+
+
+def test_a_failed_trim_releases_the_lock_for_the_next_writer(graph, monkeypatch):
+    import threading
+    monkeypatch.setattr(cg, "CRASH_KEEP", 1)
+    path = corner.DIR / "graph_crashes.jsonl"
+    cg.note_crash("find:0", cg.CRASHED)
+    cg.note_crash("find:1", cg.CRASHED)
+
+    def broken(*a, **k):
+        raise OSError("disk full")
+    real = cg.atomic.write_text
+    monkeypatch.setattr(cg.atomic, "write_text", broken)
+    cg.note_crash("find:2", cg.CRASHED)
+    monkeypatch.setattr(cg.atomic, "write_text", real)
+    t = threading.Thread(target=cg._write_crash, args=(path, "find:3", cg.CRASHED))
+    t.start()
+    t.join(5)
+    assert not t.is_alive()
+    assert len(path.read_text().splitlines()) <= 2 and cg.crashes()[-1]["key"] == "find:3"
+    print("PASS: a failed trim leaves the lock free and the next write trims")
 
 
 def test_the_same_database_still_loading_charges_no_try(graph, monkeypatch):

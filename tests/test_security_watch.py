@@ -426,4 +426,18 @@ def test_a_scan_without_patching_installs_nothing_and_keeps_updates_waiting(lab,
     assert d["machines"]["immich (container 101)"]["security"] == ["openssl", "libc6"]
     assert "wait until you are away" in d["problems"][0] and "immich (container 101)" in d["problems"][0]
     assert any("feed down" in p for p in d["problems"][1:])
+    assert not any("waiting on immich" in t for t in titles(lab))
+    sw.check(NIGHT + dt.timedelta(days=1), lab["client"](), patch=False)
+    assert any("2 security updates waiting on immich (container 101)" in t for t in titles(lab))
     print("PASS: a scan without patching leaves the updates waiting")
+
+
+def test_held_container_updates_with_autopatch_off_never_promise_an_install(lab, monkeypatch):
+    import config
+    monkeypatch.setattr(config, "load", lambda: {**config.DEFAULTS, "security_autopatch": False})
+    sw.check(NIGHT, lab["client"]())
+    sw.check(NIGHT + dt.timedelta(days=1), lab["client"]())
+    bodies = [a[2] for a, _ in lab["inbox"] if "waiting on immich" in a[1]]
+    assert bodies and all("Automatic security updates are off" in b and "install the next night" not in b for b in bodies)
+    assert lab["ssh"] == []
+    print("PASS: held container updates with autopatch off say to press Update, not that they install")

@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import datetime as dt
 import json
 import os
@@ -515,11 +516,52 @@ def note_crash(key: str, error: str):
         _write_crash(path, key, error)
 
 
-def _write_crash(path: Path, key: str, error: str):
+@contextlib.contextmanager
+def _file_lock(path: Path):
     try:
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()[-(CRASH_KEEP - 1):] if path.exists() else []
-        lines.append(json.dumps({"at": corner._iso(), "key": key, "error": error[:200]}))
-        atomic.write_text(path, "\n".join(lines) + "\n")
+        f = open(path.with_name(path.name + ".lock"), "a+b")
+    except OSError:
+        yield False
+        return
+    with f:
+        if os.name == "nt":
+            import msvcrt
+            f.seek(0)
+            try:
+                msvcrt.locking(f.fileno(), msvcrt.LK_LOCK, 1)
+            except OSError:
+                yield False
+                return
+            try:
+                yield True
+            finally:
+                f.seek(0)
+                msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+            try:
+                fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            except OSError:
+                yield False
+                return
+            try:
+                yield True
+            finally:
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+
+
+def _write_crash(path: Path, key: str, error: str):
+    line = json.dumps({"at": corner._iso(), "key": key, "error": error[:200]}) + "\n"
+    try:
+        testguard.check(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with _file_lock(path) as locked:
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(line)
+            if locked:
+                lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+                if len(lines) > 2 * CRASH_KEEP:
+                    atomic.write_text(path, "\n".join(lines[-CRASH_KEEP:]) + "\n")
     except OSError:
         pass
 
@@ -528,7 +570,7 @@ def crashes(n: int = 20) -> list[dict]:
     path = corner.DIR / "graph_crashes.jsonl"
     out = []
     try:
-        for line in path.read_text(encoding="utf-8", errors="replace").splitlines()[-n:]:
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines()[-min(n, CRASH_KEEP):]:
             try:
                 out.append(json.loads(line))
             except ValueError:
