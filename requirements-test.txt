@@ -1,5 +1,6 @@
 # What the automatic checks install: enough to import the app and run tests/ (no speech models, no GPU)
 pytest
+pytest-xdist
 httpx
 fastapi
 uvicorn

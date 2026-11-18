@@ -33,7 +33,7 @@ PATCHES = [("config", "PATH", "config.json"), ("tasks", "DB", "tasks.db"), ("lif
            ("memory", "DB", "memory.db"), ("lessons", "DB", "lessons.db"), ("mind", "DB", "mind.db"),
            ("proposals", "DB", "proposals.db"), ("skills", "DIR", "skills"), ("pc_tools", "LOG", "audit.log"),
            ("server", "VOICE_CHAT", "voice_chat.json"), ("server", "SECRETS", "secrets"), ("server", "VOICE_DIR", "voices"),
-           ("briefs", "DB", "briefs.db"), ("briefs", "LOG", "hub.log"), ("projects", "DB", "projects.db"), ("mailwatch", "DB", "mail.db"),
+           ("briefs", "DB", "briefs.db"), ("briefs", "LOG", "hub.log"), ("projects", "DB", "projects.db"), ("mailwatch", "DB", "mail.db"), ("team", "LOG", "rosie-team.log"),
            ("gcal", "CLIENT_FILE", "secrets/google_client.json"), ("gcal", "TOKEN_FILE", "secrets/google_token.json"),
            ("gmail", "CLIENT_FILE", "secrets/google_client.json"), ("workflows", "VAULT", "vault"), ("workflows", "MEMFILE", "vault/memory.md"), ("workflows", "SCRATCH", "vault/Scratch Pad.md"),
            ("workflows", "BOARD", "vault/Task Board.md"), ("workflows", "DAILY", "vault/Daily Notes"), ("workflows", "MEETINGS", "vault/Meetings"),

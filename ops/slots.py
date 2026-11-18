@@ -359,8 +359,25 @@ def stage(with_eval=True):
         flag.unlink(missing_ok=True)
 
 
-def pytest_command(py):
-    return [py, "-m", "pytest", "-q", "-x", "--no-header", "-p", "no:cacheprovider", "--durations=30"]
+TEST_WORKERS = 6
+
+
+def stage_workers(py):
+    try:
+        r = run([py, "-c", "import xdist"], timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return 0
+    return TEST_WORKERS if r.returncode == 0 else 0
+
+
+def gentle(cmd):
+    nice = shutil.which("nice") if os.name != "nt" else None
+    return [nice, "-n", "19", *cmd] if nice else cmd
+
+
+def pytest_command(py, workers=0):
+    cmd = [py, "-m", "pytest", "-q", "-x", "--no-header", "-p", "no:cacheprovider", "--durations=30"]
+    return cmd + ["-n", str(workers)] if workers else cmd
 
 
 def save_stage_log(text):
@@ -372,7 +389,7 @@ def save_stage_log(text):
 def _stage(idle, with_eval):
     py = str(SLOT["A"] / ".venv" / "bin" / "python")
     res = {"slot": idle, "head": head(idle), "started": time.time()}
-    t = run(pytest_command(py), cwd=SLOT[idle], timeout=900)
+    t = run(gentle(pytest_command(py, stage_workers(py))), cwd=SLOT[idle], timeout=900)
     save_stage_log(t.stdout)
     last = t.stdout.strip().splitlines()[-1] if t.stdout.strip() else t.stderr.strip()[-200:]
     res["tests"] = {"ok": t.returncode == 0, "summary": last}

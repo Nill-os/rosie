@@ -562,3 +562,8 @@ def test_the_model_cannot_confirm_its_own_team_call(fake):
     assert not started and len(t.pending) == 1
     actions.cancel(t.pending[0]["token"])
     print("PASS: a model-supplied _confirmed is stripped and the owner is asked")
+
+
+def test_no_test_reads_or_writes_the_real_team_log(tmp_path):
+    assert team.LOG == tmp_path / "rosie-team.log"
+    print("PASS: every test gets its own team log, so a real team run on this PC cannot change a test result")

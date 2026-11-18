@@ -507,3 +507,29 @@ def test_stage_log_is_written_next_to_state_and_overwritten(tmp_path, monkeypatc
     p = tmp_path / "ops" / "last_stage_pytest.log"
     assert p.read_text() == "second run\n"
     print("PASS: stage log is overwritten beside the state file")
+
+
+def test_stage_tests_run_on_several_workers_only_when_the_plugin_is_there(monkeypatch):
+    class R:
+        def __init__(self, rc):
+            self.returncode = rc
+    monkeypatch.setattr(slots, "run", lambda cmd, **kw: R(0))
+    n = slots.stage_workers("/x/py")
+    assert 2 <= n <= 8
+    assert slots.pytest_command("/x/py", n)[-2:] == ["-n", str(n)]
+    monkeypatch.setattr(slots, "run", lambda cmd, **kw: R(1))
+    assert slots.stage_workers("/x/py") == 0
+    assert "-n" not in slots.pytest_command("/x/py", 0) and "-n" not in slots.pytest_command("/x/py")
+
+    def boom(cmd, **kw):
+        raise OSError("no python")
+    monkeypatch.setattr(slots, "run", boom)
+    assert slots.stage_workers("/x/py") == 0
+    monkeypatch.setattr(slots.shutil, "which", lambda name: "/usr/bin/nice")
+    monkeypatch.setattr(slots.os, "name", "nt")
+    assert slots.gentle(["a", "b"]) == ["a", "b"]
+    monkeypatch.setattr(slots.os, "name", "posix")
+    assert slots.gentle(["a", "b"]) == ["/usr/bin/nice", "-n", "19", "a", "b"]
+    monkeypatch.setattr(slots.shutil, "which", lambda name: None)
+    assert slots.gentle(["a", "b"]) == ["a", "b"]
+    print("PASS: the stage uses up to 8 test workers at low priority with the plugin and one process without it")
