@@ -1,0 +1,4 @@
+# Rosie memory graph (corner graph, board history). Optional: without these packages the graph features stay off.
+graphiti-core>=0.31.1
+falkordb>=1.8.0
+redis>=8.1.0

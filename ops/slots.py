@@ -524,6 +524,11 @@ def stage(with_eval=True):
     if claimed(idle):
         return {"ok": False, "error": claimed(idle) + " Release the claim first (the stage command runs as its own agent), then run stage again.", "claimed": True}
     commit("Self-update (staged)")
+    built = ensure_venv(idle)
+    if "error" in built:
+        res = {"slot": idle, "head": head(idle), "ok": False, "error": built["error"]}
+        save_state(last_stage=res)
+        return res
     flag = OPS / "staging"
     flag.parent.mkdir(parents=True, exist_ok=True)
     flag.write_text(str(time.time()))

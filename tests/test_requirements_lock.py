@@ -21,11 +21,11 @@ def names(path):
 def test_the_lock_covers_every_requirement_and_pins_with_hashes():
     lock_text = (ROOT / "requirements.lock").read_text(encoding="utf-8")
     pinned = {fold(m.group(1)) for m in re.finditer(r"^([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^\]]*\])?==", lock_text, re.M)}
-    wanted = names(ROOT / "requirements.txt") | names(ROOT / "requirements-test.txt")
+    wanted = names(ROOT / "requirements.txt") | names(ROOT / "requirements-test.txt") | names(ROOT / "requirements-graph.txt")
     assert len(wanted) > 20 and len(pinned) > len(wanted)
     assert wanted - pinned == set()
     assert "--hash=sha256:" in lock_text
-    print("PASS: requirements.lock pins every name in requirements.txt and requirements-test.txt")
+    print("PASS: requirements.lock pins every name in the three requirement files")
 
 
 def test_the_name_check_bites_on_a_missing_name():

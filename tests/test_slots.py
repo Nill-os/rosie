@@ -842,3 +842,34 @@ def test_a_shared_environment_reports_what_differs_from_the_lock(world, monkeypa
     monkeypatch.setattr(slots, "run", lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, "", "x"))
     assert slots.env_drift("B") == ["the installed packages could not be listed"]
     print("PASS: drift between an environment and the lock is listed; platform-only packages are skipped")
+
+
+def test_stage_rebuilds_the_environment_when_the_lock_changed_after_prepare(world, monkeypatch):
+    venv = idle_b(world)
+    lock = world["b"] / "requirements.lock"
+    lock.write_text("a==1\n")
+    calls, staged = [], []
+    monkeypatch.setattr(slots, "_build_venv", recorder(calls))
+    monkeypatch.setattr(slots, "claimed", lambda slot: "")
+    monkeypatch.setattr(slots, "commit", lambda message="": {"ok": True})
+    monkeypatch.setattr(slots, "_stage", lambda idle, with_eval: staged.append((venv / ".rosie-req").read_text().strip()) or {"ok": True})
+    assert slots.ensure_venv("B")["venv"] == "built"
+    assert slots.stage(False) == {"ok": True} and calls == ["B"]
+    lock.write_text("a==2\n")
+    assert slots.stage(False) == {"ok": True} and calls == ["B", "B"]
+    assert staged[-1] == slots.req_stamp("B") != staged[0]
+    monkeypatch.setattr(slots, "_build_venv", recorder(calls, fail=True))
+    monkeypatch.setattr(slots, "release", lambda: {"ok": True})
+    lock.write_text("a==3\n")
+    r = slots.stage(False)
+    assert r["ok"] is False and "environment failed" in r["error"] and len(staged) == 2
+    assert slots.load_state()["last_stage"]["ok"] is False and "error" in slots.switch()
+    print("PASS: stage rebuilds the environment after a lock change and stops when the build fails")
+
+
+def test_the_lock_keeps_pip_so_a_built_environment_can_patch_itself():
+    root = Path(slots.__file__).resolve().parent.parent
+    lock = (root / "requirements.lock").read_text()
+    assert any(ln.startswith("pip==") for ln in lock.splitlines())
+    assert any(ln.split(">=")[0].strip() == "pip" for ln in (root / "requirements.txt").read_text().splitlines())
+    print("PASS: pip is a locked requirement, so the self-patch and tool installs work in a synced environment")
