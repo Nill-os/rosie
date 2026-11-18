@@ -31,6 +31,8 @@ import corner_graph  # noqa: E402
 corner_graph.recall = lambda *a, **k: ""  # board #835 why-corner-recall-stubbed
 import mind  # noqa: E402
 mind.DB = TMP / "mind.db"
+import traces  # noqa: E402
+traces.path = lambda: TMP / "traces.jsonl"
 JOBS = []
 
 

@@ -21,6 +21,7 @@ if os.name != "nt":
     import pty
     import termios
 
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, File, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.gzip import GZipMiddleware
@@ -57,7 +58,15 @@ import ollama_url
 import sessionkey
 
 STATIC = Path(__file__).resolve().parent.parent / "static"
-app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+
+
+@asynccontextmanager
+async def _lifespan(_app):
+    await asyncio.to_thread(_startup)
+    yield
+
+
+app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=_lifespan)
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 app.include_router(hub.router)
 app.include_router(paper_api.router)
@@ -70,7 +79,6 @@ app.include_router(graphview_api.router)
 app.include_router(vector_api.router)
 
 
-@app.on_event("startup")
 def _startup():
     if os.environ.get("ROSIE_SANDBOX"):
         return

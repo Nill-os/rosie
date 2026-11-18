@@ -7,6 +7,7 @@ Type=simple
 ExecStart=/bin/sh -c 'R=%h/assistant; [ "$$(cat %h/rosie-ops/active 2>/dev/null)" = B ] && R=%h/assistant-b; [ -f "$$R/ops/units/%n" ] || { [ "$$R" = %h/assistant ] && R=%h/assistant-b || R=%h/assistant; }; cd "$$R" && exec "$$R/.venv/bin/python" "$$R/app/mcp_server.py" --port 8772'
 Restart=always
 RestartSec=3
+TimeoutStopSec=5
 StandardOutput=journal
 StandardError=journal
 

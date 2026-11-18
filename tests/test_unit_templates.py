@@ -21,6 +21,20 @@ def test_every_unit_template_resolves_the_active_slot():
             assert "%h/assistant" not in line.replace(RESOLVE, ""), (u.name, line)
 
 
+def test_restart_always_python_units_stop_within_the_switch_budget():
+    checked = 0
+    for u in UNITS:
+        text = u.read_text()
+        if "Restart=always" not in text or "python" not in text:
+            continue
+        m = re.search(r"^TimeoutStopSec=(\d+)", text, re.M)
+        assert m, f"{u.name} is Restart=always but has no TimeoutStopSec; slots.py switch gives try-restart 30s"
+        assert int(m.group(1)) <= 25, f"{u.name} TimeoutStopSec {m.group(1)}s is too close to the 30s switch budget"
+        checked += 1
+    assert checked, "no Restart=always python unit found to check"
+    print("PASS: every Restart=always python unit stops well within the 30s switch try-restart budget")
+
+
 def test_the_installer_copies_the_unit_templates():
     assert "units/*.service" in (ROOT / "ops" / "install.sh").read_text()
 

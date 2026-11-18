@@ -1,4 +1,5 @@
 import bisect
+import concurrent.futures
 import datetime as dt
 import inspect
 import json
@@ -1473,6 +1474,37 @@ def _whole(new, short, full):
     return new if short is full else full + new[len(short):]
 
 
+def _timed(fn):
+    t0 = time.perf_counter()
+    try:
+        return fn(), time.perf_counter() - t0, ""
+    except Exception as e:
+        return "", time.perf_counter() - t0, type(e).__name__
+
+
+def _recall_steps(user_text: str, given, agent_name: str):
+    chit = bool(CHITCHAT.match(user_text.strip()))
+    jobs = {}
+    if given is None and not chit:
+        jobs["graph"] = lambda: corner_graph.recall(user_text)
+    if not chit:
+        jobs["mind"] = lambda: mind.auto_context(user_text)
+    if given is None:
+        jobs["board"] = lambda: agentboard.for_turn(user_text, agent_name)
+    out = {k: ("", 0.0, "") for k in ("graph", "mind", "board")}
+    t0 = time.perf_counter()
+    if jobs:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(jobs), thread_name_prefix="recall") as pool:
+            futs = {k: pool.submit(_timed, fn) for k, fn in jobs.items()}
+            for k, f in futs.items():
+                out[k] = f.result()
+    fields = {f"{k}_ms": round(v[1] * 1000) for k, v in out.items() if k in jobs}
+    fields.update({f"{k}_error": v[2] for k, v in out.items() if v[2]})
+    traces.default.step("recall", wall_ms=round((time.perf_counter() - t0) * 1000), **fields)
+    reading = given if given is not None else out["graph"][0]
+    return reading, out["mind"][0], out["board"][0]
+
+
 def _chat(history: list[dict], user_text: str, mode: str = "auto", voice: bool = False, max_steps=10, space: str | None = None, untrusted: bool = False, chat_id=None, _local=False,
          _reading=None, mixed: bool = False):
     phone.user_text = user_text
@@ -1486,12 +1518,10 @@ def _chat(history: list[dict], user_text: str, mode: str = "auto", voice: bool =
     full = history
     history = compress.compress(history)
     max_steps = cx["max_steps"] if max_steps == 10 else max_steps
-    reading = _reading if _reading is not None else ("" if CHITCHAT.match(user_text.strip()) else corner_graph.recall(user_text))
+    reading, remembered, board = _recall_steps(user_text, _reading, "rosie" if _local or not a0.enabled() else "agent-zero")
     untrusted = untrusted or bool(reading)
-    remembered = "" if CHITCHAT.match(user_text.strip()) else mind.auto_context(user_text)
     if chat_id is not None and str(chat_id) in a0._outside():
         untrusted = True
-    board = "" if _reading is not None else agentboard.for_turn(user_text, "rosie" if _local or not a0.enabled() else "agent-zero")
     if board:
         reading, untrusted = (reading + "\n\n" + board).strip(), True
     if _reading is None and not voice and claude_plan.wants(user_text):
