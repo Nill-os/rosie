@@ -94,4 +94,4 @@ def compress(history: list[dict], keep_recent: int = 8, max_chars: int = 12000, 
     if i <= 0:
         return history
     older = history[:i]
-    return [{"role": "user", "content": f"{PREFIX} {_summary(older, summarize)}"}] + history[i:]
+    return [{"role": "user", "content": f"{PREFIX} {_summary(older, summarize)}", "_outside": True}] + history[i:]

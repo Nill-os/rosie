@@ -67,8 +67,8 @@ def step() -> int:
             break
         before = corner_graph._server_id()
         try:
-            res = corner_graph._run(corner_graph._graph["g"].add_episode(group_id=GROUP, **episode(p), **corner_graph._text_type()),
-                                    corner_graph.ADD_TIMEOUT_S)
+            res = corner_graph._run_retry(lambda: corner_graph._graph["g"].add_episode(group_id=GROUP, **episode(p), **corner_graph._text_type()),
+                                          corner_graph.ADD_TIMEOUT_S)
         except corner_graph.OwnerBusy as e:
             state["waiting"] = str(e)
             break
@@ -124,7 +124,7 @@ def search(query: str) -> dict:
             out["graph"] = "The memory graph is not ready; these are word matches from the board's records."
         return out
     try:
-        edges = corner_graph._run(g.search(query, group_ids=[GROUP], num_results=12), corner_graph.SEARCH_TIMEOUT_S)
+        edges = corner_graph._run_retry(lambda: g.search(query, group_ids=[GROUP], num_results=12), corner_graph.SEARCH_TIMEOUT_S)
     except Exception as e:
         if corner_graph._lost(e):
             corner_graph._drop(e)

@@ -491,3 +491,19 @@ def test_stage_copy_fallback_clears_a_stale_wal_next_to_the_copy(world, tmp_path
     monkeypatch.undo()
     assert not (out / "notes.db-wal").exists() and not (out / "notes.db-shm").exists()
     print("PASS: stale -wal and -shm next to the copy are removed")
+
+
+def test_stage_pytest_command_reports_durations():
+    cmd = slots.pytest_command("/x/py")
+    assert cmd[:3] == ["/x/py", "-m", "pytest"]
+    assert "--durations=30" in cmd and "-q" in cmd and "-x" in cmd
+    print("PASS: stage pytest command asks for durations")
+
+
+def test_stage_log_is_written_next_to_state_and_overwritten(tmp_path, monkeypatch):
+    monkeypatch.setattr(slots, "STATE", tmp_path / "ops" / "state.json")
+    slots.save_stage_log("first run\n")
+    slots.save_stage_log("second run\n")
+    p = tmp_path / "ops" / "last_stage_pytest.log"
+    assert p.read_text() == "second run\n"
+    print("PASS: stage log is overwritten beside the state file")

@@ -27,6 +27,7 @@ import models
 import plat
 import skills
 import tasks
+import team
 import testguard
 import workflows
 import ollama_url
@@ -1518,6 +1519,8 @@ def _task_times(lines: list, running: bool) -> dict:
 def claude_tasks():
     import glob
     patterns = [x for x in (config.load().get("claude_task_logs") or []) if isinstance(x, str) and x]
+    if team.command():
+        patterns.append(str(team.LOG))
     seen = set()
     results = []
     for pat in patterns:
@@ -1533,12 +1536,15 @@ def claude_tasks():
             except OSError:
                 seen.discard(svc_name)
                 continue
-            status = _svc_active(svc_name)
+            is_team = p == team.LOG
+            status = team.tab_state() if is_team else _svc_active(svc_name)
             task = _parse_claude_task_log(p, svc_name, lines)
             task["status"] = status
             task.update(_task_times(lines, status == "running"))
             el, d, tot = task["elapsed"], task.get("done"), task.get("total")
-            speed = round(d / (el / 60), 1) if d is not None and tot and el else None
+            speed = round(d / (el / 60), 1) if d is not None and tot and el and not is_team else None
+            if is_team:
+                task["unit"] = "run"
             task["speed"] = speed
             rem = (tot - d) if d is not None and tot else 0
             task["eta_sec"] = int(rem / (speed / 60)) if speed and rem > 0 else None

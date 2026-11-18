@@ -359,10 +359,21 @@ def stage(with_eval=True):
         flag.unlink(missing_ok=True)
 
 
+def pytest_command(py):
+    return [py, "-m", "pytest", "-q", "-x", "--no-header", "-p", "no:cacheprovider", "--durations=30"]
+
+
+def save_stage_log(text):
+    p = STATE.with_name("last_stage_pytest.log")
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(text or "")
+
+
 def _stage(idle, with_eval):
     py = str(SLOT["A"] / ".venv" / "bin" / "python")
     res = {"slot": idle, "head": head(idle), "started": time.time()}
-    t = run([py, "-m", "pytest", "-q", "-x", "--no-header", "-p", "no:cacheprovider"], cwd=SLOT[idle], timeout=900)
+    t = run(pytest_command(py), cwd=SLOT[idle], timeout=900)
+    save_stage_log(t.stdout)
     last = t.stdout.strip().splitlines()[-1] if t.stdout.strip() else t.stderr.strip()[-200:]
     res["tests"] = {"ok": t.returncode == 0, "summary": last}
     res["smoke"] = smoke(idle) if res["tests"]["ok"] else {"ok": False, "skipped": "tests failed"}

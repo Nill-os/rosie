@@ -42,7 +42,7 @@ def _graph(name: str):
 
 def _ro(g, query: str, params: dict | None = None) -> list:
     try:
-        return g.ro_query(query, params or {}).result_set
+        return corner_graph.retry_loading(lambda: g.ro_query(query, params or {}), pauses=(0.5, 1.0)).result_set
     except Exception as e:
         raise Unavailable(f"The memory graph database is not answering ({type(e).__name__}).")
 

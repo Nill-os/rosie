@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import datetime as dt
 import json
+import logging
 import os
 import re
 import threading
@@ -21,6 +22,8 @@ import testguard  # noqa: E402
 import timefmt
 import ollama_url
 
+log = logging.getLogger("rosie.corner_graph")
+logging.getLogger("graphiti_core").setLevel(logging.WARNING)
 GROUP = "rosie-corner"
 ROOT = Path(__file__).resolve().parent.parent
 SECRET = ROOT / "secrets" / "graphiti_falkordb_password"
@@ -50,6 +53,7 @@ ADD_TIMEOUT_S = 1800
 SEARCH_TIMEOUT_S = 25
 CONNECT_TIMEOUT_S = 10
 START_WAIT_S = 60
+LOADING_PAUSES = (1.0, 2.0)
 _ollama_transport = None
 
 SCHEMA = """
@@ -320,6 +324,25 @@ async def retry_start(call, wait_s: float | None = None, sleep=None):
                 raise
         await sleep(pause)
         pause = min(pause * 2, 10.0)
+
+
+def retry_loading(call, pauses=None, sleep=None):
+    sleep = sleep or time.sleep
+    pauses = LOADING_PAUSES if pauses is None else pauses
+    for pause in (*pauses, None):
+        try:
+            return call()
+        except Exception as e:
+            if not _loading(e):
+                raise
+            if pause is None:
+                log.info("The graph database is still loading its data; skipping this round.")
+                raise
+        sleep(pause)
+
+
+def _run_retry(factory, timeout: float):
+    return retry_loading(lambda: _run(factory(), timeout))
 
 
 def _not_answering(e: Exception) -> str:
@@ -622,9 +645,9 @@ def step(now: dt.datetime | None = None) -> int:
         state.update(waiting="", doing=f"Adding {it['kind']}: {_clip(it['title'], 80)}")
         t0, before = time.time(), _server_id()
         try:
-            res = _run(_graph["g"].add_episode(name=it["name"], episode_body=it["body"], source_description=it["source"],
-                                               reference_time=_utc(it["at"]), group_id=GROUP, previous_episode_uuids=[],
-                                               custom_extraction_instructions=EXTRACT_HINT, **_text_type()), ADD_TIMEOUT_S)
+            res = _run_retry(lambda: _graph["g"].add_episode(name=it["name"], episode_body=it["body"], source_description=it["source"],
+                                                         reference_time=_utc(it["at"]), group_id=GROUP, previous_episode_uuids=[],
+                                                         custom_extraction_instructions=EXTRACT_HINT, **_text_type()), ADD_TIMEOUT_S)
         except OwnerBusy as e:
             state["waiting"] = str(e)
             break
@@ -782,7 +805,7 @@ def search(query: str = "", days: int = 0) -> dict:
         out["graph"] = f"Corner memory graph not ready (off: {why}); these are plain word matches from her finds."
         return out
     try:
-        edges = _run(g.search(query, group_ids=[GROUP], num_results=12), SEARCH_TIMEOUT_S)
+        edges = _run_retry(lambda: g.search(query, group_ids=[GROUP], num_results=12), SEARCH_TIMEOUT_S)
     except Exception as e:
         if _lost(e):
             _drop(e)

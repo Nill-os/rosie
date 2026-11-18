@@ -103,7 +103,7 @@ def _brief_scheduler_on(cfg):
 
 
 MARKED = [
-    ("scheduler", "Runs every timed job", _always, 300),
+    ("scheduler", "Runs every timed job", _always, 120),
     ("health", "Checks Rosie's health", _always, 2 * H),
     ("brief", "Writes your daily brief", _cfg_on("brief_on"), D),
     ("paper", "Builds the Morning Paper", _paper_on, D),
@@ -132,7 +132,7 @@ MARKED = [
     ("mind", "Learns from your chats", _mind_on, H),
     ("mind_a0", "Learns from Agent Zero chats", _mind_on, 10 * 60),
     ("corner_graph", "Builds the memory graph", _corner_graph_on, H),
-    ("brief_scheduler", "Starts the daily brief on time", _brief_scheduler_on, 5 * 60),
+    ("brief_scheduler", "Starts the daily brief on time", _brief_scheduler_on, 120),
     ("servers", "Finds servers on your network", _always, None),
 ]
 ON_DEMAND = {"servers"}

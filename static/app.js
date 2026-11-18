@@ -1821,6 +1821,44 @@ VIEWS.claudetasks = async () => {
   if (!st) { st = document.createElement('style'); st.id = 'ct-style'; document.head.appendChild(st); }
   st.textContent = css;
   let tasks = [];
+  let teamPollT = null;
+  const teamKind = h('select', { 'aria-label': 'Team kind' }, ...[['code', 'Code'], ['research', 'Research'], ['plan', 'Plan']].map(([v, l]) => h('option', { value: v }, l)));
+  const teamText = h('textarea', { rows: '3', maxlength: '2000', placeholder: 'What should the team do?', 'aria-label': 'Request for the team', style: 'width:100%;box-sizing:border-box' });
+  const teamStart = h('button', { type: 'button', class: 'btn' }, 'Start');
+  const teamLine = h('div', { class: 'ct-info' });
+  const teamOut = h('div', { class: 'ct-wrap' });
+  const teamBox = h('div', { class: 'ct-card' }, h('div', { class: 'ct-head' }, h('span', { class: 'ct-label' }, 'Local team'), h('span', { class: 'ct-info' }, 'Runs on the local model, one at a time')),
+    h('div', { style: 'display:flex;gap:8px;flex-wrap:wrap;align-items:center' }, teamKind, teamStart), teamText, teamLine, teamOut);
+  teamBox.style.display = 'none';
+  const paintTeam = (d) => {
+    teamBox.style.display = d.available ? '' : 'none';
+    teamStart.disabled = !!d.running;
+    teamLine.textContent = d.running ? 'Working on a ' + d.kind + ' job…' : d.ok === false ? 'Failed: ' + (d.error || 'unknown error') : d.ok ? 'Finished.' : '';
+    const kids = [];
+    if (!d.running && d.ok) {
+      kids.push(h('div', { style: 'white-space:pre-wrap;word-break:break-word' }, d.report || ''));
+      if (d.check) kids.push(h('div', { class: 'ct-info' }, d.check));
+      (d.files || []).forEach((f) => kids.push(h('div', { class: 'ct-current', title: f }, f)));
+      if (d.run_folder) kids.push(h('div', { class: 'ct-info' }, 'Run folder: ' + d.run_folder));
+    }
+    teamOut.replaceChildren(...kids);
+  };
+  const pollTeam = async () => {
+    clearTimeout(teamPollT);
+    if (!here()) return;
+    let d;
+    try { d = await J('/api/team'); } catch (e) { return; }
+    if (!here()) return;
+    paintTeam(d);
+    if (d.running) teamPollT = setTimeout(pollTeam, 4000);
+  };
+  teamStart.onclick = async () => {
+    const request = teamText.value.trim();
+    if (!request) { toast('Say what the team should do.', 1); return; }
+    teamStart.disabled = true;
+    try { await post('/api/team', { kind: teamKind.value, request }); teamText.value = ''; } catch (e) { toast(e.message, 1); }
+    pollTeam();
+  };
   const card = (t) => {
     const pct = Math.min(100, Math.max(0, t.pct || 0));
     const state = ctState(t);
@@ -1828,7 +1866,7 @@ VIEWS.claudetasks = async () => {
     const dotCls = isRun ? 'run' : state;
     const barCls = 'ct-bar' + (isRun ? ' run' : state === 'failed' ? ' failed' : '');
     const row1 = [];
-    if (t.done != null && t.total != null) row1.push(t.done + ' / ' + t.total + ' games');
+    if (t.done != null && t.total != null) row1.push(t.done + ' / ' + t.total + ' ' + (t.unit || 'games'));
     else if (t.done != null) row1.push(t.done + ' games');
     row1.push(pct + '%');
     if (t.free_gb != null) row1.push(t.free_gb + ' GB free');
@@ -1866,7 +1904,8 @@ VIEWS.claudetasks = async () => {
     if (list.length) body = h('div', { class: 'ct-wrap' }, ...list.map(card));
     else if (claudeTasksFilter === 'running') body = h('div', { class: 'ct-card ct-empty' }, h('div', { class: 'muted' }, 'No jobs running right now.'), h('div', { class: 'ct-hint' }, 'This page checks again every 5 seconds.'));
     else body = h('div', { class: 'ct-card ct-empty' }, h('div', { class: 'muted' }, 'No ' + claudeTasksFilter + ' jobs.'));
-    keepScroll(() => show(h('div', { class: 'pagehead' }, h('h2', {}, 'Claude Tasks'), h('span', { class: 'muted' }, tasks.length + ' job' + (tasks.length !== 1 ? 's' : ''))), filters, body));
+    if (teamBox.contains(document.activeElement)) return;
+    keepScroll(() => show(h('div', { class: 'pagehead' }, h('h2', {}, 'Claude Tasks'), h('span', { class: 'muted' }, tasks.length + ' job' + (tasks.length !== 1 ? 's' : ''))), teamBox, filters, body));
   };
   const schedule = () => { clearTimeout(claudeTasksPollT); if (here()) claudeTasksPollT = setTimeout(draw, claudeTasksFilter === 'running' ? 5000 : 30000); };
   const draw = async () => {
@@ -1879,6 +1918,7 @@ VIEWS.claudetasks = async () => {
     schedule();
   };
   show(h('div', { class: 'muted' }, 'Reading tasks…'));
+  pollTeam();
   draw();
 };
 

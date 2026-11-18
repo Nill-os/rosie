@@ -56,6 +56,7 @@ def fresh(monkeypatch, tmp_path):
                                       "last_error": "", "secs_per": None})
     monkeypatch.setattr(cg, "_graph", {"g": None})
     monkeypatch.setattr(cg, "FAST", False)
+    monkeypatch.setattr(cg, "LOADING_PAUSES", ())
     monkeypatch.setattr(cg, "_counts", {"t": 0.0, "v": None})
     monkeypatch.setattr(cg, "_ollama_transport", httpx.MockTransport(lambda r: httpx.Response(500, text="no model in tests")))
     assert tmp_path in cg.SECRET.parents

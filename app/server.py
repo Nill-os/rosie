@@ -23,6 +23,7 @@ if os.name != "nt":
 
 from fastapi import FastAPI, File, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -31,7 +32,6 @@ import agent
 import ctxsize
 import httpx
 import automations
-import briefs
 import chats
 import config
 import schedules
@@ -40,6 +40,7 @@ import corner
 import corner_api
 import hub
 import lifequest_api
+import team_api
 import models
 import a0_api
 import vector_api
@@ -57,12 +58,14 @@ import sessionkey
 
 STATIC = Path(__file__).resolve().parent.parent / "static"
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 app.include_router(hub.router)
 app.include_router(paper_api.router)
 app.include_router(a0_api.router)
 app.include_router(corner_api.router)
 app.include_router(lifequest_api.router)
 app.include_router(agentdeck_api.router)
+app.include_router(team_api.router)
 app.include_router(graphview_api.router)
 app.include_router(vector_api.router)
 
@@ -271,12 +274,14 @@ def _run_turn(chat_id, text, mode="auto", voice=False, shown=None, space=None, u
     hist = chats.history(cid, 12 if voice else 30)
     agent.begin(cid)
     try:
-        reply, pending, new = agent.chat(hist, text, mode, voice, space=chats.space_of(cid), untrusted=untrusted, chat_id=cid)
+        reply, pending, new = agent.chat(hist, text, mode, voice, space=chats.space_of(cid), untrusted=untrusted, chat_id=cid, **({"mixed": True} if untrusted else {}))
     except gcal.LoginExpired as e:
         reply, pending, new = str(e), [], hist + [{"role": "user", "content": text}, {"role": "assistant", "content": str(e)}]
     except Exception as e:
         reply, pending, new = f"Something broke: {type(e).__name__}: {e}", [], hist + [{"role": "user", "content": text}, {"role": "assistant", "content": f"Something broke: {type(e).__name__}: {e}"}]
     leftover = agent.end(cid)
+    if untrusted:
+        new = new[:len(hist)] + [{**m, "_outside": True} if m.get("role") == "user" else m for m in new[len(hist):]]
     chats.add_msgs(cid, new[len(hist):], first_user_shown=shown)
     import mind
     outside = untrusted or agent.TURN_OUTSIDE.pop(cid, False) or any(m.get("role") == "tool" and m.get("tool_name") in mind.outside_tools() for m in new[len(hist):])
@@ -446,7 +451,7 @@ def _vector_stream(text):
               "If you need their calendar, tasks, texts or other tools, say you can do it when they ask you directly. " + VECTOR_GAMES.rstrip()
               + (f" Your personality as Vector: {persona}" if persona else "") + _vector_seen()
               + vector_pod.mood_line() + vector_moves.prompt_hint(vector_pod.sitting()) + "\n" + agent.owner_notes() + (remembered or ""))
-    hist = [m for m in chats.history(cid, 12) if m.get("role") in ("user", "assistant") and m.get("content")][-10:]
+    hist = [{k: v for k, v in m.items() if k != "_outside"} for m in chats.history(cid, 12) if m.get("role") in ("user", "assistant") and m.get("content")][-10:]
     body = {"model": agent.MODEL, "stream": True, "think": False, "keep_alive": "30m",
             "options": {**ctxsize.options(agent.MODEL), "temperature": 0.6, "num_predict": 220},
             "messages": [{"role": "system", "content": system}, *hist, {"role": "user", "content": text}]}

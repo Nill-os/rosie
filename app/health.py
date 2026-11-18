@@ -8,7 +8,6 @@ from pathlib import Path
 
 import atomic
 import backup
-import config
 import phone
 import plat
 import ollama_url

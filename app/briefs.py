@@ -1,6 +1,5 @@
 # board #715 why-brief-plain-code
 import datetime as dt
-import json
 import sqlite3
 import threading
 from pathlib import Path

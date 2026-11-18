@@ -16,6 +16,7 @@ DEFAULTS = {
     "claude_task_logs": [],
     "claude_task_labels": {},
     "security_autopatch": True,
+    "team_cmd": "",
     "proxmox_ssh": "",
     "proxmox_ssh_key": "",
     "owner_name": "",

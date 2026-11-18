@@ -32,6 +32,7 @@ import schedules
 import standing
 import selfdev
 import mailwatch
+import team
 import usertools
 import vaultsearch
 import lifequest
@@ -433,6 +434,25 @@ GROUPS.update({n: "build" for n in ("build_tool", "run_user_tool", "list_user_to
 GROUPS.update({n: "projects" for n in ("list_projects", "project_status", "create_project", "update_project", "add_project_task", "plan_project")})
 GROUPS.update({n: "lifequest" for n in ("lifequest_log", "lifequest_progress")})
 GROUPS.update({n: "term" for n in ("launch_agent", "terminal_start", "terminal_read", "terminal_send", "terminal_list", "terminal_stop")})
+TEAM_TOOLS = {
+    "run_team": (team.tool_run, "Start the local agent team (a Head with helpers, on the local model, no cloud) in the background. kind: code (build a small Python script), research (answer a question from the web) or plan (split a multi-part job). It takes 20 s to 2 min and needs the owner's Yes. Then use team_result.",
+                 {"kind": ("string", "code, research or plan"), "request": ("string", "what the team should do, in plain words (max 2000 characters)")}),
+    "team_result": (team.tool_result, "Show the state and the report of the last local team run (running, finished, or failed), with its check line, files and run folder.", {}),
+}
+
+
+def sync_team_tools():
+    on = team.command() is not None
+    for name, entry in TEAM_TOOLS.items():
+        if on:
+            TOOLS.setdefault(name, entry)
+            GROUPS[name] = "team"
+        else:
+            TOOLS.pop(name, None)
+            GROUPS.pop(name, None)
+
+
+sync_team_tools()
 GROUP_RE = {
     "calendar": r"\b(calendar|events?|meetings?|appointments?|schedul\w*|behind|late|agenda|busy|free time|am i free|book|cancel|delete|move|reschedul\w*|when is|what'?s on)\b",
     "pc": r"\b(gpu|cpu|ram|memory usage|battery|hot|temp|temperature|sensors?|uptime|network|wifi|speed|usb|bluetooth|volume|brightness|screenshot|clipboard|files?|folders?|directory|run|command|script|install|open|launch|code|python|git|download\w*|disk|space|process\w*|computer|pc|documents?|notes?|write|create|build|fix|edit)\b",
@@ -454,6 +474,7 @@ GROUP_RE = {
     "radio": r"\b(space weather|solar (?:storm|flares?|flux|wind|activity|cycle)|geomagnetic|k-?index|kp|aurora|northern lights|propagation|hf|bands? (?:open|conditions)|ham radio|radio (?:conditions|blackout)|sunspots?|cme)\b",
     "net": r"\b(internet|connection|ping|latency|lag(?:gy)?|jitter|packet loss|dropping|drops|buffering|isp|wi-?fi (?:slow|bad|down)|is the (?:internet|wifi) (?:slow|down|bad|ok))\b",
 }
+GROUP_RE["team"] = r"\b(local team|team of agents|agent team|sub-?agents?|multi-?agent|(?:run|start|ask|use) (?:a |the |your )?(?:code |research |plan )?team|team (?:code|research|plan))\b"
 SKILL_GROUPS = {"build-something": {"pc", "web", "term", "projects"}, "plan-my-day": {"calendar"}, "test-an-idea": {"web", "projects"},
                 "project-planning": {"projects", "calendar", "term", "pc", "web"}, "meal-planning": {"web"}, "life-support": set(),
                 "reply-to-text": {"phone"}, "job-fit-tailor": {"web", "pc"}}
@@ -668,7 +689,8 @@ def pick_skill(user_text: str, history: list[dict]) -> str:
 # board #701 safety-untrusted-content-confirm
 UNTRUSTED = {"corner_memory", "find_skills", "selfdev_read", "selfdev_search", "find_recipe", "phone_notifications", "phone_screen_do", "phone_read_messages", "search_notes", "web_search", "fetch_url", "search_email", "summarize_email", "draft_email_reply", "list_emails", "terminal_read"}
 UNTRUSTED |= {"board_read", "board_history", "plan_with_claude", "verify_with_claude", "ask_claude_to_solve", "ask_other_ais", "mail_cleanup_preview"}
-GUARDED = {"schedule", "standing", "lessons", "remember", "forget", "memory_forget", "install_skill", "cancel_reminder", "selfdev_edit", "selfdev_write", "selfdev_agent", "selfdev_switch", "selfdev_rollback", "phone_screen_do", "phone_reply_notification", "phone_send_sms", "phone_call", "phone_keep_note", "build_tool", "run_user_tool", "run_command", "write_file", "open_on_desktop", "launch_agent", "terminal_start", "terminal_send", "terminal_stop"}
+UNTRUSTED |= {"run_team", "team_result"}
+GUARDED = {"schedule", "standing", "lessons", "remember", "forget", "memory_forget", "install_skill", "cancel_reminder", "selfdev_edit", "selfdev_write", "selfdev_agent", "selfdev_switch", "selfdev_rollback", "phone_screen_do", "phone_reply_notification", "phone_send_sms", "phone_call", "phone_keep_note", "build_tool", "run_user_tool", "run_command", "write_file", "open_on_desktop", "launch_agent", "terminal_start", "terminal_send", "terminal_stop", "run_team"}
 
 
 def is_untrusted(name, args):
@@ -706,6 +728,8 @@ def describe_call(name, a):
         return f"Do this on your phone: {g('goal', 90)}"
     if name in ("terminal_start", "terminal_send", "terminal_stop"):
         return {"terminal_start": "Start a terminal session", "terminal_send": "Type into a terminal session", "terminal_stop": "Stop a terminal session"}[name] + (f": {full('command') or full('text')}" if (a.get("command") or a.get("text")) else "")
+    if name == "run_team":
+        return team.summary(a.get("kind"), a.get("request"))
     if name in ("build_tool", "run_user_tool"):
         return ("Build a small tool: " if name == "build_tool" else "Run my tool: ") + g("name")
     return name.replace("_", " ").capitalize() + (": " + ", ".join(f"{k} {str(v)[:30]}" for k, v in list(a.items())[:3]) if a else "")
@@ -765,7 +789,7 @@ def _touches(state, s) -> bool:
 def links_add(state, m):
     read, built = state["read"], state["built"]
     role, text = m.get("role"), str(m.get("content", ""))
-    if role == "user" and not m.get("_internal"):
+    if role == "user" and not m.get("_internal") and not m.get("_outside"):
         read |= _links(_owner_text(text))
     elif role == "tool" and not _did_not_run(text) and (m.get("tool_name") in UNTRUSTED or m.get("tool_name") in LINK_SOURCES or (m.get("tool_name") == "read_file" and "[untrusted]" in text)):
         read |= {u for u in _links(text) if len(u) <= LINK_LEN and not _touches(state, u.rstrip(".,;:!?"))}
@@ -1090,7 +1114,7 @@ class Turn:
         self.msgs.append({"role": "user", "content": text, "_internal": True})
 
     def clean(self):
-        return [{k: v for k, v in x.items() if k != "_internal"} for x in self.msgs]
+        return [{k: v for k, v in x.items() if k not in ("_internal", "_outside")} for x in self.msgs]
 
     def saved(self):
         return [x for x in self.msgs[1:] if not x.get("_internal")]
@@ -1159,7 +1183,7 @@ def _nudge_claim(t, r):
 NUDGES = (_nudge_stall, _nudge_refusal, _nudge_failed, _nudge_read, _nudge_weather, _nudge_claim)
 
 
-def _build_turn(history, user_text, mode, voice, space, skill, remembered, reading, untrusted, cx, chat_id):
+def _build_turn(history, user_text, mode, voice, space, skill, remembered, reading, untrusted, cx, chat_id, mixed=False):
     sp = system_prompt(mode, voice) + lessons.block(user_text)
     fb = chats.pending_feedback(chat_id) if chat_id else ""
     if fb:
@@ -1169,7 +1193,7 @@ def _build_turn(history, user_text, mode, voice, space, skill, remembered, readi
     if skill:
         sp += (f"\nACTIVE SKILL for this message: '{skill}'. Follow these steps (adapted to a "
                f"{'spoken' if voice else 'text'} reply):\n{skills.use_skill(skill)['instructions']}")
-    msgs = [{"role": "system", "content": sp + ("\n\n" + remembered if remembered else "") + ("\n\n" + reading if reading else "")}] + history + [{"role": "user", "content": user_text}]
+    msgs = [{"role": "system", "content": sp + ("\n\n" + remembered if remembered else "") + ("\n\n" + reading if reading else "")}] + history + [{"role": "user", "content": user_text, **({"_outside": True} if mixed else {})}]
     active = select_groups(user_text, history, skill, space) | ({"corner"} if reading else set()) | ({"board"} if HEADER_RE.search(reading) else set())
     tainted = untrusted or any(m.get("role") == "tool" and (m.get("tool_name") in UNTRUSTED or (m.get("tool_name") == "read_file" and "[untrusted]" in str(m.get("content", ""))))
                                for m in history)
@@ -1445,8 +1469,12 @@ def _run_turn(t, max_steps):
     return t.result
 
 
+def _whole(new, short, full):
+    return new if short is full else full + new[len(short):]
+
+
 def _chat(history: list[dict], user_text: str, mode: str = "auto", voice: bool = False, max_steps=10, space: str | None = None, untrusted: bool = False, chat_id=None, _local=False,
-         _reading=None):
+         _reading=None, mixed: bool = False):
     phone.user_text = user_text
     fp = fastpath.try_fast(user_text)
     if fp:
@@ -1455,6 +1483,7 @@ def _chat(history: list[dict], user_text: str, mode: str = "auto", voice: bool =
         reply = "I'm tuning my context window right now (2 to 5 minutes). Ask me again in a moment."
         return reply, [], history + [{"role": "user", "content": user_text}, {"role": "assistant", "content": reply}]
     cx = complexity.score(user_text, history, voice)
+    full = history
     history = compress.compress(history)
     max_steps = cx["max_steps"] if max_steps == 10 else max_steps
     reading = _reading if _reading is not None else ("" if CHITCHAT.match(user_text.strip()) else corner_graph.recall(user_text))
@@ -1473,14 +1502,16 @@ def _chat(history: list[dict], user_text: str, mode: str = "auto", voice: bool =
         TURN_OUTSIDE[chat_id] = untrusted
     if not _local and a0.enabled():
         try:
-            return a0.chat(history, user_text, voice, chat_id=chat_id, space=space, untrusted=untrusted, reading=remembered + reading)
+            reply, pending, new = a0.chat(history, user_text, voice, chat_id=chat_id, space=space, untrusted=untrusted, reading=remembered + reading)
+            return reply, pending, _whole(new, history, full)
         except a0.Unavailable as e:
-            reply, pending, new = _chat(history, user_text, mode, voice, max_steps, space, untrusted, chat_id, _local=True, _reading=reading)
+            reply, pending, new = _chat(history, user_text, mode, voice, max_steps, space, untrusted, chat_id, _local=True, _reading=reading, mixed=mixed)
             note = "" if voice else f"(Agent Zero isn't answering, so my own model answered: {str(e)[:80]}) "
-            return note + reply, pending, new
+            return note + reply, pending, _whole(new, history, full)
     skill = pick_skill(user_text, history) or SPACE_SKILL.get(space or "", "")
-    turn = _build_turn(history, user_text, mode, voice, space, skill, remembered, reading, untrusted, cx, chat_id)
-    return _run_turn(turn, max_steps)
+    turn = _build_turn(history, user_text, mode, voice, space, skill, remembered, reading, untrusted, cx, chat_id, mixed=mixed)
+    reply, pending, new = _run_turn(turn, max_steps)
+    return reply, pending, _whole(new, history, full)
 
 
 def chat(*args, **kw):

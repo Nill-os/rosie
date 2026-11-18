@@ -4,7 +4,6 @@ import subprocess
 from pathlib import Path
 
 import os
-import shutil
 
 def user_bus_env() -> dict:
     # board #760 why-user-bus-missing

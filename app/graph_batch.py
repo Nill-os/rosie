@@ -1,4 +1,3 @@
-import asyncio
 import datetime as dt
 import json
 import re
@@ -152,7 +151,7 @@ def step(now: dt.datetime | None = None) -> int:
     t0 = time.time()
     before = cg._server_id()
     try:
-        results = cg._run(_add(_get_writer(), batch), cg.ADD_TIMEOUT_S)
+        results = cg._run_retry(lambda: _add(_get_writer(), batch), cg.ADD_TIMEOUT_S)
     except cg.OwnerBusy as e:
         cg.state["waiting"] = str(e)
         return 0

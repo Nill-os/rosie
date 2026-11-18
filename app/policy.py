@@ -1,6 +1,6 @@
 import re
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 ALLOW, PROMPT, FORBIDDEN = "allow", "prompt", "forbidden"
 LEVELS = {ALLOW: "low", PROMPT: "medium", FORBIDDEN: "high"}

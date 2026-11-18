@@ -110,6 +110,8 @@ def isolated(tmp_path, monkeypatch):
             monkeypatch.setattr(m, attr, tmp_path / stand_in)
     if "health" in sys.modules:
         monkeypatch.setattr(sys.modules["health"], "_restart_seen", {})
+    import traces
+    monkeypatch.setattr(traces, "path", lambda: tmp_path / "traces.jsonl")
     import inbox
     monkeypatch.setattr(inbox, "notify_desktop", lambda *a, **k: False)
     import pchealth
