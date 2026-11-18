@@ -286,6 +286,36 @@ def test_a_stale_installed_unit_file_warns_to_run_install(tmp_path, monkeypatch)
     assert health.check_unit_files()["level"] == "off"
 
 
+def test_old_installed_switch_tools_raise_an_alert_to_run_install(tmp_path, monkeypatch):
+    shipped = tmp_path / "ops"
+    shipped.mkdir()
+    ops = tmp_path / "rosie-ops"
+    ops.mkdir()
+    for name in health.OPS_FILES:
+        (shipped / name).write_text("new " + name)
+        (ops / name).write_text("new " + name)
+    (ops / "slots.py").write_text("old slots")
+    (ops / "watchdog.py").unlink()
+    monkeypatch.setattr(health, "ROOT", tmp_path)
+    monkeypatch.setattr(health, "OPS_DIR", ops)
+    monkeypatch.setattr(health.plat, "IS_WIN", False)
+    row = health.check_ops_files()
+    assert row["level"] == "bad" and "slots.py" in row["detail"] and "watchdog.py" in row["detail"] and "autopilot.py" not in row["detail"]
+    assert row["fix"] == "run ops/install.sh"
+    added = []
+    health.alert([row], dt.datetime(2026, 11, 16, 9, 0), lambda *a, **k: added.append(a[1]))
+    assert added == ["Needs attention: Switch tools"]
+    (ops / "slots.py").write_text("new slots.py")
+    (ops / "watchdog.py").write_text("new watchdog.py")
+    assert health.check_ops_files()["level"] == "ok"
+    (ops / "slots.py").unlink()
+    assert health.check_ops_files()["level"] == "off"
+    monkeypatch.setattr(health.plat, "IS_WIN", True)
+    assert health.check_ops_files()["level"] == "off"
+    assert health.check_ops_files in health.CHECKS
+    print("PASS: old switch tools raise an alert to run ops/install.sh")
+
+
 def test_code_backup_row_is_off_when_no_sync_unit_is_installed(monkeypatch):
     monkeypatch.setattr(health.plat, "IS_WIN", False)
     monkeypatch.setattr(health, "_unit_result", lambda unit, prop="Result": "not-found" if prop == "LoadState" else "success")

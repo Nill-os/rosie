@@ -585,12 +585,15 @@ def report(findings: list[dict], patched: list[dict], d: dict, plan: dict | None
     how = ("They install the next night you are away from the PC, or press Update the home server in Rosie's Settings > Security."
            if config.load().get("security_autopatch", True) else
            "Automatic security updates are off: press Update the home server in Rosie's Settings > Security.")
+    failed = {name for name in held for p in d.get("problems", []) if p.startswith(f"patching {name}: ")}
     for name, digest in held.items():
         if before.get(name) == digest:
             m = d["machines"][name]
+            why = ("The automatic install failed on the last try: press Update the home server in Rosie's Settings > Security, "
+                   "and check the Security problems list if it fails again." if name in failed else how)
             if inbox.add("security", f"{len(m['security'])} security updates waiting on {name}",
-                         ", ".join(m["security"][:12]) + ". " + how,
-                         link="#/settings", key=f"sec:ct:{name}:{digest}"):
+                         ", ".join(m["security"][:12]) + ". " + why,
+                         link="#/settings", key=f"sec:ct:{name}:{digest}" + (":failed" if name in failed else "")):
                 new += 1
     return new
 

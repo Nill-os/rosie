@@ -706,6 +706,7 @@ def _expected(text: str, sent: dt.date) -> tuple[str | None, str]:
 
 
 def read_delivery(meta: dict, today: dt.date) -> dict | None:
+    import paper_privacy
     subj, snip, frm = str(meta.get("subject") or ""), str(meta.get("snippet") or ""), str(meta.get("from") or "")
     text = f"{subj} {snip}"
     name, addr = email.utils.parseaddr(frm)
@@ -759,7 +760,7 @@ def read_delivery(meta: dict, today: dt.date) -> dict | None:
     win = WINDOW_RE.search(text)
     return {"what": what[:90] or f"{store} order", "generic": not what, "store": store, "carrier": carrier, "status": status, "sent": sent.isoformat(),
             "expected": exp, "expected_words": exp_words, "window": f"{win.group(1)}–{win.group(2)}" if win and status != "delivered" else "",
-            "subject": subj[:160], "sender": frm[:200], "thread": meta.get("thread_id") or meta.get("id"), "id": meta.get("id"),
+            "subject": subj[:160], "sender": paper_privacy.short_sender(frm), "thread": meta.get("thread_id") or meta.get("id"), "id": meta.get("id"),
             "problem": (ST_PROBLEM.search(subj) or ST_PROBLEM.search(snip)).group(0).lower() if status == "problem" else ""} | \
         ({"_fake": True} if meta.get("_fake") else {})
 
@@ -887,13 +888,28 @@ def _short_clock(iso: str) -> str:
     return f"{(t).strftime(timefmt.nopad('%-I'))}" if t.minute == 0 else f"{(t).strftime(timefmt.nopad('%-I:%M'))}"
 
 
+def _row_lines(r: dict) -> tuple:
+    try:
+        return (delivery_line(r),)
+    except Exception:
+        return ()
+
+
 def private_out(deliv: dict | None) -> dict | None:
     import paper_privacy
     if not deliv:
         return deliv
     return dict(deliv, **{k: [r for r in (deliv.get(k) or []) if not paper_privacy.private(r.get("store", ""), r.get("what", ""), r.get("status", ""),
-                                                                                          r.get("subject", ""), sender=r.get("sender", ""))]
+                                                                                          r.get("subject", ""), sender=r.get("sender", ""))
+                          and not paper_privacy.private(f"{r.get('store', '')}: {r.get('what', '')}", str(r.get("status", "")).capitalize(),
+                                                        str(r.get("window") or ""), *_row_lines(r))]
                           for k in ("today", "soon", "delivered")})
+
+
+def _event_clear(e: dict) -> bool:
+    import paper_privacy
+    place = e.get("location", "")
+    return not paper_privacy.private(e["title"], place) and not paper_privacy.private(clean_title(e["title"], e["start"]), place[:80])
 
 
 def front(s, today: dt.date, deliv: dict, weather_fn=None) -> dict:
@@ -908,7 +924,8 @@ def front(s, today: dt.date, deliv: dict, weather_fn=None) -> dict:
         evs, out["calendar_note"] = [], str(e)
     except Exception as e:
         evs, out["calendar_note"] = [], f"The calendar couldn't be read ({type(e).__name__})."
-    evs = [e for e in evs if not paper_privacy.private(e["title"], e.get("location", ""))]
+    evs = [e for e in evs if _event_clear(e)]
+    deliv = private_out(deliv)
     t = today.isoformat()
     todays = [e for e in evs if e["start"][:10] == t]
     for e in todays:
@@ -932,8 +949,13 @@ def front(s, today: dt.date, deliv: dict, weather_fn=None) -> dict:
             title = clean_title(e["title"], e["start"])
             by_day.setdefault(e["start"][:10], []).append(title if e["all_day"] or has_time(title) else f"{title} at {_short_clock(e['start'])}")
     for d in sorted(by_day)[:6]:
-        out["week"].append({"day": f"{dt.date.fromisoformat(d):%A}".upper(), "text": "; ".join(by_day[d][:4]) + "."})
-    od = [x for x in tasks.overdue() if keep(x)]
+        kept: list = []
+        for line in by_day[d][:8]:
+            if len(kept) < 4 and not paper_privacy.private("; ".join(kept + [line]) + "."):
+                kept.append(line)
+        if kept:
+            out["week"].append({"day": f"{dt.date.fromisoformat(d):%A}".upper(), "text": "; ".join(kept) + "."})
+    od = [x for x in tasks.overdue() if keep(x) and not paper_privacy.private(f"{x['title']} (was due {x['due']})")]
     for x in od[:4]:
         out["due"].append({"when": "Overdue", "text": f"{x['title']} (was due {x['due']})"})
     for x in today_tasks[:4]:
@@ -950,7 +972,8 @@ def front(s, today: dt.date, deliv: dict, weather_fn=None) -> dict:
         if gmail.accounts():
             mails = [m for m in mailwatch.digest(24)["needs_you"]
                      if not paper_privacy.private(m.get("sender_name", ""), m.get("subject", ""), m.get("summary", ""), m.get("snippet", ""),
-                                                  sender=m.get("sender", ""))]
+                                                  sender=m.get("sender", ""))
+                     and not paper_privacy.private(m["sender_name"], m["summary"][:160] or m["subject"][:120])]
             for m in mails[:4]:
                 out["look"].append({"who": m["sender_name"], "text": m["summary"][:160] or m["subject"][:120], "tag": "ACTION" if m.get("needs_reply") else "FYI", "link": m.get("link", "")})
     except Exception as e:
@@ -962,20 +985,25 @@ def front(s, today: dt.date, deliv: dict, weather_fn=None) -> dict:
             out["look"].append({"who": "Rosie", "text": f"{n} suggestion{'s' if n != 1 else ''} waiting for your OK in the Inbox.", "tag": "FYI", "link": "#/inbox"})
     except Exception as e:
         print(f"paper proposals count failed: {type(e).__name__}: {e}")
-    out["headline"], out["dek"] = day_headline(todays, today_tasks, od, deliv, out["weather"], out["calendar_note"])
+    out["headline"], out["dek"] = day_headline(todays, today_tasks, od, deliv, out["weather"], out["calendar_note"],
+                                          lambda text: not paper_privacy.private(text))
     return out
 
 
-def day_headline(todays, today_tasks, overdue, deliv, weather, calendar_note="") -> tuple[str, str]:
+def day_headline(todays, today_tasks, overdue, deliv, weather, calendar_note="", printable=None) -> tuple[str, str]:
     parts = ["Your calendar couldn't be read this morning."] if calendar_note else []
     timed = [e for e in todays if not e["all_day"]]
+    shown = 0
     for e in timed[:3]:
         full = clean_title(e["title"], e["start"])
         cap = 44 if has_time(full) else 34
         title = full if len(full) <= cap else full[:cap - 2].rsplit(" ", 1)[0] + "…"
-        parts.append(f"{title}." if has_time(full) else f"{title} at {_short_clock(e['start'])}.")
-    if len(timed) > 3:
-        parts.append(f"{len(timed) - 3} more on the calendar.")
+        piece = f"{title}." if has_time(full) else f"{title} at {_short_clock(e['start'])}."
+        if printable is None or printable(" ".join(parts + [piece])):
+            parts.append(piece)
+            shown += 1
+    if len(timed) > shown:
+        parts.append(f"{len(timed) - shown} more on the calendar.")
     n_arr = len(deliv.get("today") or [])
     if n_arr:
         parts.append(f"{n_arr} deliver{'ies' if n_arr != 1 else 'y'} today.")

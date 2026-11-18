@@ -1,5 +1,6 @@
 # board #699 owner-rosie-chat-is-agent-zero
 import asyncio
+import json
 import os
 import re
 import socket
@@ -91,8 +92,11 @@ async def _http(request: Request):
     url = base + request.url.path + ("?" + request.url.query if request.url.query else "")
     headers = _upstream_headers(request.headers, f"{up.scheme}://{up.netloc}")
     headers["host"] = up.netloc
+    body = await request.body()
+    if request.method == "POST" and request.url.path.rstrip("/").endswith("/message_async"):
+        _owner_text(body)
     try:
-        req = _http_client().build_request(request.method, url, headers=headers, content=await request.body())
+        req = _http_client().build_request(request.method, url, headers=headers, content=body)
         resp = await _http_client().send(req, stream=True)
     except httpx.HTTPError as e:
         return PlainTextResponse(f"Agent Zero isn't answering ({type(e).__name__}).", status_code=502)
@@ -105,6 +109,17 @@ async def _http(request: Request):
     r = StreamingResponse(resp.aiter_raw(), status_code=resp.status_code, background=_Close(resp))
     r.raw_headers = out
     return r
+
+
+def _owner_text(body: bytes):
+    # board #2763 a0-links-kept-as-a-running-state
+    try:
+        text = json.loads(body[:1000000]).get("text")
+        if isinstance(text, str):
+            import a0
+            a0.note_owner_text(text)
+    except Exception:
+        pass
 
 
 class _Close:

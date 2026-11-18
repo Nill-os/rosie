@@ -90,7 +90,25 @@ def _execute(name, args):
         return {"error": f"{type(e).__name__}: {e}"}
 
 
+ARGS_MAX = 400000
+NAME_MAX = 200
+
+
+def _args_too_large(args) -> bool:
+    if isinstance(args, str):
+        return len(args) > ARGS_MAX
+    try:
+        return len(json.dumps(args, default=str)) > ARGS_MAX
+    except Exception:
+        return True
+
+
 def run(name: str, args) -> str:
+    # board #2758 a0-links-read-this-turn
+    if not isinstance(name, str) or len(name) > NAME_MAX or _args_too_large(args):
+        a0.links_lost()
+        return json.dumps({"error": "The arguments are too large."})
+    a0.note_msg({"role": "assistant", "content": "", "tool_calls": [{"function": {"name": str(name), "arguments": args}}]})
     if isinstance(args, str):
         try:
             args = json.loads(args or "{}")
@@ -121,7 +139,8 @@ def run(name: str, args) -> str:
         phone._here.ask = True
         try:  # board #698 safety-texts-calls-wait-tap
             held = agent.guard(name, args, True) if name in agent.HOLD_WHEN_TAINTED else None
-            result = held or agent.guard(name, args, a0.tainted()) or _execute(name, args)
+            result = held or agent.guard(name, args, a0.tainted(), a0.turn_links()) or _execute(name, args)
+            a0.note_msg({"role": "tool", "tool_name": name, "content": json.dumps(result, default=str)[:400000]})
         finally:
             phone._here.ask = False
     if isinstance(result, dict) and result.get("status") == "needs_confirmation":

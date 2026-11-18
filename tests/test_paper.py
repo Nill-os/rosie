@@ -3,6 +3,7 @@ import datetime as dt
 import email
 import hashlib
 import hmac
+import time
 import html
 import json
 import re
@@ -289,9 +290,10 @@ def test_front_page_agenda_week_due_weather_and_headline(fakes):
     p = _build(fakes)
     fr = p["data"]["front"]
     tags = {a["what"]: a["tag"] for a in fr["agenda"]}
-    assert tags["College class: Art History 101"] == "CLASS" and tags["Dentist"] == "APPOINTMENT" and tags["Work block: write the report"] == "WORK BLOCK"
+    assert tags["College class: Art History 101"] == "CLASS" and tags["Barber appointment"] == "APPOINTMENT" and tags["Work block: write the report"] == "WORK BLOCK"
+    assert "Dentist" not in tags
     assert tags["Finish lab report"] == "DUE" and tags["Amazon: Anker USB C Charger 40W"] == "ARRIVING"
-    assert fr["headline"].startswith("College class: Art History 101 at 8:15. Dentist at 2:30.")
+    assert fr["headline"].startswith("College class: Art History 101 at 8:15. Barber appointment at 2:30.")
     assert any(w["text"].startswith("College class: Art History 101 at 8:15") for w in fr["week"])
     assert {"when": "Today", "text": "Finish lab report"} in fr["due"] and any(x["text"] == "Mail the permit form" for x in fr["due"])
     assert fr["weather"]["days"][0]["high_f"] == 58
@@ -1346,6 +1348,149 @@ def test_the_owners_own_hidden_senders_are_kept_out():
     config.save(cfg)
     assert paper_privacy.hidden_senders() == ("smalllender.example", "other.example")
     assert paper_privacy.why("Hello", sender="News <hi@mail.smalllender.example>", money=False) == "domain smalllender.example"
+    for sender in ('"alice@ok.example" <hi@smalllender.example>', "Help @Home <hi@mail.smalllender.example>",
+                   "a@ok.example, b@smalllender.example", "hi@smalllender.example.", "x@@smalllender.example"):
+        assert paper_privacy.why("Hello", sender=sender, money=False) == "domain smalllender.example", sender
+    assert paper_privacy.why("Hello", sender='"a@ok.example" <noreply@dfas.mil>', money=False) == "domain dfas.mil"
+    assert not paper_privacy.why("Hello", sender='"smalllender.example" <a@ok.example>', money=False)
+    assert not paper_privacy.why("Hello", sender="a@notsmalllender.example", money=False)
+
+
+def test_a_long_sender_name_does_not_push_the_address_out_of_the_stored_sender():
+    import paper_privacy
+    assert paper_privacy.short_sender("Bob <b@ok.example>") == "Bob <b@ok.example>"
+    assert paper_privacy.short_sender(None) == ""
+    for frm in ("N" * 400 + " <noreply@dfas.mil>", "a@ok.example " + "N" * 400 + " <x@dfas.mil>", "N" * 199 + "<x@dfas.mil>"):
+        kept = paper_privacy.short_sender(frm)
+        assert len(kept) <= 200, len(kept)
+        assert paper_privacy.why("Hello", sender=kept, money=False) in ("domain dfas.mil", "sender too long to check"), kept[-40:]
+    import pathlib
+    app = pathlib.Path(paper_privacy.__file__).parent
+    src = (app / "mailwatch.py").read_text() + (app / "paper.py").read_text()
+    assert src.count("paper_privacy.short_sender(") == 2 and 'frm[:200]' not in src and 'msg["from"][:200]' not in src
+
+
+def test_a_shortened_sender_is_hidden_whenever_the_full_sender_is():
+    import random
+    import paper_privacy
+    rnd = random.Random(1118)
+    doms = ["dfas.mil", "ok.example", "a1.com", "sub." * 40 + "dfas.mil", "x" * 120 + ".example", "mail.dfas.mil", "d.example",
+            "\u03bcission-lane.com", "\u0394iscover.com", "dfas\ufffc.mil", "=?UTF-8?B?A?=.mil"]
+    hidden = shown = 0
+    for _ in range(4000):
+        parts = [rnd.choice(["N" * rnd.randint(1, 180), "Bob", '"a@ok.example"', ""]) + " <u@" + rnd.choice(doms) + ">" for _ in range(rnd.randint(1, 30))]
+        frm = ", ".join(parts)
+        kept = paper_privacy.short_sender(frm)
+        assert len(kept) <= 200, len(kept)
+        if len(frm) <= 200:
+            assert kept == frm
+        if len(frm) > 200:
+            assert kept.endswith(" @" + paper_privacy.UNCHECKED) and paper_privacy.why("Hello", sender=kept, money=False), frm[:300]
+        if paper_privacy.why("Hello", sender=frm, money=False):
+            hidden += 1
+            assert paper_privacy.why("Hello", sender=kept, money=False), frm[:300]
+        else:
+            shown += 1
+    assert hidden > 500 and shown > 50, (hidden, shown)
+    for frm in ("x" * 250 + " <a@ok.example>, Bob <b@\u03bcission-lane.com>", "x" * 250 + " <b@\u0394iscover.com>", "N" * 201):
+        assert paper_privacy.why("Hello", sender=paper_privacy.short_sender(frm), money=False), frm[-30:]
+    assert len(paper_privacy.short_sender("N" * 300, 10)) <= len(" @" + paper_privacy.UNCHECKED)
+    many = "x" * 150 + " <a@a1.com>, " + ", ".join(f"u@d{i}.example" for i in range(30)) + ", Bob <b@dfas.mil>"
+    assert paper_privacy.why("Hello", sender=paper_privacy.short_sender(many), money=False)
+    assert paper_privacy.why("Hello", sender=paper_privacy.short_sender("x" * 150 + " <a@" + "sub." * 40 + "dfas.mil>"), money=False)
+
+
+def test_the_check_never_raises_and_hides_what_it_cannot_read(monkeypatch):
+    import random
+    import paper_privacy
+    for bad in ("=?UTF-8?B?A?=", "Your order =?UTF-8?B?A?= has shipped", "=?UTF-8?B?QQ==?= =?x?B?A?="):
+        assert paper_privacy.why(bad), bad
+        assert paper_privacy.why("Hello", sender=bad + " <a@ok.example>", money=False), bad
+    rnd = random.Random(1119)
+    bits = ["=?", "?=", "?B?", "?Q?", "UTF-8", "x", "A", "=", "RGVidA", "\ud800", "\x00", "\ufffc", "\u03a9", "\u00df", " ", "@", "<", ">", "\n", "utf-16", "=FF", "_"]
+    for _ in range(20000):
+        text, sender = ("".join(rnd.choice(bits) for _ in range(rnd.randint(1, 12))) for _ in range(2))
+        assert isinstance(paper_privacy.why(text, 7, None, b"x", ["y"], sender=sender, money=rnd.random() < 0.5), str)
+    monkeypatch.setattr(paper_privacy, "_check", lambda *a: 1 / 0)
+    assert paper_privacy.why("Hello") == "text that could not be checked"
+    assert paper_privacy.private("Hello")
+
+
+def test_encoded_word_text_never_unhides_what_the_plain_reading_hides(monkeypatch):
+    import random
+    import config
+    import paper_privacy
+    for texts, sender in ((("=?" + "z" * 40, "1234"), "code"), (("=?", "credit"), "card Services <a@b.com>"), (("Your PIN =? x", "credit"), "Union <a@b.com>"),
+                          (("=?UTF-8?B?Y3JlZGl0?=", "card"), "Bob <a@b.com>"), (("your", "=?UTF-8?B?Y3JlZGl0?="), "card Services <a@b.com>")):
+        assert paper_privacy.why(*texts, sender=sender), (texts, sender)
+    rnd = random.Random(1120)
+    bits = ["credit", "card", "union", "code", "1234", "debt", "hello", "your", "=?", "?=", "=?UTF-8?B?QQ==?=", "=?UTF-8?B?Y3JlZGl0?=", "x", "PIN"]
+    seen = 0
+    for _ in range(6000):
+        texts = tuple(" ".join(rnd.choice(bits) for _ in range(rnd.randint(1, 3))) for _ in range(rnd.randint(1, 3)))
+        sender = " ".join(rnd.choice(bits) for _ in range(rnd.randint(0, 2))) + " <a@b.example>"
+        plain = paper_privacy._why_blanks(texts, sender, paper_privacy.DOMAINS, True)
+        if plain:
+            seen += 1
+            assert paper_privacy.why(*texts, sender=sender) == plain, (texts, sender)
+    assert seen > 1000, seen
+    monkeypatch.setattr(config, "load", lambda: {"paper": "x"})
+    assert paper_privacy.why("Hello") == "text that could not be checked" and paper_privacy.private("Hello")
+    monkeypatch.setattr(config, "load", lambda: 1 / 0)
+    assert paper_privacy.private("Hello", sender="Bob <a@b.example>")
+    monkeypatch.undo()
+    assert not paper_privacy.private("Hello", sender="Bob <a@b.example>")
+    import json
+    import pathlib
+    import tempfile
+    path = pathlib.Path(tempfile.mkdtemp()) / "config.json"
+    monkeypatch.setattr(config, "PATH", path)
+    assert not paper_privacy.private("Hello", sender="Bob <a@mybank.example>")
+    path.write_text(json.dumps({"paper": {"hide_senders": ["mybank.example"]}}))
+    assert paper_privacy.why("Hello", sender="Bob <a@mybank.example>") == "domain mybank.example"
+    assert not paper_privacy.private("Hello", sender="Bob <a@b.example>")
+    import os
+    if os.name == "posix" and os.geteuid() != 0:
+        path.parent.chmod(0)
+        try:
+            assert paper_privacy.why("Hello", sender="Bob <a@mybank.example>") == "text that could not be checked"
+        finally:
+            path.parent.chmod(0o700)
+    for broken in ("{not json", "[]", '"x"', json.dumps({"paper": {"hide_senders": "mybank.example"}})):
+        path.write_text(broken)
+        assert paper_privacy.why("Hello", sender="Bob <a@mybank.example>") == "text that could not be checked", broken
+    import logging
+    seen = []
+    handler = logging.Handler()
+    handler.emit = seen.append
+    logging.getLogger("paper").addHandler(handler)
+    try:
+        monkeypatch.setattr(paper_privacy, "_warned", [-60.0])
+        monkeypatch.setattr(paper_privacy.time, "monotonic", lambda: 1000.0)
+        for _ in range(200):
+            assert paper_privacy.private("Hello", sender="Bob <a@b.example>")
+        assert len(seen) == 1, len(seen)
+        monkeypatch.setattr(paper_privacy.time, "monotonic", lambda: 1061.0)
+        assert paper_privacy.private("Hello", sender="Bob <a@b.example>")
+        assert len(seen) == 2, len(seen)
+    finally:
+        logging.getLogger("paper").removeHandler(handler)
+
+
+def test_encoded_word_headers_are_read_decoded():
+    import paper_privacy
+    assert paper_privacy.why("=?UTF-8?B?RGVidA==?=") and paper_privacy.why("=?utf-8?Q?Debt_notice?=")
+    assert paper_privacy.why("Hello", sender="=?UTF-8?B?RGVidA==?= <a@ok.example>", money=False)
+    assert paper_privacy.why("=?UTF-8?B?RGVidA?=") and paper_privacy.why("=?x-nope?B?RGVidA==?=")
+    assert not paper_privacy.why("=?UTF-8?B?SGVsbG8gdGhlcmU=?=") and not paper_privacy.why("a =? b", sender="=?UTF-8?B?Qm9i?= <a@ok.example>")
+
+
+def test_characters_that_print_as_nothing_do_not_split_a_private_word():
+    import paper_privacy
+    for filler in ("\ufffc", "\ufffd", "\ue000", "\u0378", "\ud800", "\U000f0000"):
+        assert paper_privacy.why("de" + filler + "bt"), repr(filler)
+        assert paper_privacy.why("hello", sender="de" + filler + "bt <a@ok.example>"), repr(filler)
+    assert not paper_privacy.why("hello there")
 
 
 def test_no_printer_set_means_the_system_default_printer():
@@ -1397,3 +1542,1057 @@ def test_a_day_or_image_name_with_a_trailing_newline_is_refused():
     assert paper_api._day("2026-11-05\n") is None
     assert paper_api.DAY_RE.fullmatch("2026-11-05\n") is None
     assert paper_api.IMG_RE.fullmatch("img1.jpg") and paper_api.IMG_RE.fullmatch("img1.jpg\n") is None
+
+
+def test_health_visits_and_hidden_letter_tricks_never_print(monkeypatch):
+    import paper_privacy
+    for t in ("Dentist at 3 pm", "Appointment with Dr. Alvarez", "dr patel follow up", "Mammogram Tuesday", "Urgent care visit", "Flu shot at the pharmacy",
+              "Telehealth call", "Annual physical", "Your pre​scription is ready", "Ｄｅｎｔｉｓｔ reminder", "Sur­gery prep", "Dr. Lee at noon"):
+        assert paper_privacy.why(t), t
+        assert paper_privacy.private(t), t
+    assert paper_privacy.why("Reminder", sender="Dr. Kim <office@clinic.example>")
+    for t in ("Dr.Smith", "Dr.\u200bSmith", "Dr: Smith", "Dr/Smith", "Dr, Smith", "Dr-Smith", "dentistry consult", "appointment with Dr", "d\u0435ntist", "D\u03bfctor visit",
+              "den\u0301tist", "dent\u0336ist", "d\u034fentist", "d e n t i s t", "d.e.n.t.i.s.t"):
+        assert paper_privacy.why(t), t
+    for t in ("\u0405SA letter", "\u0397SA", "\u04cfogin alert", "\u0261yno", "doc\u3164tor", "doc\u2800tor", "doc\x08tor", "den\u0442ist", "pass\u0461ord reset", "\u0397\u0405\u0391 card", "\u0405\u0405\u0391 letter",
+              "deb\u1d1b due", "\u1d05octor", "loa\u0274", "d\u025bbt", "\u0111octor", "\u00f0octor", "\u0142oan", "d\u0131ntist", "l\u0585an", "\u13a0octor", "\u03b2ank",
+              "c\u03bcstody", "\u00dfankruptcy", "\u00dfill due", "\u03a9verdraft", "l\u03a9an", "unempl\u00b5yment", "\u0394rrest",
+              "de\u00dft", "\u03a9TP 123456", "Re: \u03a9TP", "I \u03a9WE 500", "c\u00b5stody"):
+        assert paper_privacy.why(t), t
+    for t in ("Caf\u00e9 lunch", "Draft essay", "R S V P to Sam", "a b c d party", "Stra\u00dfe walk", "\u041f\u0440\u0438\u0432\u0435\u0442 from Anna", "Lunch\nwith Sam",
+              "10k\u03a9 resistor", "order 100\u00b5F caps", "5\u00b5m bolt", "\u0394t", "2 M\u03a9", "Stra\u00dfe 5", "Ph\u1edf dinner", "H\u00e0 N\u1ed9i", "\u03c0 day", "5 \u03a9", "Kyiv \u041a\u0438\u0457\u0432"):
+        assert not paper_privacy.why(t), (t, paper_privacy.why(t))
+    for t in ("Your Amazon order has shipped", "Hard drive arrives Thursday", "Address the club newsletter", "Mail the library form", "Drum lesson at 4"):
+        assert not paper_privacy.why(t), (t, paper_privacy.why(t))
+    for c in "\u00df" + paper_privacy.UNIT_LETTERS:
+        assert c in paper_privacy.READINGS
+    for bad in ("EO\u00df", "pa\u00dfword", "reset your pa\u00dfcode", "repo\u00dfession", "t\u0394x due", "V\u0394", "SS\u0394", "\u0394CH", "\u2126TP",
+                "RITE \u0394I\u0394", "rite \u0394i\u0394", "compensation \u0394N\u0394 pension", "D\u03bcV", "\u2206ebt", "rite \u2206I\u2206", "\u00df" * 12 + " ok"):
+        assert paper_privacy.why(bad), bad
+    for fine in ("Stra\u00dfe 5", "Fu\u00dfball", "Wei\u00df Bier", "Ma\u00dfe", "5 \u03a9", "2 M\u03a9", "5\u03bcm", "10 \u03bcs", "\u00b5SD", "\u03bcg/L", "\u0394T 5", "\u0394p 5 \u03bcm", "5 \u03bcF, 10 \u03bcs, 2 M\u03a9, 1 k\u03a9", "Gr\u00fc\u00dfe aus der Stra\u00dfe"):
+        assert not paper_privacy.why(fine), fine
+    assert paper_privacy.why("hi", sender="RITE \u0394I\u0394 <a@b.example>")
+    started = time.time()
+    assert paper_privacy.why("x " * 8000 + "\u00df\u0394\u03bc" * 6)
+    assert time.time() - started < 2
+    for spelled in ("d e \u1e9e t", "d e \u03b2 t", "d.e.\u03b2.t", "b a n \u043a", "\u03b4 e b t"):
+        assert paper_privacy.why(spelled), spelled
+    for fine in ("\u03b1 \u03b2 \u03b3", "a b c", "x y z are axes"):
+        assert not paper_privacy.why(fine), fine
+    under = " ".join(["\u00df"] * 6)
+    over = " ".join(["\u00df"] * 7)
+    assert 4 ** 6 * (len(under) + 1) <= paper_privacy.READINGS_BUDGET < 4 ** 7 * (len(over) + 1)
+    for slow in (under, "\u00df " * 3 + "\u03bc " * 3, "\u00df " * 3 + "\u0394 " * 6):
+        started = time.time()
+        assert not paper_privacy.why(slow), slow
+        assert time.time() - started < 1, (slow, time.time() - started)
+    assert paper_privacy.why(over) == "word with mixed alphabets"
+    for hide in ("\u0394\u0395\u0392\u0166", "see \u0394\u0395\u0392\u0166 now", "\u0394\u0395\u039d\u03a4\u0399\u03a3\u03a4", "\u0394\u0395\u039d\u03a4\u0399\u0166\u03a4"):
+        assert paper_privacy.why(hide) == "word with mixed alphabets", hide
+    assert paper_privacy.why("hello", sender="\u0394\u0395\u0392\u0166 <a@ok.example>") == "word with mixed alphabets"
+    loads = []
+    monkeypatch.setattr(paper_privacy, "hidden_senders", lambda: loads.append(1) or ())
+    assert not paper_privacy.why(under)
+    assert len(loads) == 1
+    print("PASS: health visits, Dr. names and hidden-letter spellings are kept off the paper")
+
+
+def test_a_text_prints_only_when_every_reading_of_it_prints(monkeypatch):
+    import itertools
+    import random
+    import unicodedata
+    import paper_privacy
+    monkeypatch.setattr(paper_privacy, "hidden_senders", lambda: ())
+    rng = random.Random(1115)
+    pieces = list(paper_privacy.READINGS) + ["\u2206", "\u0166", "\u0395", "\u0392", "\u039d", "\u03a4", "\u0399", "\u03a3", "\u210f", "\u1e9e", "e", "b", "t", "a", "n", "k", "E", "B", "T", "I", "S", " ", " ", ".", "-", "1"]
+    printed = 0
+    for _ in range(20000):
+        text = "".join(rng.choice(pieces) for _ in range(rng.randint(1, 7)))
+        if paper_privacy.why(text):
+            continue
+        printed += 1
+        flat = unicodedata.normalize("NFKD", text.replace("\u2206", "\u0394"))
+        spots = [i for i, c in enumerate(flat) if c in paper_privacy.READINGS]
+        for combo in itertools.product(*(paper_privacy.READINGS[flat[i]] for i in spots)):
+            chars = list(flat)
+            for i, r in zip(spots, combo):
+                chars[i] = r
+            reading = "".join(chars)
+            assert not paper_privacy.why(reading), (text, reading, paper_privacy.why(reading))
+    assert printed > 500, printed
+    print("PASS: a text prints only when every reading of its unit letters prints too")
+
+
+def test_whatever_the_old_single_reading_hid_is_still_hidden():
+    import random
+    import paper_privacy
+    glued = ("caf\u00e9bank", "Zo\u00e9loan", "abc\u200bbank", "foo\x0bbank", "foo\x0cdebt", "debt\u00e9", "\u00e9pay", "\u00e1debt",
+             "VA\u2060lo", "ref\u200bIRS", "SSA\u200bref ta", "pin\u200b1234", "loan\uff44\uff45\uff42\uff54", "x\u00adbank", "a\u0301bank", "foo\x85debt")
+    for text in glued:
+        assert paper_privacy.why(text, money=False), repr(text)
+    assert paper_privacy.why("lunch", sender="A <a@x.example> \u200bbank", money=False)
+    rng = random.Random(23)
+    marks = ["\u200b", "\u200c", "\u2060", "\ufeff", "\u00ad", "\x0b", "\x0c", "\x1f", "\x85", "\u0301", "\u00e9", "\u00e1", "\uff44", "\uff42", " ", "", "-", "=?", "\u0394", "\u2206"]
+    words = ["bank", "debt", "loan", "IRS", "SSA", "VA", "pin 1234", "code 55512", "$5", "credit", "card", "lunch", "ref", "abc", "Zo", "ta"]
+    hits = 0
+    for _ in range(6000):
+        texts = tuple("".join(rng.choice(words) + rng.choice(marks) for _ in range(rng.randrange(1, 4))) for _ in range(rng.randrange(1, 4)))
+        sender = rng.choice(["", "Bob <b@ok.example>", "A" + rng.choice(marks) + "bank <a@x.example>", "Pat <p@sub.va.gov>"])
+        money = rng.random() < 0.5
+        old = paper_privacy._first(tuple(t for t in texts if t), sender, paper_privacy.DOMAINS, money)
+        if old:
+            hits += 1
+            assert paper_privacy.why(*texts, sender=sender, money=money) == old, (texts, sender)
+    assert hits > 1000, hits
+    assert paper_privacy.why("card =? credit", money=False) == "word credit card"
+    for text in ("=?iso-8859-8-i?Q?Past_Due_notice?=", "=?windows-874?Q?Late_fee_added?=", "=?x-sjis?Q?=70ast_due?=", "=?x-sjis?B?cGFzdCBkdWU=?=", "=?x-sjis?B?ZGVi?= =?x-sjis?B?dA==?="):
+        assert paper_privacy.why(text, money=False).startswith("word "), text
+    assert not paper_privacy.why("=?x-sjis?Q?Lunch_on_Friday?=", money=False)
+    assert paper_privacy.why("=?x-foo?B?ZGVi?dA==?=", money=False) == "word debt"
+    for gap in ("  ", "\n\n", " \t ", "\u2028", "\u2029", "\u1680", "\x0b", "\x0c", "\x1c", "\x85", "\u200b", "\u00ad", "\u2060", "\ufeff", " \u200b "):
+        for phrase in ("past due", "late fee", "wells fargo", "credit card", "capital one"):
+            text = "Your " + phrase.replace(" ", gap) + " notice"
+            assert paper_privacy.why(text, money=False).startswith("word "), repr(text)
+    assert paper_privacy.why("p\u0430st  due", money=False)
+    assert not paper_privacy.why("Lunch  on\u2028Friday\u200b at  noon", money=False)
+    assert paper_privacy._first(("hi",), "A <a@chase.com>", paper_privacy.DOMAINS, False) == "domain chase.com"
+    assert paper_privacy._first(("it was $5",), "", (), True) == "an amount of money" and not paper_privacy._first(("it was $5",), "", (), False)
+    import time
+    started = time.monotonic()
+    for text in ("\ufdfa" * 100000 + "\ufffd" * 100000, "\ufdfa\ufffd" * 100000, "lunch " * 40000):
+        assert paper_privacy.why(text, money=False) == "text too long to check"
+    assert paper_privacy.why("x" * 200000 + " bank", money=False) == "word bank"
+    assert paper_privacy.why("\ufdfa" * (paper_privacy.TOO_LONG - 30) + "\u00df" * 30, money=False)
+    assert not paper_privacy.why("lunch " * 600, money=False)
+    assert paper_privacy.why(*["q\u00dfq  x"] * 3 + ["\ufffd"] * 1465 + ["=?x-foo?Q?lunch?="], money=False) == "text too long to check"
+    assert paper_privacy.why(*["q\u00dfq  x"] * 3 + ["\ufffd " * 60] * 36 + ["=?x-foo?Q?lunch?="], money=False) is not None
+    assert not paper_privacy.why(*["lunch"] * 40, money=False)
+    assert time.monotonic() - started < 10
+    assert not paper_privacy.why("Lunch on Friday", sender="Bob <b@ok.example>")
+    print("PASS: the old single reading still hides everything it hid")
+
+
+def test_hidden_characters_and_odd_spacing_never_unhide_a_private_phrase(monkeypatch):
+    import base64
+    import paper_privacy
+    monkeypatch.setattr(paper_privacy, "hidden_senders", lambda: ())
+    word = lambda t: "=?utf-8?B?" + base64.b64encode(t.encode()).decode() + "?="
+    for mark in ("͏", "️", "⁦", "؜", "᠎", "\U000e0020", "￹", "ㅤ", "​͏"):
+        for phrase in ("past due", "late fee", "wells fargo", "credit card", "capital one"):
+            for gap in (" " + mark + " ", mark + " ", " " + mark):
+                text = "Your " + phrase.replace(" ", gap) + " notice"
+                assert paper_privacy.why(text, money=False) in ("word " + phrase, "word with mixed alphabets"), repr(text)
+                assert paper_privacy.why(word(text), money=False) in ("word " + phrase, "word with mixed alphabets"), repr(text)
+        assert paper_privacy.why("d " + mark + " e " + mark + " b " + mark + " t", money=False) in ("word debt", "word with mixed alphabets"), repr(mark)
+    for mark in ("⁦", "\U000e0020", "￹", "ㅤ", "\x01"):
+        assert paper_privacy.why("Your past" + mark + "due notice", money=False) in ("word past due", "word with mixed alphabets"), repr(mark)
+    for text in ("d  e  b  t", "d \n e\tb  t", "d\n\ne\n\nb\n\nt"):
+        assert paper_privacy.why(text, money=False) == "word debt", repr(text)
+    for text in ("past  due", "late\r\nfee", "d  e  b  t", "past​due"):
+        assert paper_privacy.why(word(text), money=False).startswith("word "), repr(text)
+    assert paper_privacy.why("=?utf-8?Q?past__due?=", money=False) == "word past due"
+    assert paper_privacy.why("=?utf-8?B? =?utf-8?B?cGFzdCBkdWU=?=", money=False)
+    assert paper_privacy.why("=?bogus?B?eA==?= =?utf-8?B?cGFzdCBk\ndWU=?=", money=False) == "word past due"
+    for text in ("Lunch ͏ on⁦Friday at  noon", "café at 5", "Meet​ing notes", word("Lunch  at\r\nnoon")):
+        assert not paper_privacy.why(text, money=False), repr(text)
+    assert paper_privacy.why("pa\u200bst \u034f due", money=False) == "word past due"
+    assert paper_privacy.why("d e b t  o k a y", money=False) == "word debt"
+    assert not paper_privacy.why("re\u0301sume\u0301 for the cafe\u0301", money=False)
+    calls = []
+    inner = paper_privacy._words_in
+    monkeypatch.setattr(paper_privacy, "_words_in", lambda *a: calls.append(1) or inner(*a))
+    assert not paper_privacy.why("Lunch at noon", money=False) and calls == [1], calls
+    print("PASS: hidden characters, odd spacing, and encoded words with either still hide a private phrase")
+
+
+def test_text_over_the_caps_gets_one_reading_only(monkeypatch):
+    import paper_privacy
+    monkeypatch.setattr(paper_privacy, "hidden_senders", lambda: ())
+    calls = []
+    first = paper_privacy._first
+    monkeypatch.setattr(paper_privacy, "_first", lambda *a: calls.append(1) or first(*a))
+    assert paper_privacy.why("a​ " * 2000, money=False) == "text too long to check"
+    assert paper_privacy.why(*["a"] * 41, money=False) == "text too long to check"
+    assert calls == [1, 1], calls
+    assert paper_privacy.why("past  due " * 500, money=False) == "text too long to check"
+    assert paper_privacy.why("past due " * 500, money=False) == "word past due"
+    print("PASS: text over the length or field cap gets the old reading only, then stays off the paper")
+
+
+def test_encoded_words_that_cannot_be_read_never_print(monkeypatch):
+    import base64
+    import paper_privacy
+    monkeypatch.setattr(paper_privacy, "hidden_senders", lambda: ())
+    b64 = lambda t: base64.b64encode(t.encode()).decode()
+    cannot = "text that could not be checked"
+    due = b64("past due")
+    cases = ["=?utf-8?B?%s =?utf-8?B?%s?=" % (pre, due) for pre in ("aGVsbG8", "zz", "aGk")]
+    cases += ["=?utf-8?Q?hello =?utf-8?Q?past_due?=", "=?utf-8?B?aGVsbG8 =?utf-8?Q?past_due?=", "Re: =?utf-8?B?aGVsbG8 =?utf-8?B?%s?= ok" % due,
+              "=?utf-8?B?aGVsbG8\t=?utf-8?B?%s?=" % due, "=?utf-8?B?aGVsbG8\n=?utf-8?B?%s?=" % due, "=?utf-8?B?%s?= =?" % due + "x?B?",
+              "=?utf-8?B?" + b64("=?utf-8?B?" + due + "?=") + "?=", "=??B?%s?=" % due, "=?utf 8?B?%s?=" % due]
+    for text in cases:
+        assert paper_privacy.why(text, money=False) == cannot, repr(text)
+        assert paper_privacy.why("hi", sender=text + " <a@ok.example>", money=False) == cannot, repr(text)
+        assert paper_privacy.why("hi", text, money=False) == cannot, repr(text)
+    assert paper_privacy.why("=?utf-8?B?%s?=" % due, money=False) == "word past due"
+    assert paper_privacy.why("hi", sender="=?utf-8?B?%s?= <a@ok.example>" % due, money=False) == "word past due"
+    assert paper_privacy.why("=?utf-8?B?%s?= =?utf-8?B?%s?=" % (b64("pa"), b64("st due")), money=False) == "word past due"
+    assert paper_privacy.why("pa=?utf-8?B?%s?=" % b64("st due"), money=False) == "word past due"
+    assert paper_privacy.why("x=?utf-8?B?%s?= y" % b64("debt"), money=False) == "word debt"
+    assert paper_privacy.why("=?utf-16?B?%s?=" % due, money=False) == "word past due"
+    assert not paper_privacy.why("=?utf-8?B?%s?=" % b64("Lunch at noon"), money=False)
+    assert not paper_privacy.why("Re: =?utf-8?Q?Lunch_at_noon?= ok", "a =? b", money=False)
+    assert not paper_privacy.why("hi", sender="=?utf-8?B?%s?= <a@ok.example>" % b64("Bob"), money=False)
+    assert not hasattr(paper_privacy, "ENCODED_AT_RE")
+    print("PASS: an encoded word that cannot be read stays off the paper, readable ones are read")
+
+
+def test_work_budget_and_normalized_length_cap_are_deterministic(monkeypatch):
+    import paper_privacy
+    monkeypatch.setattr(paper_privacy, "hidden_senders", lambda: ())
+    long = "text too long to check"
+    pre = "=?utf-8?B?aGk=?=  \ufffc  "
+    for text in ((pre + "\u00df ; " + "$ " * 4000)[:3000], (pre + "\u00df ; " + "a-b-c-d-e-f-g" * 4000)[:3000]):
+        assert paper_privacy.why(text) == long
+        assert paper_privacy._spent.n > paper_privacy.WORK_BUDGET
+    assert paper_privacy.why("\ufdfa" * 230) == long and paper_privacy.why("\ufdfa" * 3900) == long
+    assert paper_privacy.why("\ufdfa" * 100, sender="\ufdfa" * 123) == long
+    assert paper_privacy.why("\ufdfa" * 100, sender="\ufdfa" * 100) != long
+    plain = "The quick brown fox jumps over the lazy dog. " * 100
+    assert paper_privacy.why(plain[:4000]) == "" and paper_privacy._spent.n == 14984 <= paper_privacy.WORK_BUDGET // 8
+    word = "=?utf-8?B?" + base64.b64encode(b"Lunch at noon").decode() + "?="
+    mixed = ("Die stra\u00dfe is 5 \u03bcm wide, \u0394T  small. " + word + " " + "Meet at the cafe on Friday and bring the notes for the project, ok? " * 10)[:500]
+    assert paper_privacy.why(mixed, money=False) != long and paper_privacy._spent.n == 116548 < paper_privacy.WORK_BUDGET * 4 // 5
+    assert paper_privacy.why("a" * 4000) == "" and paper_privacy.why("a" * 4001) == long
+    assert paper_privacy.why("a" * 3000, sender="b" * 1000) == "" and paper_privacy.why("a" * 3000, sender="b" * 1001) == long
+    assert paper_privacy.why(*["a"] * 40) == "" and paper_privacy.why(*["a"] * 41) == long
+    assert paper_privacy.why("Lunch at noon") == ""
+    used = paper_privacy._spent.n
+    assert used > 0
+    assert paper_privacy.WORK_BUDGET == 150000
+    assert paper_privacy.why("Lunch at noon", sender="Bob Smith") == "" and paper_privacy._spent.n == 68
+    monkeypatch.setattr(paper_privacy, "WORK_BUDGET", used - 1)
+    assert paper_privacy.why("Lunch at noon") == long
+    monkeypatch.setattr(paper_privacy, "WORK_BUDGET", used)
+    assert paper_privacy.why("Lunch at noon") == ""
+    print("PASS: the length cap counts the normalized text and sender, and a fixed work budget bounds the cost")
+
+
+def test_combining_marks_never_become_a_space_but_other_hidden_characters_do():
+    import paper_privacy
+    for text in ("d\u0155\u017ea\u0165", "d\u0155\u017ea", "Ako d\u0155\u017ea\u0165 loptu", "caf\u00e9 r\u00e9sum\u00e9"):
+        assert not paper_privacy.why(text, money=False), repr(text)
+    assert paper_privacy.why("dr\u00adive", money=False)
+    assert paper_privacy.why("past\u200bdue", money=False) == "word past due"
+    plain = paper_privacy._plain
+    assert plain("a\u0301b", " ") == "ab" and plain("a\u0301b", "") == "ab" and plain("a\u0301b") == "ab"
+    assert plain("a\u0903b", " ") == "ab" and plain("a\u20ddb", " ") == "ab"
+    assert plain("a\u200bb", " ") == "a b" and plain("a\u0001b", " ") == "a b" and plain("a\u3164b", " ") == "a b"
+    assert plain("a\u200bb", "") == "ab" and plain("a\u200bb") == "ab"
+    assert plain("a\u200b\u200bb", " ") == "a b" and plain("a  b", "") == "a b" and plain("a  b") == "a  b"
+    assert plain("a\nb", "") == "a b" and plain("a\tb", "") == "a b" and plain("a\rb") == "a b"
+    print("PASS: combining marks are removed in every reading, other hidden characters still split words")
+
+
+def test_privacy_reads_values_that_are_not_strings_as_text_before_any_emptiness_test(monkeypatch):
+    import paper_privacy
+    monkeypatch.setattr(paper_privacy, "hidden_senders", lambda: ())
+
+    class Falsy:
+        def __init__(self, text):
+            self.text = text
+
+        def __bool__(self):
+            return False
+
+        def __str__(self):
+            return self.text
+
+    class Empty(str):
+        def __len__(self):
+            return 0
+
+        def __iter__(self):
+            return iter(())
+
+    class Renamed(str):
+        def __str__(self):
+            return "ok"
+
+    class Broken:
+        def __str__(self):
+            raise ValueError("no text")
+
+    assert paper_privacy.why(Falsy("past due")) == "word past due"
+    assert paper_privacy.why("hi", sender=Falsy("Bob <a@chase.com>")) == "domain chase.com"
+    assert paper_privacy.why(Empty("past due")) == "word past due" and paper_privacy.why("hi", sender=Empty("x@chase.com"))
+    assert paper_privacy.why(Renamed("past due")) == "word past due"
+    assert paper_privacy.why(b"past due", ["debt"], 7)
+    assert paper_privacy.why(Broken()) == "text that could not be checked"
+    assert paper_privacy.why("hi", sender=Broken()) == "text that could not be checked"
+    assert not paper_privacy.why(Falsy("lunch"), Falsy(""), 0, sender=Falsy(""), money=False)
+    print("PASS: every text and the sender is turned into a string before it is tested for being empty")
+
+
+def test_a_sender_name_with_a_hidden_character_and_the_first_reading_layers_still_hide(monkeypatch):
+    import paper_privacy
+    monkeypatch.setattr(paper_privacy, "hidden_senders", lambda: ())
+    assert paper_privacy.why("hi", sender="Past \u200b due <a@ok.com>") == "word past due"
+    assert paper_privacy.why("hi", sender="=?utf-8?B?cGFzdCBkdWU=?= <a@ok.com>") == "word past due"
+    assert paper_privacy.why("past=?utf-8?B?ZHVl?=", money=False) == "word past due"
+    assert paper_privacy.why("=?cp037?B?l4Gio0CEpIU=?=", money=False) == "word past due"
+    assert paper_privacy.why("=?utf-8?B?cGFzdA==?=due", money=False) == "word past due"
+    assert paper_privacy.why("=?utf-8?Q?accou=6et_ending?=", money=False) == "word account ending"
+    assert paper_privacy.why("=?utf-8?B?/w==?= lunch", money=False) == ""
+    assert paper_privacy.why("hi", sender="=?utf-8?B?Qm9iIDxhQGNoYXNlLmNvbT4=?=") == "domain chase.com"
+    assert paper_privacy.why("hi", sender="Past\u200b due <a@ok.com>") == "word past due"
+    assert not paper_privacy.why("hi", sender="Bob \u200b Smith <a@ok.com>")
+    monkeypatch.setattr(paper_privacy, "_why_read", lambda *a: "")
+    for text in ("past\u200bdue", "past\n\ndue", "past\u00ad\u00addue", "past  due"):
+        assert paper_privacy._why_all((text,), "", paper_privacy.DOMAINS, False) == "word past due", repr(text)
+    assert paper_privacy._why_all(("lunch",), "", paper_privacy.DOMAINS, False) == ""
+    print("PASS: a hidden character in a sender name and the first readings still hide a private phrase")
+
+
+def _quoted(raw, charset, kind, rng):
+    if kind == "B":
+        return "=?" + charset + "?B?" + base64.b64encode(raw).decode() + "?="
+    body = "".join(chr(b) if chr(b).isascii() and chr(b).isalnum() and rng.random() < 0.7 else "_" if b == 32 and rng.random() < 0.5 else "=%02X" % b for b in raw)
+    return "=?" + charset + "?Q?" + body + "?="
+
+
+def _encoded_field(rng, phrases, plains):
+    parts = []
+    for _ in range(rng.randrange(1, 4)):
+        if parts and rng.random() < 0.7:
+            parts.append(rng.choice(plains))
+        phrase = rng.choice(phrases)
+        charset = rng.choice(("utf-8", "utf-8", "iso-8859-1", "koi8-r", "utf-16-le", "windows-1252", "utf-16", "UTF-8*en"))
+        try:
+            raw = phrase.encode(charset.split("*")[0])
+        except UnicodeEncodeError:
+            charset, raw = "utf-8", phrase.encode()
+        cuts = sorted({rng.randrange(1, len(raw)) for _ in range(rng.randrange(0, 4))} if len(raw) > 1 else set())
+        words = [_quoted(raw[a:b], charset, rng.choice("BbQq").upper(), rng) for a, b in zip([0] + cuts, cuts + [len(raw)])]
+        gaps = [rng.choice((" ", " ", "\r\n ", "\t", "  ", "", "\n\n", "\x85", "\t\t")) for _ in words[1:]] + [""]
+        parts.append("".join(w + g for w, g in zip(words, gaps)))
+        if rng.random() < 0.4:
+            parts.append(rng.choice(plains))
+    return rng.choice((" ", "  ", "")).join(parts).strip()
+
+
+def _client_reading(text):
+    import email.header
+    try:
+        return str(email.header.make_header(email.header.decode_header(text)))
+    except Exception:
+        return None
+
+
+def test_a_field_hides_whenever_any_reading_of_it_hides_as_plain_text(monkeypatch):
+    import random
+    import paper_privacy
+    monkeypatch.setattr(paper_privacy, "hidden_senders", lambda: ())
+    phrases = ["debt", "bank", "venmo", "v e n m o", "d e b t", "ｐａｙｐａｌ", "chase", "past due", "code 12345", "Señor 98765 T o m pin",
+               "lunch", "hello", "été", "дело", "pin", "98765", "5pm", "débít"]
+    plains = ["hello", "ok", "Re:", "lunch at 5pm", "98765", "pin", "T o m", "x", "(c)", "é"]
+    rng = random.Random(2815)
+    checked = hidden = 0
+    for _ in range(160):
+        text = _encoded_field(rng, phrases, plains)
+        sender = _encoded_field(rng, phrases, plains) + " <a@b.example>" if rng.random() < 0.4 else ""
+        both = bool(sender)
+        text_readings = {_client_reading(text), *paper_privacy._readings(text)} - {None}
+        sender_readings = ({_client_reading(sender), *paper_privacy._readings(sender)} - {None}) if both else {""}
+        got = paper_privacy.why(text, sender=sender)
+        checked += 1
+        hidden += bool(got)
+        for rt in text_readings:
+            for rs in sender_readings:
+                if paper_privacy.why(rt, sender=rs):
+                    assert got, (text, sender, rt, rs)
+    assert checked == 160 and hidden > 40, (checked, hidden)
+    print("PASS: an encoded field hides whenever any one reading of it hides as plain text")
+
+
+def test_adjacent_encoded_words_are_joined_by_the_mail_client_and_checked_that_way():
+    import paper_privacy
+    q = lambda t: "=?utf-8?q?" + t + "?="
+    assert paper_privacy.why(q("de") + " " + q("bt") + " ok " + q("5pm"), money=False) == "word debt"
+    assert paper_privacy.why(q("de") + " " + q("bt") + " ok " + q("5") + " " + q("pm"), money=False) == "word debt"
+    assert paper_privacy.why(q("ven") + " " + q("mo") + " hi " + q("x"), money=False) == "word venmo"
+    assert paper_privacy.why(q("x") + " hi " + q("ven") + "\r\n " + q("mo"), money=False) == "word venmo"
+    assert paper_privacy.why("hi", sender=q("de") + " " + q("bt") + " ok <a@b.example>", money=False) == "word debt"
+    assert not paper_privacy.why(q("lun") + " " + q("ch") + " ok " + q("5pm"), money=False)
+    print("PASS: encoded words that a mail client joins are read joined next to plain text")
+
+
+def test_two_readings_of_one_field_are_never_glued_into_one_text():
+    import paper_privacy
+    spelled = "=?utf-8?B?" + base64.b64encode(b"v e n m o").decode() + "?="
+    assert paper_privacy.why(spelled + " hello", money=False) == "word venmo"
+    assert paper_privacy.why("hello " + spelled, money=False) == "word venmo"
+    assert paper_privacy.why("hello", sender=spelled + " <a@b.example>", money=False) == "word venmo"
+    assert not paper_privacy.why("=?utf-8?B?" + base64.b64encode(b"v e n m").decode() + "?= hello", money=False)
+    assert paper_privacy.why("=?utf-8?B?" + base64.b64encode(b"d e b t").decode() + "?= ok", money=False) == "word debt"
+    assert all(" ".join(r.split()).count("v e n m o") <= 1 for r in paper_privacy._readings(spelled + " hello"))
+    assert len(paper_privacy._readings(spelled + " hello")) > 1
+    print("PASS: the readings of one field are checked one by one and never glued into one text")
+
+
+def test_a_character_split_across_two_encoded_words_is_read_whole():
+    import paper_privacy
+    raw = "ｄｅｂｔ".encode()
+    for cut in range(1, len(raw)):
+        words = ["=?utf-8?B?" + base64.b64encode(raw[:cut]).decode() + "?=", "=?utf-8?B?" + base64.b64encode(raw[cut:]).decode() + "?="]
+        assert paper_privacy.why(" ".join(words), money=False) == "word debt", cut
+        assert paper_privacy.why("hello", sender="\r\n ".join(words) + " <a@b.example>", money=False) == "word debt", cut
+    raw = "bаnk".encode()
+    for cut in range(1, len(raw)):
+        assert paper_privacy.why("=?utf-8?B?" + base64.b64encode(raw[:cut]).decode() + "?= =?utf-8?B?" + base64.b64encode(raw[cut:]).decode() + "?=", money=False)
+    assert not paper_privacy.why("=?utf-8?B?" + base64.b64encode("été".encode()[:1]).decode() + "?= =?utf-8?B?" + base64.b64encode("été".encode()[1:]).decode() + "?=", money=False)
+    print("PASS: a character cut between two encoded words is rebuilt before the check")
+
+
+def test_a_decoded_reading_gets_the_same_first_check_as_plain_text():
+    import paper_privacy
+    text = "=?utf8?q?=ef=BD=90=EF=bd=81=ef=BD=99=EF=BD=90=ef=bd=81=ef=BD=8c?=\n =?iso-8859-1?q?=63has?=\t=?iso-8859-1?q?=65?="
+    assert paper_privacy.why(text, money=False) == "word chase"
+    assert paper_privacy.why("ｐａｙｐａｌ" + "chase", money=False) == "word chase"
+    assert paper_privacy.why("hello", sender="=?utf-8?B?" + base64.b64encode("ｐａｙ ｐａｌ".encode()).decode() + "?= <a@b.example>", money=False) == "word pay"
+    assert not paper_privacy.why("=?utf-8?B?" + base64.b64encode("ｈｅｌｌｏ".encode()).decode() + "?=", money=False)
+    print("PASS: a decoded reading goes through the first check as well")
+
+
+def test_readings_of_one_field_do_not_make_a_security_code_with_each_other():
+    import paper_privacy
+    coded = "=?utf-8?B?" + base64.b64encode("Señor 98765 T o m pin".encode()).decode() + "?="
+    assert not paper_privacy.why("hi " + coded)
+    assert not paper_privacy.why(coded + " hi")
+    assert not paper_privacy.why(coded)
+    assert paper_privacy.why("Señor 98765 T o m pin") == ""
+    assert paper_privacy.why("pin 98765 =?utf-8?q?x?=") == "a security code"
+    assert paper_privacy.why("=?utf-8?q?pin_98765?=") == "a security code"
+    assert paper_privacy.why("pin", "98765 " + "=?utf-8?q?x?=") == "a security code"
+    print("PASS: two readings of one encoded field never meet to make a security code")
+
+
+def test_a_base64_word_with_three_pad_signs_could_not_be_checked():
+    import paper_privacy
+    assert paper_privacy.why("=?utf-8?b?ZGVidA===?=", money=False) == "text that could not be checked"
+    assert paper_privacy.why("hello", sender="=?utf-8?b?ZGVidA====?= <a@b.example>", money=False) == "text that could not be checked"
+    assert paper_privacy.why("=?utf-8?b?ZGVidA==?=", money=False) == "word debt"
+    print("PASS: a base64 word with too many pad signs is kept off the paper as unchecked")
+
+
+def test_a_quoted_printable_word_with_a_question_mark_in_it_could_not_be_checked():
+    import paper_privacy
+    assert paper_privacy.why("=?utf-8?q?de?bt?=", money=False) == "text that could not be checked"
+    assert paper_privacy.why("hello", sender="=?utf-8?q?de?bt?= <a@b.example>", money=False) == "text that could not be checked"
+    assert paper_privacy._word(paper_privacy.ENCODED_RE.search("=?utf-8?q?deb\nt?=")).replace("\n", "") == "debt"
+    assert paper_privacy.why("=?utf-8?q?lun?ch?=", money=False) == "text that could not be checked"
+    print("PASS: a quoted-printable word with a question mark in its body is kept off the paper as unchecked")
+
+
+def test_an_unknown_charset_is_read_as_utf_8_in_every_reading():
+    import paper_privacy
+    word = paper_privacy.ENCODED_RE.search("=?x-foo?q?d=65bt?=")
+    assert paper_privacy._word(word) == "debt"
+    assert paper_privacy._word(paper_privacy.ENCODED_RE.search("=?x-foo?B?ZGVidA==?=")) == "debt"
+    assert paper_privacy._client("=?x-foo?q?d=65bt?=") == "debt"
+    assert paper_privacy._client("=?x-foo?q?d=65?= =?x-foo?q?bt?= ok") == "debt ok"
+    assert paper_privacy._client("=?x-foo?q?d=65bt?= and =?utf-8?q?ok?=") == "debt and ok"
+    assert paper_privacy.why("=?x-foo?q?d=65bt?=", money=False) == "word debt"
+    assert paper_privacy.why("hello", sender="=?x-foo?q?d=65bt?= <a@b.example>", money=False) == "word debt"
+    assert paper_privacy.why("=?x-foo?q?d=65?= =?x-foo?q?bt?= ok", money=False) == "word debt"
+    print("PASS: an unknown charset label is read as utf-8 whatever the reading")
+
+
+def test_blanks_inside_a_base64_body_are_ignored():
+    import paper_privacy
+    word = paper_privacy.ENCODED_RE.search("=?utf-8?B?ZGVi dA==?=")
+    assert paper_privacy._word(word) == "debt"
+    assert paper_privacy._word(paper_privacy.ENCODED_RE.search("=?utf-8?B?ZG\r\nVi\tdA==?=")) == "debt"
+    assert paper_privacy.why("=?utf-8?B?ZGVi dA==?=", money=False) == "word debt"
+    assert paper_privacy.why("=?utf-8?B?ZGVi\r\n dA==?=", money=False)
+    assert paper_privacy._word(paper_privacy.ENCODED_RE.search("=?utf-8?B?ZGVidA==?=")) == "debt"
+    assert paper_privacy._word(paper_privacy.ENCODED_RE.search("=?utf-8?B?ZGVi dA?=")) == "debt"
+    assert paper_privacy.why("=?utf-8?B?ZGVi dA?=", money=False) == "word debt"
+    assert paper_privacy.why("hello", sender="=?utf-8?B?ZGV idA?= <a@b.example>", money=False) == "word debt"
+    print("PASS: blanks inside a base64 body do not change what it says")
+
+
+def test_a_collapsed_whitespace_reading_of_encoded_words_is_checked_too():
+    import paper_privacy
+    text = "=?utf-8?B?Yg==?=\t\t=?utf-8?B?w58=?=\t\t=?utf-8?B?bg==?=\t\t=?utf-8?B?aw==?="
+    assert paper_privacy.why(text, money=False) == "word with mixed alphabets"
+    assert paper_privacy.why("ok\x0b=?utf-8?B?Yg==?=\x85=?utf-8?B?w58=?=\x85=?utf-8?B?bg==?=\x85=?utf-8?B?aw==?=", money=False) == "word with mixed alphabets"
+    assert not paper_privacy.why("=?utf-8?B?bA==?=\t\t=?utf-8?B?dQ==?=\t\t=?utf-8?B?bg==?=\t\t=?utf-8?B?Y2g=?=", money=False)
+    print("PASS: the whitespace-collapsed reading of encoded words is checked as well")
+
+
+def test_a_mail_client_reading_longer_than_the_input_is_too_long_to_check():
+    import paper_privacy
+    text = "ab " * 1326 + "=?utf-8?Q?a?=" + "\ud800" * 5 + "ab "
+    assert len(text) <= paper_privacy.TOO_LONG
+    readings = paper_privacy._readings(text)
+    assert max(map(len, readings)) > paper_privacy.TOO_LONG >= max(map(len, readings[:-1]))
+    assert paper_privacy.why(readings[-1], money=False) == "text too long to check"
+    assert paper_privacy.why(text, money=False) == "text too long to check"
+    assert not paper_privacy.why("ab " * 1326 + "=?utf-8?Q?a?=", money=False)
+    print("PASS: a reading that is too long to check hides the encoded input")
+
+
+def test_the_whitespace_collapsed_form_of_every_combination_is_checked():
+    import paper_privacy
+    text = "Δ\t=?utf-8*en?q?S?==?UTF-8?Q?=ff=fe=53==\r\n00?=\t=?iso-8859-1?q?=00=49?="
+    readings = paper_privacy._readings(text)
+    assert any(paper_privacy.why(r, money=False) for r in readings)
+    assert paper_privacy.why(text, money=False)
+    print("PASS: the collapsed form of each combination is checked as plain text")
+
+
+LANG_TAGGED = (
+    ("=?utf-7*en?Q?+AGQAZQBiAHQ-?=", "debt", "word debt"),
+    ("=?koi8-r*ru?Q?b=C1nk?=", "b\u0430nk", "word with mixed alphabets"),
+    ("=?cp037*en?Q?=84=85=82=A3?=", "debt", "word debt"),
+    ("=?iso-8859-1*de?Q?=DFill_due?=", "\u00dfill due", "word with mixed alphabets"),
+    ("=?iso-8859-5*ru?Q?d=D5bt?=", "d\u0435bt", "word with mixed alphabets"),
+    ("=?utf-16*en?B?ZABlAGIAdAA=?=", "debt", "word debt"),
+    ("=?utf-7*en*fr?Q?+AGQAZQBiAHQ-?=", "debt", "word debt"),
+    ("=?utf-7*?Q?+AGQAZQBiAHQ-?=", "debt", "word debt"),
+)
+
+
+def _policy_reading(text):
+    import email.policy
+    msg = email.message_from_string("Subject: " + text + "\n\nx", policy=email.policy.default)
+    return str(msg["Subject"])
+
+
+def test_a_language_tagged_charset_is_read_with_its_real_codec(monkeypatch):
+    import paper_privacy
+    monkeypatch.setattr(paper_privacy, "hidden_senders", lambda: ())
+    assert paper_privacy._known("utf-7*en") and paper_privacy._known("koi8-r*ru*x") and paper_privacy._known("utf-8")
+    assert not paper_privacy._known("x-foo*en") and not paper_privacy._known("*en")
+    for field, shown, reason in LANG_TAGGED:
+        assert _policy_reading(field) == shown, field
+        assert paper_privacy._word(paper_privacy.ENCODED_RE.search(field)) == shown, field
+        assert paper_privacy._client(field) == shown, field
+        assert shown in paper_privacy._readings(field), field
+        assert paper_privacy.why(field, money=False) == reason, field
+        assert paper_privacy.why("hello", sender=field + " <a@b.example>", money=False) == reason, field
+        assert paper_privacy.why("Re: " + field + " ok", money=False) == reason, field
+    assert paper_privacy._client("=?koi8-r*ru?Q?b=C1?= =?utf-8*en?Q?nk?=") == _policy_reading("=?koi8-r*ru?Q?b=C1?= =?utf-8*en?Q?nk?=")
+    assert not paper_privacy.why("=?utf-8*en?Q?Lunch_at_noon?=", money=False)
+    assert not paper_privacy.why("=?iso-8859-1*de?Q?Gr=FC=DFe_aus_Berlin?=", money=False)
+    assert not paper_privacy.why("=?utf-7*en?Q?+AEgAZQBsAGwAbw-?=", money=False)
+    print("PASS: a language tag on the charset is dropped and the real codec reading is checked")
+
+
+def _tagged_field(rng, phrases, plains):
+    codecs_ = ("utf-7", "utf-16", "utf-16le", "cp037", "koi8-r", "iso-8859-5", "iso-8859-1", "utf-8", "ascii")
+    tags = ("", "*en", "*ru", "*", "*en*fr", "*x-y")
+    parts = []
+    for _ in range(rng.choice([1, 1, 2, 3])):
+        phrase = rng.choice(phrases) if rng.random() < 0.6 else rng.choice(plains)
+        codec = rng.choice(codecs_)
+        try:
+            raw = phrase.encode(codec)
+        except UnicodeEncodeError:
+            codec, raw = "utf-8", phrase.encode("utf-8")
+        label = codec + rng.choice(tags)
+        if rng.random() < 0.5:
+            parts.append("=?%s?B?%s?=" % (label, base64.b64encode(raw).decode()))
+        else:
+            parts.append("=?%s?Q?%s?=" % (label, "".join("=%02X" % b for b in raw)))
+        if rng.random() < 0.3:
+            parts.append(rng.choice(plains))
+    return rng.choice([" ", "", "\t"]).join(parts)
+
+
+def test_a_field_with_language_tagged_charsets_hides_whenever_any_reading_hides(monkeypatch):
+    import random
+    import paper_privacy
+    monkeypatch.setattr(paper_privacy, "hidden_senders", lambda: ())
+    phrases = ["debt", "bank", "b\u0430nk", "d\u0435bt", "\u00dfill due", "past due", "venmo", "v\u0435nmo", "code 12345", "chase", "d e b t"]
+    plains = ["hello", "ok", "Re:", "lunch", "5pm", "x"]
+    rng = random.Random(2916)
+    checked = hidden = real_only = 0
+    for _ in range(200):
+        text = _tagged_field(rng, phrases, plains)
+        sender = _tagged_field(rng, phrases, plains) + " <a@b.example>" if rng.random() < 0.4 else ""
+        got = paper_privacy.why(text, sender=sender)
+        checked += 1
+        hidden += bool(got)
+        text_readings = {_policy_reading(text), *paper_privacy._readings(text)}
+        sender_readings = {_policy_reading(sender), *paper_privacy._readings(sender)} if sender else {""}
+        for rt in text_readings:
+            for rs in sender_readings:
+                if paper_privacy.why(rt, sender=rs):
+                    assert got, (text, sender, rt, rs)
+        if paper_privacy.why(_policy_reading(text)) and paper_privacy.why(text.replace("*", "")) != paper_privacy.why(text):
+            real_only += 1
+    assert checked == 200 and hidden > 60 and real_only > 0, (checked, hidden, real_only)
+    print("PASS: a field with language-tagged charsets hides whenever any reading of it hides as plain text")
+
+
+def test_the_combination_cap_is_exact(monkeypatch):
+    import paper_privacy
+    monkeypatch.setattr(paper_privacy, "hidden_senders", lambda: ())
+    assert paper_privacy.MAX_COMBOS == 48
+    six = "a=?latin-1?Q?=E9?=b"
+    six_debt = "a=?utf-7?Q?+AGQAZQBiAHQ-?=b"
+    seven = "a=?latin-1?Q?=E9?==?latin-1?Q?=E9?=a"
+    two = ["=? x", "=? y", "=? z"]
+    sizes = [len(paper_privacy._readings(f)) for f in (six, six_debt, seven, *two)]
+    assert sizes == [6, 6, 7, 2, 2, 2]
+    calls = []
+    real = paper_privacy._why_combo
+    monkeypatch.setattr(paper_privacy, "_why_combo", lambda *a: calls.append(1) or real(*a))
+    assert paper_privacy.why(six, *two, money=False) == ""
+    assert len(calls) == 48
+    del calls[:]
+    assert paper_privacy.why(six_debt, *two, money=False) == "word debt"
+    assert 0 < len(calls) <= 48
+    del calls[:]
+    assert paper_privacy.why(seven, seven, money=False) == "text too long to check"
+    assert paper_privacy.why(six, six, *two, money=False) == "text too long to check"
+    assert paper_privacy.why(six, six_debt, *two, money=False) == "text too long to check"
+    assert calls == []
+    monkeypatch.setattr(paper_privacy, "MAX_COMBOS", 49)
+    assert paper_privacy.why(seven, seven, money=False) == ""
+    assert len(calls) == 49
+    print("PASS: exactly 48 combinations are checked and 49 or more are too long to check")
+
+
+def test_the_work_of_every_combination_is_charged_to_the_work_budget(monkeypatch):
+    import paper_privacy
+    monkeypatch.setattr(paper_privacy, "hidden_senders", lambda: ())
+    cases = (
+        ["=?ut-8?B??=\r\n =?unknown?Q?=CE=94?= ", "=?utf-16?B?//6pAw?==?=", "\ufffd\ufffd a\u03bc\u03a9\n\u200b\x00\x00",
+         "=?lati-1?Q??= \t=?utf-8?B?Cg==?= \t=?unknown?B??=\t=?utf-16?B?//4=?=", "\u03a9 \u00df??", " ", "\u03a9\ufffdb", "\n", "\n", "\n"],
+        ["=?tf-8?B??=\rx\n=?n\ufffdknown?Q?\x00=CE=94?= x", "=?tf-8?B??=\rx\n=?n\ufffdknown?Q?\x00=CE=94?= x",
+         "\u00e9\u03a9=?lat\u200bi1?Q??=\u0301\u00df\ufffd\x00\ufffd \u03a9\x00\nb\\\u0301\u0301", "\u0301?\u0301\u0301\ufffd \u00df\u0301\n\u200b?",
+         "x?a?\x00\u200b\x00a", "? \u0301a\x00\u0301", "=?latin-1?Q?=20?=", "", "?", "\x00"],
+    )
+    done = [0]
+    real = paper_privacy._plain_char
+    monkeypatch.setattr(paper_privacy, "_plain_char", lambda c, gap: done.__setitem__(0, done[0] + 1) or real(c, gap))
+    for texts in cases:
+        done[0] = 0
+        assert paper_privacy.why(*texts) in ("", "text too long to check")
+        assert done[0] <= 4 * paper_privacy.WORK_BUDGET, done[0]
+    del done[:]
+    done.append(0)
+    assert paper_privacy.why("Lunch at noon", sender="Bob Smith") == "" and paper_privacy._spent.n == 68
+    assert paper_privacy.why("hi") == "" and paper_privacy._spent.n == 3 * paper_privacy.MIN_CHARGE == 66
+    assert paper_privacy.why("a\u00df") == "" and paper_privacy._spent.n == 158
+    assert paper_privacy.why("a\u00df\u03bc") == "" and paper_privacy._spent.n == 434
+    assert paper_privacy.why("a" * 47 + "\u00df") == "" and paper_privacy._spent.n == 441
+    plain_calls, mixed_calls = [], []
+    real_plain, real_mixed = paper_privacy._plain_raw, paper_privacy._mixed_raw
+    monkeypatch.setattr(paper_privacy, "_plain_raw", lambda text, gap=None: plain_calls.append((text, gap)) or real_plain(text, gap))
+    monkeypatch.setattr(paper_privacy, "_mixed_raw", lambda text: mixed_calls.append(text) or real_mixed(text))
+    assert paper_privacy.why("Lunch\tat noon", "second field here", money=False) == ""
+    assert [c for c in plain_calls if c[0] == "second field here"] == [("second field here", None), ("second field here", ""), ("second field here", " ")]
+    assert mixed_calls.count("second field here") == 1 and mixed_calls.count("Lunch\tat noon") == 1 and mixed_calls.count("Lunch at noon") == 1
+    print("PASS: the work of all combinations is charged, and bounded by the work budget")
+
+
+def test_the_reading_a_mail_client_shows_is_checked_beside_plain_non_ascii_text(monkeypatch):
+    import email.policy
+    import paper_privacy
+    monkeypatch.setattr(paper_privacy, "hidden_senders", lambda: ())
+    cases = (
+        ("\u00e9  =?cp1252?B?Y2E=?=  =?cp1252?B?cmRp?=  =?us-ascii?Q?O=6Co=67i=73=74?=\r\n =?iso-8859-1?q?Ssi?=", "word cardiologist"),
+        ("=?ISO-8859-1*de?b?cmVm?=  =?cp1252?q?=69l?=\n=?x-foo?Q?=C3=A9l?=\u0394", "word with mixed alphabets"),
+    )
+    for field, reason in cases:
+        shown = str(email.message_from_string("Subject: " + field.replace("\n", "\r\n ") + "\n\nx", policy=email.policy.default)["Subject"])
+        assert shown in paper_privacy._readings(field)
+        assert paper_privacy.why(shown) == reason
+        assert paper_privacy.why(field) == reason
+        assert paper_privacy.why("Hello", sender=field + " <a@x.org>") == reason
+    assert paper_privacy.why("caf\u00e9 =?utf-8?Q?lunch?=") == ""
+    print("PASS: the mail client reading is checked beside plain non-ASCII text")
+
+
+def test_a_charset_with_a_star_is_also_read_whole(monkeypatch):
+    import paper_privacy
+    monkeypatch.setattr(paper_privacy, "hidden_senders", lambda: ())
+    for text in ("=?*utf-7?Q?+AGQAZQBiAHQ-?=", "=?utf*7?Q?+AGQAZQBiAHQ-?=", "=?utf-16*be?Q?=00d=00e=00b=00t?=", "x =?utf-16*be?Q?=00d=00e=00b=00t?= y", "=?utf-16*be?Q?=00d=00e?==?utf-16*be?Q?=00b=00t?="):
+        assert paper_privacy.why(text, money=False), text
+        assert paper_privacy.why("lunch", text, money=False), text
+    assert paper_privacy.why("x", sender="=?*utf-7?Q?+AGQAZQBiAHQ-?= <a@ok.example>", money=False)
+    assert not paper_privacy.why("=?utf-16*be?Q?=00L=00u=00n=00c=00h?=", money=False)
+    assert paper_privacy._client("=?*utf-7?Q?+AGQAZQBiAHQ-?=", False) == "debt"
+    monkeypatch.setattr(paper_privacy, "_client", lambda text, strip=True: "client %s" % strip)
+    assert {"client True", "client False"} <= set(paper_privacy._readings("=?utf-16*be?Q?=00d?="))
+    assert "client False" not in paper_privacy._readings("=?utf-16?Q?=00d?=")
+    monkeypatch.setattr(paper_privacy, "_client", lambda text, strip=True: None)
+    monkeypatch.setattr(paper_privacy, "_policy", lambda text: None)
+    for text in ("=?*utf-7?Q?+AGQAZQBiAHQ-?=", "=?utf-16*be?Q?=00d=00e=00b=00t?=", "x=?utf-16*be?Q?=00d=00e=00b=00t?=y"):
+        assert paper_privacy.why(text, money=False), text
+    print("PASS: a charset with a star is read both without the language tag and as the whole label")
+
+
+def test_a_charset_with_a_language_tag_is_unknown_when_tags_are_not_stripped():
+    import paper_privacy
+    assert paper_privacy._known("utf-7*en", True) and not paper_privacy._known("utf-7*en", False)
+    assert paper_privacy._known("utf-7", False) and not paper_privacy._known("x-foo*en", True)
+    print("PASS: a language-tagged charset is a known codec only when its tag is stripped")
+
+
+def test_a_spaced_word_keeps_the_tag_unstripped_when_asked_not_to_strip():
+    import paper_privacy
+    field = "=?utf-7*en?Q?+AGQAZQBiAHQ-?="
+    m = paper_privacy.ENCODED_RE.search(field)
+    assert paper_privacy._spaced(m, None, True) == "debt"
+    assert paper_privacy._spaced(m, None, False) == "+AGQAZQBiAHQ-"
+    wrapped = "x" + field + "y"
+    m = paper_privacy.ENCODED_RE.search(wrapped)
+    assert paper_privacy._spaced(m, None, True) == " debt "
+    assert paper_privacy._spaced(m, None, False) == " +AGQAZQBiAHQ- "
+    print("PASS: the spaced reading of an encoded word honours the strip flag")
+
+
+def test_the_memo_is_gone_after_every_check_however_it_ends(monkeypatch):
+    import paper_privacy
+    monkeypatch.setattr(paper_privacy, "hidden_senders", lambda: ())
+    paper_privacy.why("Lunch at noon")
+    assert getattr(paper_privacy._spent, "memo", "gone") is None
+    paper_privacy.why("this is a debt")
+    assert getattr(paper_privacy._spent, "memo", "gone") is None
+    assert paper_privacy.why("x" * (paper_privacy.TOO_LONG + 1)) == "text too long to check"
+    assert getattr(paper_privacy._spent, "memo", "gone") is None
+    monkeypatch.setattr(paper_privacy, "_why_all", lambda *a: 1 / 0)
+    assert paper_privacy.why("Lunch") == "text that could not be checked"
+    assert getattr(paper_privacy._spent, "memo", "gone") is None
+    print("PASS: the memo of one check never outlives it")
+
+
+def test_a_words_result_is_remembered_per_money_setting():
+    import paper_privacy
+    paper_privacy._spent.n = 0
+    paper_privacy._spent.memo = {}
+    try:
+        assert paper_privacy._words(("cost $5",), "", True) == "an amount of money"
+        assert paper_privacy._words(("cost $5",), "", False) == ""
+        assert paper_privacy._words(("cost $5",), "", True) == "an amount of money"
+    finally:
+        paper_privacy._spent.memo = None
+    print("PASS: the remembered words result is kept apart for money on and money off")
+
+
+def test_each_expanded_combination_is_charged_its_size_over_the_expand_weight_plus_the_base(monkeypatch):
+    import paper_privacy
+    units = []
+    monkeypatch.setattr(paper_privacy, "_check", lambda *a: "")
+    monkeypatch.setattr(paper_privacy, "_charge", units.append)
+    assert paper_privacy.EXPAND_WEIGHT == 32 and paper_privacy.EXPAND_BASE == 1
+    w = paper_privacy.EXPAND_WEIGHT
+    count = len(paper_privacy.READINGS["ß"])
+    for size, extra in ((w - 1, 0), (w, 1), (2 * w - 1, 1), (2 * w, 2)):
+        text = "ß" + "a" * (size - 2)
+        del units[:]
+        assert paper_privacy._why((text,), "", (), False) == ""
+        assert units == [paper_privacy.EXPAND_BASE + extra] * count, (size, units)
+    print("PASS: a combination costs its size divided by the expand weight, rounded down, plus the base")
+
+
+def test_the_readings_budget_is_exact(monkeypatch):
+    import paper_privacy
+    monkeypatch.setattr(paper_privacy, "hidden_senders", lambda: ())
+    prod = len(paper_privacy.READINGS["ß"]) ** 2 * len(paper_privacy.READINGS["Δ"])
+    assert paper_privacy.READINGS_BUDGET % prod == 0
+    size = paper_privacy.READINGS_BUDGET // prod
+    base = "ßß Δ "
+    at = base + "a" * (size - 1 - len(base))
+    over = at + "a"
+    assert len(at) + 1 == size and prod * size == paper_privacy.READINGS_BUDGET
+    monkeypatch.setattr(paper_privacy, "WORK_BUDGET", 10 ** 9)
+    assert paper_privacy.why(at, money=False) == ""
+    assert paper_privacy.why(over, money=False) == "word with mixed alphabets"
+    print("PASS: a product of readings and size equal to the budget is expanded, one more is mixed alphabets")
+
+
+def test_the_sender_is_charged_with_the_text_to_the_work_budget(monkeypatch):
+    import paper_privacy
+    monkeypatch.setattr(paper_privacy, "hidden_senders", lambda: ())
+    assert paper_privacy.why("a" * 30, sender="b" * 10, money=False) == "" and paper_privacy._spent.n == 128
+    assert paper_privacy.why("a" * 10, sender="b" * 30, money=False) == "" and paper_privacy._spent.n == 128
+    assert paper_privacy.why("a" * 5, sender="b" * 5, money=False) == "" and paper_privacy._spent.n == 66
+    print("PASS: the work charged is the text plus the sender, never less than the minimum")
+
+
+def test_a_joined_reading_that_only_forms_an_encoded_start_across_two_readings_cannot_be_read(monkeypatch):
+    import paper_privacy
+    monkeypatch.setattr(paper_privacy, "hidden_senders", lambda: ())
+    text = "?B?=?utf-8?Q?=3D=3Fz?="
+    with pytest.raises(ValueError):
+        paper_privacy._readings(text)
+    assert paper_privacy.why(text, money=False) == "text that could not be checked"
+    assert paper_privacy.why("?B?=?utf-8?Q?=3D=3Fz?= lunch", money=False) == "text that could not be checked"
+    print("PASS: an encoded start formed across two readings is refused")
+
+
+def test_a_text_is_searched_for_a_doctor_once_however_many_readings_repeat_it(monkeypatch):
+    import paper_privacy
+    monkeypatch.setattr(paper_privacy, "hidden_senders", lambda: ())
+    calls = []
+    real = paper_privacy.DR_RE
+    class Spy:
+        def search(self, s):
+            calls.append(s)
+            return real.search(s)
+    monkeypatch.setattr(paper_privacy, "DR_RE", Spy())
+    assert paper_privacy.why("hello", "a​b", money=False) == ""
+    assert calls.count("hello") == 1, calls
+    assert len(calls) == len(set(calls)), calls
+    print("PASS: the doctor search runs once per distinct text within one check")
+
+
+def test_the_work_and_memo_of_one_thread_are_not_seen_by_another(monkeypatch):
+    import threading
+    import paper_privacy
+    monkeypatch.setattr(paper_privacy, "hidden_senders", lambda: ())
+    assert paper_privacy.why("hi") == "" and paper_privacy._spent.n == 3 * paper_privacy.MIN_CHARGE
+    out = {}
+
+    def other():
+        out["before"] = getattr(paper_privacy._spent, "n", "none")
+        out["result"] = paper_privacy.why("a" * 100)
+        out["after"] = paper_privacy._spent.n
+
+    t = threading.Thread(target=other)
+    t.start()
+    t.join()
+    assert out["before"] == "none"
+    assert out["result"] == "" and out["after"] == 359
+    assert paper_privacy._spent.n == 3 * paper_privacy.MIN_CHARGE
+    print("PASS: each thread keeps its own work count and memo")
+
+
+def _front_world(monkeypatch, events=(), today_tasks=(), overdue_tasks=(), upcoming_tasks=(), mails=()):
+    import mailwatch
+    import paper_privacy
+    monkeypatch.setattr(paper_privacy, "hidden_senders", lambda: ())
+    monkeypatch.setattr(paper, "_BIZ", None)
+    monkeypatch.setattr(gcal, "list_events", lambda *a, **k: list(events))
+    monkeypatch.setattr(tasks, "list_for", lambda day=None: list(today_tasks))
+    monkeypatch.setattr(tasks, "overdue", lambda: list(overdue_tasks))
+    monkeypatch.setattr(tasks, "upcoming", lambda limit=40: list(upcoming_tasks))
+    monkeypatch.setattr(mailwatch, "digest", lambda hours=24: {"total": len(mails), "needs_you": list(mails), "suspicious": 0})
+    monkeypatch.setattr(gmail, "accounts", lambda: [{"name": "main", "email": "owner@example.com"}] if mails else [])
+
+
+def _front_strings(fr):
+    out = [fr["headline"]]
+    for a in fr["agenda"]:
+        out += [a["time"], a["what"], a["note"], a["tag"]]
+    out += [w["text"] for w in fr["week"]] + [x["text"] for x in fr["due"]]
+    for x in fr["look"]:
+        out += [x["who"], x["text"]]
+    return [s for s in out if s]
+
+
+def _front_for(monkeypatch, deliv=None, **world):
+    import paper_privacy
+    _front_world(monkeypatch, **world)
+    fr = paper.front(paper.settings(), NOW.date(), deliv or {"today": [], "soon": [], "delivered": []}, paper_fake.weather)
+    for s in _front_strings(fr):
+        assert not paper_privacy.private(s), s
+    return fr
+
+
+def _ev(title, when, location="", all_day=False, eid="z"):
+    return {"id": eid, "title": title, "start": when.isoformat(), "end": when.isoformat(), "all_day": all_day, "location": location}
+
+
+def _gone(fr, word):
+    assert word not in json.dumps(fr).lower(), word
+
+
+def test_a_glued_clock_time_cannot_hide_a_word_from_the_check_on_a_today_event(monkeypatch):
+    nine = NOW.replace(hour=9, minute=0)
+    fr = _front_for(monkeypatch, events=[_ev("9:00chase", nine), _ev("9:00 Standup", nine.replace(hour=10), eid="y")])
+    _gone(fr, "chase")
+    assert any(a["what"] == "9:00 Standup" or a["what"] == "Standup" for a in fr["agenda"])
+    print("PASS: a today event whose glued clock time hid a word is left out of the agenda and the headline")
+
+
+def test_a_glued_clock_time_cannot_hide_a_word_on_a_later_day_or_an_all_day_event(monkeypatch):
+    nine = (NOW + dt.timedelta(days=1)).replace(hour=9, minute=0)
+    fr = _front_for(monkeypatch, events=[_ev("9:00chase", nine), _ev("9:00 Standup", nine.replace(hour=10), eid="y")])
+    _gone(fr, "chase")
+    assert fr["week"] and "Standup" in fr["week"][0]["text"]
+    print("PASS: a later-day event whose glued clock time hid a word is left out of the week")
+
+
+def test_a_location_cut_at_eighty_characters_cannot_end_on_a_word_the_whole_did_not(monkeypatch):
+    import paper_privacy
+    place = "q" * 75 + " bankers"
+    assert not paper_privacy.private("Lunch", place) and paper_privacy.private(place[:80])
+    fr = _front_for(monkeypatch, events=[_ev("Lunch", NOW.replace(hour=12), place), _ev("Walk", NOW.replace(hour=14), eid="y")])
+    _gone(fr, "bank")
+    assert any(a["what"] == "Walk" for a in fr["agenda"])
+    print("PASS: an event whose place is cut into a hidden word is left out")
+
+
+def test_a_headline_cut_cannot_end_on_a_word_the_whole_title_did_not(monkeypatch):
+    import paper_privacy
+    title = "q" * 27 + "-bankers" + "y" * 20
+    assert not paper_privacy.private(title) and paper_privacy.private(title[:32])
+    fr = _front_for(monkeypatch, events=[_ev(title, NOW.replace(hour=12)), _ev("Walk", NOW.replace(hour=14), eid="y")])
+    _gone(fr["headline"], "bank")
+    assert "Walk" in fr["headline"]
+    print("PASS: a title cut for the headline cannot end on a hidden word")
+
+
+def test_joined_week_titles_cannot_form_a_security_code_that_each_alone_did_not(monkeypatch):
+    import paper_privacy
+    tomorrow = (NOW + dt.timedelta(days=1)).replace(hour=0, minute=0)
+    one, two = "my code", "123456 notes"
+    assert not paper_privacy.private(one) and not paper_privacy.private(two) and paper_privacy.private(f"{one}; {two}.")
+    fr = _front_for(monkeypatch, events=[_ev(one, tomorrow, all_day=True), _ev(two, tomorrow, all_day=True, eid="y")])
+    assert fr["week"] and "my code" in fr["week"][0]["text"] and "123456" not in fr["week"][0]["text"]
+    print("PASS: week titles are joined only while the joined line stays printable")
+
+
+def test_joined_headline_titles_cannot_form_a_security_code_that_each_alone_did_not(monkeypatch):
+    import paper_privacy
+    first, second = "1234 notes", "x code"
+    fr = _front_for(monkeypatch, events=[_ev(first, NOW.replace(hour=9)), _ev(second, NOW.replace(hour=10), eid="y")])
+    assert first in fr["headline"] and second not in fr["headline"] and "1 more on the calendar" in fr["headline"]
+    assert any(a["what"] == second for a in fr["agenda"])
+    assert not paper_privacy.private(first) and not paper_privacy.private(second)
+    print("PASS: a headline title that would join into a code is counted as one more instead of printed")
+
+
+def test_an_overdue_task_line_with_its_date_cannot_form_a_code_the_title_did_not(monkeypatch):
+    import paper_privacy
+    late = [{"id": 1, "title": "Write down the new pin", "due": "2026-11-01", "done": 0}, {"id": 2, "title": "Buy milk", "due": "2026-11-02", "done": 0}]
+    assert not paper_privacy.private(late[0]["title"]) and paper_privacy.private("Write down the new pin (was due 2026-11-01)")
+    fr = _front_for(monkeypatch, overdue_tasks=late)
+    assert [x["text"] for x in fr["due"]] == ["Buy milk (was due 2026-11-02)"]
+    assert "1 overdue task" in fr["dek"]
+    print("PASS: an overdue task whose printed line holds a code is left out")
+
+
+def test_a_mail_summary_cut_at_160_or_subject_cut_at_120_cannot_end_on_a_hidden_word(monkeypatch):
+    import paper_privacy
+    sm = "q" * 155 + " bankers"
+    sj = "q" * 115 + " bankers"
+    base = {"sender": "Pat <pat@example.org>", "sender_name": "Pat", "snippet": ""}
+    mails = [dict(base, subject="Hello", summary=sm), dict(base, subject=sj, summary=""), dict(base, subject="Lunch", summary="Noon works.")]
+    assert not any(paper_privacy.private(m["sender_name"], m["subject"], m["summary"], m["snippet"], sender=m["sender"]) for m in mails)
+    fr = _front_for(monkeypatch, mails=mails)
+    _gone(fr, "bank")
+    assert [x["text"] for x in fr["look"]] == ["Noon works."]
+    print("PASS: a mail whose cut summary or subject ends on a hidden word is left out")
+
+
+def test_a_task_title_printed_whole_is_checked_whole(monkeypatch):
+    t = lambda i, s: {"id": i, "title": s, "due": NOW.date().isoformat(), "done": 0}
+    fr = _front_for(monkeypatch, today_tasks=[t(1, "Pay the bill"), t(2, "Water plants")])
+    assert [x["what"] for x in fr["agenda"] if x["tag"] == "DUE"] == ["Water plants"]
+    print("PASS: a task title is printed only when it was checked as printed")
+
+
+def test_a_delivery_line_is_checked_as_printed(monkeypatch):
+    rows = {"today": [{"store": "Shop", "what": "Lamp", "status": "out for delivery", "carrier": "VA", "sent": NOW.date().isoformat(), "window": "9-11 am"},
+                      {"store": "Shop", "what": "Chair", "status": "out for delivery", "carrier": "UPS", "sent": NOW.date().isoformat(), "window": ""}],
+            "soon": [], "delivered": []}
+    kept = paper.private_out(rows)
+    assert [r["what"] for r in kept["today"]] == ["Chair"]
+    fr = _front_for(monkeypatch, deliv=rows)
+    _gone(fr, "lamp")
+    assert any("Chair" in a["what"] for a in fr["agenda"])
+    print("PASS: a delivery whose printed line holds a hidden word is left out")
+
+
+def _no_words_charge(monkeypatch, paper_privacy):
+    monkeypatch.setattr(paper_privacy, "_words", lambda texts, sender, money: "")
+
+
+def test_every_first_pass_over_the_text_is_charged_to_the_work_budget(monkeypatch):
+    import paper_privacy
+    monkeypatch.setattr(paper_privacy, "hidden_senders", lambda: ())
+    _no_words_charge(monkeypatch, paper_privacy)
+    assert paper_privacy.NON_ASCII_WEIGHT == 2
+    for texts, sender in ((("hi",), ""), (("a" * 500,), ""), (("a" * 30, "b" * 7), "c" * 11), (("日" * 3000,), "")):
+        assert paper_privacy.why(*texts, sender=sender, money=False) == ""
+        blob = " ".join(texts) + " " + sender
+        assert paper_privacy._spent.n == 2 * max(paper_privacy.MIN_CHARGE, len(blob) + sum(c > "\x7f" for c in blob)), (texts, paper_privacy._spent.n)
+    print("PASS: the two first passes of a check are charged their text length, never less than the minimum")
+
+
+def test_the_first_pass_of_every_combination_is_charged_too(monkeypatch):
+    import paper_privacy
+    monkeypatch.setattr(paper_privacy, "hidden_senders", lambda: ())
+    _no_words_charge(monkeypatch, paper_privacy)
+    seen = []
+    real = paper_privacy._first
+    monkeypatch.setattr(paper_privacy, "_first", lambda texts, sender, hidden, money: seen.append(len(" ".join(texts) + " " + sender) + sum(c > "\x7f" for c in " ".join(texts) + " " + sender)) or real(texts, sender, hidden, money))
+    a, b = "=?utf-8?B?YQ==?=", "=?utf-8?Q?b?="
+    assert paper_privacy.why(a + " x", b + " y", sender="s", money=False) == ""
+    assert len(seen) >= 2 + 2 * 2
+    assert paper_privacy._spent.n == sum(max(paper_privacy.MIN_CHARGE, n) for n in seen), (seen, paper_privacy._spent.n)
+    print("PASS: each reading combination pays for its own first passes")
+
+
+def test_the_characters_searched_for_a_word_never_exceed_the_work_budget(monkeypatch):
+    import paper_privacy
+    monkeypatch.setattr(paper_privacy, "hidden_senders", lambda: ())
+    real = paper_privacy._WORD_RE
+    scanned = []
+
+    class Spy:
+        def search(self, s, *a):
+            scanned.append(len(s))
+            return real.search(s, *a)
+
+    monkeypatch.setattr(paper_privacy, "_WORD_RE", Spy())
+    def ew(s, cs="utf-8"):
+        return "=?%s?B?%s?=" % (cs, base64.b64encode(s.encode(cs.split("*")[0])).decode())
+    encoded = " ".join(ew(w, cs) for w, cs in (("a", "utf-8"), ("ß", "utf-8*en"), ("x y", "utf-16"), ("d e", "iso-8859-1")))
+    cases = (["日" * 3500, encoded], [encoded, "ก" * 3400, encoded], ["a." * 1700, encoded], ["1234 " * 700, encoded],
+             ["ßß�" + "1234 " * 700, encoded],
+             ["lunch plan " * 40 + "=?us-ascii?B?Pw==?=\u03941234 " + "lunch plan " * 300, "=?iso-8859-1?B?Pw==?=\u03a9"])
+    for texts in cases:
+        del scanned[:]
+        assert paper_privacy.why(*texts, money=True) in ("", "text too long to check", "word with mixed alphabets"), [len(t) for t in texts]
+        assert sum(scanned) <= paper_privacy.WORK_BUDGET + max(scanned), (sum(scanned), max(scanned), [len(t) for t in texts])
+    print("PASS: the characters run through the word search stay within the work budget")
+
+
+def test_making_a_text_plain_is_charged_once_per_distinct_text_and_gap_and_non_ascii_costs_double():
+    import paper_privacy
+    assert paper_privacy.PLAIN_DIVISOR == 4
+    assert paper_privacy._cost("") == 0 and paper_privacy._cost("ab") == 2
+    assert paper_privacy._cost("日" * 10 + "ab") == 22 and paper_privacy._cost("ß") == 2
+    paper_privacy._spent.n = 0
+    paper_privacy._spent.memo = {}
+    try:
+        paper_privacy._plain("a" * 100)
+        assert paper_privacy._spent.n == 19
+        paper_privacy._plain("a" * 100)
+        assert paper_privacy._spent.n == 19
+        paper_privacy._plain("a" * 100, "")
+        assert paper_privacy._spent.n == 38
+        paper_privacy._plain("a" * paper_privacy.MIN_CHARGE)
+        assert paper_privacy._spent.n == 38
+    finally:
+        paper_privacy._spent.memo = None
+    print("PASS: the python-level plain pass is charged once per distinct text and gap")
+
+
+def test_an_event_title_the_clean_up_cuts_short_of_a_code_is_still_checked_whole(monkeypatch):
+    nine = NOW.replace(hour=9, minute=0)
+    later = (NOW + dt.timedelta(days=1)).replace(hour=9, minute=0)
+    for when in (nine, later):
+        fr = _front_for(monkeypatch, events=[_ev("9:00123 code", when), _ev("9:00 Standup", when.replace(hour=10), eid="y")])
+        _gone(fr, "123 code")
+        assert "standup" in json.dumps(fr).lower()
+    print("PASS: a title whose cleaned text lost the digits of a code is hidden because the raw title is checked too")

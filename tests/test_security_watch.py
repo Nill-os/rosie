@@ -441,3 +441,16 @@ def test_held_container_updates_with_autopatch_off_never_promise_an_install(lab,
     assert bodies and all("Automatic security updates are off" in b and "install the next night" not in b for b in bodies)
     assert lab["ssh"] == []
     print("PASS: held container updates with autopatch off say to press Update, not that they install")
+
+
+def test_held_container_updates_after_a_failed_night_install_do_not_promise_another(lab, monkeypatch):
+    def broken(ct, pkgs):
+        raise RuntimeError("apt lock held")
+    monkeypatch.setattr(sw, "patch_container", broken)
+    sw.check(NIGHT, lab["client"]())
+    sw.check(NIGHT + dt.timedelta(days=1), lab["client"]())
+    bodies = [a[2] for a, _ in lab["inbox"] if "waiting on immich" in a[1]]
+    assert bodies and all("automatic install failed" in b and "install the next night" not in b for b in bodies)
+    keys = [k.get("key") for a, k in lab["inbox"] if "waiting on immich" in a[1]]
+    assert keys and all(k.endswith(":failed") for k in keys), keys
+    print("PASS: held container updates after a failed install say it failed, not that it installs tonight")

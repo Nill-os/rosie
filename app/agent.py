@@ -1,3 +1,4 @@
+import bisect
 import datetime as dt
 import inspect
 import json
@@ -717,8 +718,94 @@ HOLD_WHEN_TAINTED = {"read_file", "list_dir"}
 TAINT_HELD_WRITES = {"complete_task", "move_task", "update_project"}
 
 
-def guard(name, args, tainted):
-    if tainted and (name in GUARDED or name in HOLD_WHEN_TAINTED or name in TAINT_HELD_WRITES) and name not in OWN_CARD and config.load().get("taint_guard", True):
+LINK_RE = re.compile(r"https?://(?:\\u[0-9a-f]{4}|[^\s\"'<>\\)\]}])+", re.I)
+
+
+def _links(text) -> set:
+    found = {re.sub(r"\\u([0-9a-fA-F]{4})", lambda m: chr(int(m.group(1), 16)), m.group(0)) for m in LINK_RE.finditer(text or "")}
+    return found | {u.rstrip(".,;:!?") for u in found}
+
+
+LINK_SOURCES = {"more_result", "check_email", "search_events", "phone_lookup_contact", "get_schedule", "my_servers"}
+
+
+def _did_not_run(text) -> bool:
+    try:
+        d = json.loads(text)
+    except (ValueError, RecursionError):
+        return False
+    return isinstance(d, dict) and (d.get("status") == "needs_confirmation" or set(d) == {"error"})
+
+
+LINK_LEN = 2000
+OWNER_TEXT_MAX = 400000
+
+
+def _owner_text(text) -> str:
+    t = str(text)
+    if len(t) <= OWNER_TEXT_MAX:
+        return t
+    parts = t[:OWNER_TEXT_MAX].rsplit(None, 1)
+    return parts[0] if len(parts) == 2 else ""
+
+
+def links_new() -> dict:
+    return {"read": set(), "built": set(), "order": [], "lens": []}
+
+
+def _touches(state, s) -> bool:
+    order = state["order"]
+    i = bisect.bisect_left(order, s)
+    if i < len(order) and order[i].startswith(s):
+        return True
+    built, lens = state["built"], state["lens"]
+    return any(s[:n] in built for n in lens[:bisect.bisect_right(lens, len(s))])
+
+
+def links_add(state, m):
+    read, built = state["read"], state["built"]
+    role, text = m.get("role"), str(m.get("content", ""))
+    if role == "user" and not m.get("_internal"):
+        read |= _links(_owner_text(text))
+    elif role == "tool" and not _did_not_run(text) and (m.get("tool_name") in UNTRUSTED or m.get("tool_name") in LINK_SOURCES or (m.get("tool_name") == "read_file" and "[untrusted]" in text)):
+        read |= {u for u in _links(text) if len(u) <= LINK_LEN and not _touches(state, u.rstrip(".,;:!?"))}
+    elif role == "assistant":
+        calls = m.get("tool_calls") or ""
+        fresh = _links(text + " " + json.dumps(calls, default=str) + " " + json.dumps(calls, default=str, ensure_ascii=False)) - read - built
+        if fresh:
+            built |= fresh
+            state["order"] = sorted(built)
+            state["lens"] = sorted({len(u) for u in built})
+
+
+def read_links(msgs) -> set:
+    state = links_new()
+    for m in msgs:
+        links_add(state, m)
+    return state["read"]
+
+
+def _raw_links(value, depth=0):
+    if depth < 20 and isinstance(value, dict):
+        return [u for k, v in value.items() for u in _raw_links(k, depth + 1) + _raw_links(v, depth + 1)]
+    if depth < 20 and isinstance(value, (list, tuple, set)):
+        return [u for v in value for u in _raw_links(v, depth + 1)]
+    return re.findall(r"https?://\S+", str(value), re.I)
+
+
+def _new_link(name, args, seen):
+    if name != "fetch_url":
+        try:
+            found = _raw_links(args)
+        except RecursionError:
+            return True
+        return any(not any(u[:len(u) - n] in seen and all(c in ".,;:!?)]}>\"'" for c in u[len(u) - n:]) and not (n and u[len(u) - n - 1] == "/") for n in (0, 1, 2)) for u in found)
+    url = str(args.get("url", ""))
+    return not url or url not in seen
+
+
+def guard(name, args, tainted, seen=()):
+    if tainted and (name in GUARDED or name in HOLD_WHEN_TAINTED or name in TAINT_HELD_WRITES or _new_link(name, args, seen)) and name not in OWN_CARD and config.load().get("taint_guard", True):
         extra = " Agents ask for their own permissions; I won't answer those for you." if name == "terminal_send" else ""
         return actions.queue_tool(name, args, f"{describe_call(name, args)}. Checking with you because I just read outside content.{extra}")
     return None
@@ -1205,12 +1292,22 @@ def _execute(name, args, held):
         return {"error": f"{type(e).__name__}: {e}"}, held
 
 
+def _held(t, name, args):
+    try:
+        return guard(name, args, t.tainted, read_links(t.msgs))
+    except RecursionError:
+        return {"error": "These arguments are nested too deeply to check, so this was not run."}
+
+
 def _run_call(t, call):
     name, args = call["function"]["name"], call["function"]["arguments"]
     args = {k: v for k, v in (args or {}).items() if not str(k).startswith("_")}
-    held = guard(name, args, t.tainted)
+    held = _held(t, name, args)
     phone.force_ask = t.tainted
-    blocked, args = _blocked_reason(t, name, args)
+    try:
+        blocked, args = _blocked_reason(t, name, args)
+    except RecursionError:
+        blocked = "These arguments are nested too deeply to check, so this was not run."
     traces.default.step("blocked" if blocked else "tool", name=name)
     if blocked:
         t.msgs.append({"role": "tool", "tool_name": name, "content": json.dumps({"error": blocked})})

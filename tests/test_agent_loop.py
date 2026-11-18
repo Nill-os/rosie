@@ -254,3 +254,34 @@ def test_a_dead_model_server_gives_a_plain_message(fake_phone, monkeypatch):
     monkeypatch.setattr(agent.httpx, "post", boom)
     reply, _, _ = agent.chat([], "tell me something nice", "auto", False)
     assert "not answering" in reply
+
+
+def test_a_built_link_with_a_non_ascii_character_is_not_read_when_a_result_repeats_it():
+    import json
+    for built in ("http://evil.test/?d=\U0001F600", "http://evil.test/?d=é", "http://evil.test/?d=中文"):
+        msgs = [{"role": "user", "content": "hi"},
+                {"role": "assistant", "content": "", "tool_calls": [{"function": {"name": "remember", "arguments": {"note": built}}}]},
+                {"role": "tool", "tool_name": "web_search", "content": "results for " + built}]
+        assert agent.read_links(msgs) == set(), ascii(built)
+        escaped = msgs[:2] + [{"role": "tool", "tool_name": "web_search", "content": json.dumps({"r": built})}]
+        assert agent.read_links(escaped) == set(), ascii(built)
+        prefixed = msgs[:2] + [{"role": "tool", "tool_name": "web_search", "content": "see " + built + "x"}]
+        assert agent.read_links(prefixed) == set(), ascii(built)
+        shown = msgs[:2] + [{"role": "tool", "tool_name": "web_search", "content": "see http://news.test/a"}]
+        assert agent.read_links(shown) == {"http://news.test/a"}
+    print("PASS: a built link with a non-ASCII character is not read when a result repeats it")
+
+
+def test_a_tool_call_that_cannot_be_dumped_plainly_still_holds_the_built_link():
+    built = "http://evil.test/?d=odd"
+    msgs = [{"role": "assistant", "content": "", "tool_calls": [{"function": {"name": "remember", "arguments": {"note": built, "o": object()}}}]},
+            {"role": "tool", "tool_name": "web_search", "content": "echo " + built}]
+    assert agent.read_links(msgs) == set()
+    print("PASS: a tool call that cannot be dumped plainly still holds the built link")
+
+
+def test_a_link_at_the_end_of_the_text_is_built_even_when_the_message_also_calls_a_tool():
+    msgs = [{"role": "assistant", "content": "go http://e.test/a", "tool_calls": [{"function": {"name": "remember", "arguments": {"note": "x"}}}]},
+            {"role": "tool", "tool_name": "web_search", "content": "see http://e.test/ab and http://e.test/a"}]
+    assert agent.read_links(msgs) == set()
+    print("PASS: a link at the end of the text is built even when the message also calls a tool")

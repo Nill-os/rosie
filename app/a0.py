@@ -54,7 +54,7 @@ class Unavailable(Exception):
 
 _turn_lock = threading.Lock()  # board #695 why-one-turn-at-a-time
 _state_lock = threading.Lock()
-_turn = {"active": False, "pending": [], "tainted": False, "started": None, "text": "", "calls": [], "chat_id": None}
+_turn = {"active": False, "pending": [], "tainted": False, "started": None, "text": "", "calls": [], "chat_id": None, "links": None}
 
 
 def enabled() -> bool:
@@ -83,15 +83,22 @@ def _outside() -> list:
 
 
 def begin_turn(tainted=False, text="", chat_id=None):
+    outside = bool(tainted)
     tainted = tainted or (chat_id is not None and str(chat_id) in _outside())
     with _state_lock:
-        _turn.update(active=True, pending=[], tainted=bool(tainted), started=time.time(), text=str(text)[:160], calls=[], chat_id=chat_id)
+        old = _turn["links"]
+        carried = {**old, "read": set(), "closed": False} if old is not None and time.time() < _late["until"] else None
+        _turn.update(active=True, pending=[], tainted=bool(tainted), started=time.time(), text=str(text)[:160], calls=[], chat_id=chat_id, links=carried)
+    if not outside:
+        note_msg({"role": "user", "content": _owner_text(text)})
 
 
 def end_turn() -> list:
     with _state_lock:
         pending = _turn["pending"]
         _turn.update(active=False, pending=[], tainted=False, started=None, text="", calls=[], chat_id=None)
+        if _turn["links"] is not None:
+            _turn["links"] = {**_turn["links"], "read": set()}
     return pending
 
 
@@ -115,6 +122,69 @@ def mark_tainted():
     if chat is not None and str(chat) not in _outside():  # board #695 safety-outside-text-kept
         import atomic
         atomic.write_text(OUTSIDE, json.dumps((_outside() + [str(chat)])[-500:]))
+
+
+LINKS_MAX = 20000
+
+
+def __getattr__(name):
+    if name == "OWNER_TEXT_MAX":
+        import agent
+        return agent.OWNER_TEXT_MAX
+    raise AttributeError(name)
+
+
+def _owner_text(text) -> str:
+    import agent
+    return agent._owner_text(text)
+
+
+def note_msg(msg: dict):
+    # board #2763 a0-links-kept-as-a-running-state
+    import agent
+    with _state_lock:
+        state = _turn["links"] = _turn["links"] or agent.links_new()
+        if state.get("all_built") and msg.get("role") != "user":
+            return
+        if state.get("closed") and msg.get("role") != "assistant":
+            return
+        try:
+            agent.links_add(state, msg)
+        except Exception:
+            _turn["links"] = _links_lost(state["read"])
+            return
+        if len(state["built"]) > LINKS_MAX:
+            _turn["links"] = _links_lost(state["read"])
+        elif len(state["read"]) + len(state["built"]) > LINKS_MAX:
+            state["closed"] = True
+
+
+def _links_lost(read) -> dict:
+    import agent
+    return {**agent.links_new(), "read": set(read), "closed": True, "all_built": True}
+
+
+def links_lost():
+    with _state_lock:
+        _turn["links"] = _links_lost((_turn["links"] or {}).get("read", ()))
+
+
+def note_owner_text(text):
+    import agent
+    with _state_lock:
+        if _turn["active"]:
+            return
+        old = _turn["links"] or agent.links_new()
+        if old.get("all_built"):
+            _turn["links"] = {**old, "read": set() if len(old["read"]) > LINKS_MAX else old["read"], "closed": False}
+        elif old.get("closed"):
+            _turn["links"] = {**old, "read": set(), "closed": False}
+    note_msg({"role": "user", "content": _owner_text(text)})
+
+
+def turn_links() -> frozenset:
+    with _state_lock:
+        return frozenset((_turn["links"] or {}).get("read", ()))
 
 
 def note_call(name: str):
@@ -215,17 +285,22 @@ def chat(history: list[dict], user_text: str, voice: bool = False, chat_id=None,
                 body["message"] = head + _recap(history) + user_text
                 r = _post("/api/api_message", body, api_key, VOICE_TIMEOUT_S if voice else TIMEOUT_S)
         except httpx.TimeoutException:
+            _late["until"] = time.time() + TIMEOUT_S
             if chat_id is not None:
                 landed = _landed(token)
-                if landed:
-                    _save_context(chat_id, landed)
-                elif not ctx:
-                    _save_context(chat_id, "pending:" + token)
-            _late["until"] = time.time() + TIMEOUT_S
+                try:
+                    if landed:
+                        _save_context(chat_id, landed)
+                    elif not ctx:
+                        _save_context(chat_id, "pending:" + token)
+                except OSError as oe:
+                    logging.warning("a0: could not save the chat context (%s)", type(oe).__name__)
             pending = end_turn()
             reply = "Agent Zero is still working on that. Ask me again in a few minutes for the result."
             return reply, pending, history + [{"role": "user", "content": user_text}, {"role": "assistant", "content": reply}]
         except httpx.HTTPError as e:
+            if not isinstance(e, httpx.ConnectError):
+                _late["until"] = time.time() + TIMEOUT_S
             if chat_id is not None and (landed := _landed(token)):
                 try:
                     _save_context(chat_id, landed)
@@ -237,17 +312,23 @@ def chat(history: list[dict], user_text: str, voice: bool = False, chat_id=None,
             if ran:
                 return _partway(ran, history, user_text)
             raise Unavailable(f"{type(e).__name__}: {e}") from e
+        try:
+            data = r.json()
+        except (ValueError, RecursionError):
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+        ok = r.status_code == 200 and "response" in data
+        if not ok:
+            _late["until"] = time.time() + TIMEOUT_S
         ran = [c["tool"] for c in _turn["calls"]]
         pending = end_turn()
     finally:
+        if turn_active():
+            for p in end_turn():
+                _cancel(p["token"])
         _turn_lock.release()
-    try:
-        data = r.json()
-    except ValueError:
-        data = {}
-    if not isinstance(data, dict):
-        data = {}
-    if r.status_code != 200 or "response" not in data:
+    if not ok:
         for p in pending:  # board #695 safety-failed-turn-no-cards
             _cancel(p["token"])
         if ran:

@@ -224,3 +224,47 @@ def test_a_websocket_from_this_host_passes_even_through_tailscale_serve():
     assert not ok({"origin": "https://evil.example", "host": "127.0.0.1:8771"})
     assert not ok({"origin": "https://evil.example", "host": "pc.tail1.ts.net:8771"})
     assert ok({"host": "127.0.0.1:8771"})
+
+
+def test_only_the_owners_typed_message_reaches_the_link_state(proxy, monkeypatch):
+    import json
+
+    import a0
+    client, seen = proxy
+    noted = []
+    monkeypatch.setattr(a0, "note_owner_text", noted.append)
+    good = {"cookies": {a0_proxy.COOKIE: "good"}}
+    body = json.dumps({"text": "open https://typed.example/1", "context": "c"}).encode()
+    client.cookies.set(a0_proxy.COOKIE, "good")
+    assert client.post("/message_async", content=body).status_code == 200
+    assert noted == ["open https://typed.example/1"] and seen[-1].content == body
+    assert client.post("/message_async/", content=body).status_code == 200 and len(noted) == 2
+    for method, path in (("PUT", "/message_async"), ("GET", "/message_async"), ("POST", "/api/message"), ("POST", "/message_asyncx")):
+        client.request(method, path, content=body)
+    assert len(noted) == 2, noted
+    assert client.post("/message_async", content=body, headers={"origin": "https://evil.example"}).status_code == 403 and len(noted) == 2
+    client.cookies.clear()
+    assert client.post("/message_async", content=body).status_code == 401 and len(noted) == 2
+    client.cookies.set(a0_proxy.COOKIE, "good")
+    for bad in (b"[1]", b"123", b"null", b"{", b"\xff\xfe", json.dumps({"text": ["https://x.example"]}).encode(), b"[" * 200000,
+                json.dumps({"pad": "x" * 1000000, "text": "https://big.example/1"}).encode(),
+                json.dumps({"text": "https://tail.example/1", "pad": "x" * 1000000}).encode()):
+        assert client.post("/message_async", content=bad).status_code == 200 and seen[-1].content == bad
+    assert len(noted) == 2, noted
+    print("PASS: only the owner's typed message reaches the link state")
+
+
+def test_only_the_message_async_path_reaches_the_link_state(proxy, monkeypatch):
+    import json
+
+    import a0
+    client, seen = proxy
+    noted = []
+    monkeypatch.setattr(a0, "note_owner_text", noted.append)
+    body = json.dumps({"text": "open https://typed.example/1", "context": "c"}).encode()
+    client.cookies.set(a0_proxy.COOKIE, "good")
+    for path in ("/xmessage_async", "/api_async", "/async", "/a/message_asynd"):
+        client.post(path, content=body)
+    assert noted == [], noted
+    assert client.post("/a/message_async", content=body).status_code == 200 and len(noted) == 1
+    print("PASS: only the message_async path reaches the link state")

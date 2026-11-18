@@ -1,5 +1,6 @@
 import datetime as dt
 import json
+import os
 import shutil
 import subprocess
 import time
@@ -329,6 +330,8 @@ def check_jobs():
 
 
 UNIT_DIR = Path.home() / ".config" / "systemd" / "user"
+OPS_DIR = Path(os.environ.get("ROSIE_OPS_DIR") or Path.home() / "rosie-ops")
+OPS_FILES = ("slots.py", "watchdog.py", "autopilot.py", "launch.sh", "power.sh", "open.sh")
 
 
 def check_unit_files():
@@ -348,7 +351,25 @@ def check_unit_files():
     return _row("Service files", "ok", "match this version")
 
 
-CHECKS = [check_ollama, check_disk, check_calendar, check_gmail, check_phone, check_user_services, check_containers, check_backup, check_repo, check_tailscale, check_jobs, check_unit_files]
+def check_ops_files():
+    if plat.IS_WIN:
+        return _row("Switch tools", "off", "Linux only")
+    if not (OPS_DIR / "slots.py").is_file():
+        return _row("Switch tools", "off", "the update system is not installed")
+    stale = []
+    try:
+        for name in OPS_FILES:
+            shipped, installed = ROOT / "ops" / name, OPS_DIR / name
+            if shipped.is_file() and (not installed.is_file() or installed.read_bytes() != shipped.read_bytes()):
+                stale.append(name)
+    except OSError as e:
+        return _row("Switch tools", "warn", f"could not compare the switch tools ({type(e).__name__})")
+    if stale:
+        return _row("Switch tools", "bad", f"the installed switch tools differ from this version of Rosie, so its safety fixes may be missing: {', '.join(stale)}", "run ops/install.sh")
+    return _row("Switch tools", "ok", "match this version")
+
+
+CHECKS = [check_ollama, check_disk, check_calendar, check_gmail, check_phone, check_user_services, check_containers, check_backup, check_repo, check_tailscale, check_jobs, check_unit_files, check_ops_files]
 
 
 def run_all() -> list[dict]:

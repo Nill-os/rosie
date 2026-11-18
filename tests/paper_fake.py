@@ -134,7 +134,7 @@ def mails(now: dt.datetime) -> dict:
 def events(today: dt.date, tz):
     at = lambda d, hh, mm: dt.datetime.combine(today + dt.timedelta(days=d), dt.time(hh, mm), tzinfo=tz).isoformat()
     return fake([{"id": "e1", "title": "College class: Art History 101", "start": at(0, 8, 15), "end": at(0, 9, 40), "all_day": False, "location": "Riverton City College"},
-            {"id": "e2", "title": "Dentist", "start": at(0, 14, 30), "end": at(0, 15, 30), "all_day": False, "location": ""},
+            {"id": "e2", "title": "Barber appointment", "start": at(0, 14, 30), "end": at(0, 15, 30), "all_day": False, "location": ""},
             {"id": "e3", "title": "Work block: write the report", "start": at(0, 16, 0), "end": at(0, 18, 0), "all_day": False, "location": ""},
             {"id": "e4", "title": "College class: Art History 101", "start": at(2, 8, 15), "end": at(2, 9, 40), "all_day": False, "location": "Riverton City College"},
             {"id": "e5", "title": "Riverton Book Fair", "start": (today + dt.timedelta(days=4)).isoformat(), "end": (today + dt.timedelta(days=5)).isoformat(), "all_day": True, "location": ""}])

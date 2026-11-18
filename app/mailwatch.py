@@ -12,6 +12,7 @@ from pathlib import Path
 import config
 import gmail
 import inbox
+import paper_privacy
 import proposals
 import standing
 import testguard
@@ -101,7 +102,7 @@ def triage(msg: dict, choices: dict | None = None) -> dict:
 def _store(acct, msg, t):
     with _db() as c:
         c.execute("""INSERT OR REPLACE INTO mail(account,id,thread_id,sender,subject,date,ts,snippet,importance,needs_reply,reason,summary,suspicious,triaged,label)
-                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (acct, msg["id"], msg["thread_id"], msg["from"][:200], msg["subject"][:200], msg["date"], msg["ts"], msg["snippet"][:300],
+                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (acct, msg["id"], msg["thread_id"], paper_privacy.short_sender(msg["from"]), msg["subject"][:200], msg["date"], msg["ts"], msg["snippet"][:300],
                                                               t["importance"], int(t["needs_reply"]), t["reason"], t["summary"], int(t["suspicious"]), dt.datetime.now().isoformat(timespec="seconds"), t.get("label", "")))
 
 
