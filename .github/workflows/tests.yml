@@ -29,7 +29,7 @@ jobs:
           pip install pip-audit==2.10.1
           pip-audit -r requirements.txt -r requirements-test.txt --progress-spinner off
       - run: sudo apt-get update -qq && sudo apt-get install -y -qq poppler-utils libopus0
-      - run: pip install -r requirements-test.txt
+      - run: pip install --require-hashes -r requirements.lock
       - run: python -m pytest -q
   # Windows copies update themselves only to commits where every check passed (tools/windows/launcher.py), so these two guard them
   windows:
@@ -45,7 +45,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: tzutil /s "Pacific Standard Time"
-      - run: pip install -r requirements-test.txt
+      - run: pip install --require-hashes -r requirements.lock
       - run: python -m pytest -q -p no:cacheprovider
   windows-start:
     runs-on: windows-latest
@@ -59,5 +59,5 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
-      - run: pip install -r requirements.txt
+      - run: pip install --require-hashes -r requirements.lock
       - run: python tools/windows/ci_start_check.py

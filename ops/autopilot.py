@@ -17,6 +17,7 @@ FLAG, LOG, STATE, LOCK = OPS / "autopilot.on", OPS / "autopilot.log", OPS / "aut
 SLOTS = OPS / "slots.py"
 CHATS = Path(os.environ.get("ROSIE_CHATS_DB") or HOME / "assistant" / "data" / "chats.db")
 QUIET_SECONDS, MIN_GAP, MAX_MESSAGES, AGENT_TIMEOUT = 600, 3600, 150, 1800
+PREPARE_TIMEOUT = 1500
 ALLOWED_TOP = {"app", "static", "tests", "docs", "README.md", "requirements.txt", "requirements-test.txt"}
 DENIED_PARTS = {"ops", ".git", ".github", "data", "secrets", "vault", ".venv", "vendor", "start.sh", "sync-repo.sh", "backup-data.sh", "rotate-code.sh", "login.sh", "login-gmail.sh"}
 
@@ -147,7 +148,11 @@ def run_audit(s, rows, st):
     idle_path, active_path = Path(st["paths"][idle]), Path(st["paths"][active])
     ahead = st["heads"][idle] != st["heads"][active] and sh(["git", "-C", str(idle_path), "merge-base", "--is-ancestor", st["heads"][active], st["heads"][idle]]).returncode == 0
     if not ahead:
-        p = sh(["python3", str(SLOTS), "prepare", "autopilot"], timeout=180)
+        try:
+            p = sh(["python3", str(SLOTS), "prepare", "autopilot"], timeout=PREPARE_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            log(f"prepare timed out after {PREPARE_TIMEOUT} s; no audit this time")
+            return
         if '"error"' in p.stdout:
             log(f"prepare refused: {p.stdout.strip()[-200:]}")
             return

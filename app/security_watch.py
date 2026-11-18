@@ -26,6 +26,8 @@ import ollama_url
 
 ROOT = Path(__file__).resolve().parent.parent
 STATE = ROOT / "data" / "security_watch.json"
+PINS = ROOT / "data" / "venv_pins.txt"
+PIN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*==[A-Za-z0-9][A-Za-z0-9.!+_-]*$")
 RUN_FROM, RUN_TO = dt.time(3, 0), dt.time(6, 0)
 AWAY_S = 1800
 CATCHUP_H = 36
@@ -487,6 +489,20 @@ def _restart_service():
         os.kill(int(out), signal.SIGTERM)
 
 
+def _write_pins(plan: dict):
+    def norm(n):
+        return re.sub(r"[-_.]+", "-", n).lower()
+    pins = {}
+    try:
+        old = PINS.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        old = []
+    for ln in [x.strip() for x in old] + [f"{n}=={new}" for n, (_, new) in plan.items()]:
+        if PIN_RE.match(ln):
+            pins[norm(ln.split("==", 1)[0])] = ln
+    atomic.write_text(PINS, "".join(p + "\n" for p in pins.values()))
+
+
 def run_self_patch(plan: dict, pip=None, tests=None, restart=None, healthy=None) -> dict:
     py = str(ROOT / ".venv" / "bin" / "python")
     pip = pip or (lambda specs: subprocess.run([py, "-m", "pip", "install", "-q", "--disable-pip-version-check", *specs],
@@ -506,6 +522,7 @@ def run_self_patch(plan: dict, pip=None, tests=None, restart=None, healthy=None)
         return {"ok": False, "why": "her tests failed with the new versions, so the old ones are back: " + " | ".join(tail)[-300:]}
     restart()
     if healthy():
+        _write_pins(plan)
         return {"ok": True, "why": ""}
     pip(back)
     restart()

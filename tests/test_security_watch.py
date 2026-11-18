@@ -165,6 +165,24 @@ def test_a_pip_failure_changes_nothing_else():
     assert not r["ok"] and "pip" in r["why"] and calls == [["jinja2==3.1.6"], ["jinja2==3.1.2"]]
 
 
+def test_a_passing_patch_writes_its_pins_for_the_next_environment_build():
+    sw.PINS.write_text("jinja2==3.1.3\nrequests==2.30.0\n--index-url http://x\n")
+    r = sw.run_self_patch({"jinja2": ("3.1.2", "3.1.6"), "idna": ("3.6", "3.7")}, pip=lambda s: ok(), tests=lambda: ok(),
+                          restart=lambda: None, healthy=lambda: True)
+    assert r["ok"]
+    assert sw.PINS.read_text().splitlines() == ["jinja2==3.1.6", "requests==2.30.0", "idna==3.7"]
+    print("PASS: a passing patch merges its pins into the shared file, newest wins")
+
+
+def test_a_failing_patch_writes_no_pins():
+    for tests, healthy in ((lambda: ok(1, "F\n"), lambda: True), (lambda: ok(), lambda: False)):
+        r = sw.run_self_patch({"jinja2": ("3.1.2", "3.1.6")}, pip=lambda s: ok(), tests=tests, restart=lambda: None, healthy=healthy)
+        assert not r["ok"] and not sw.PINS.exists()
+    r = sw.run_self_patch({"jinja2": ("3.1.2", "3.1.6")}, pip=lambda s: ok(1), tests=lambda: 1 / 0, restart=lambda: 1 / 0, healthy=lambda: 1 / 0)
+    assert not r["ok"] and not sw.PINS.exists()
+    print("PASS: failed tests, a bad restart or a pip failure leave the pins file alone")
+
+
 def test_the_check_finds_holes_patches_the_containers_and_starts_her_own_patch(lab):
     sw.check(NIGHT, lab["client"]())
     d = sw.load()

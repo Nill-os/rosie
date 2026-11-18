@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 # board #815 safety-slots-outside-assistant
+import hashlib
 import json
 import os
+import re
 import secrets as _secrets
 import shutil
 import signal
@@ -19,7 +21,7 @@ SLOT = {"A": Path(os.environ.get("ROSIE_SLOT_A") or HOME / "assistant"), "B": Pa
 PORT = int(os.environ.get("ROSIE_PORT") or 8765)
 STAGE_PORT = int(os.environ.get("ROSIE_STAGE_PORT") or 8780)
 PROBATION_MIN = 30
-SHARED = ["data", "secrets", "vault", ".venv", "vendor/gi", "android/app/build", "android/app/src/main/assets/model-en-us", "android/local.properties"]
+SHARED = ["data", "secrets", "vault", "vendor/gi", "android/app/build", "android/app/src/main/assets/model-en-us", "android/local.properties"]
 STATE = OPS / "state.json"
 
 
@@ -148,6 +150,176 @@ def healthz(port=None, timeout=3):
         return None
 
 
+def venv_python(slot: str) -> Path:
+    return SLOT[slot] / ".venv" / "bin" / "python"
+
+
+def venv_tool(slot: str, name: str) -> Path:
+    return SLOT[slot] / ".venv" / "bin" / name
+
+
+PIN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*==[A-Za-z0-9][A-Za-z0-9.!+_-]*$")
+LOCK_RE = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)==([A-Za-z0-9][A-Za-z0-9.!+_-]*)")
+
+
+def _norm(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def _vkey(v: str):
+    try:
+        from packaging.version import Version
+        return (0, Version(v))
+    except Exception:
+        return (1, tuple(int(x) for x in re.findall(r"\d+", v)))
+
+
+def _not_older(a: str, b: str) -> bool:
+    ka, kb = _vkey(a), _vkey(b)
+    return ka[0] == kb[0] and ka[1] >= kb[1]
+
+
+def pins_file(slot: str) -> Path:
+    return SLOT[slot] / "data" / "venv_pins.txt"
+
+
+def effective_pins(slot: str) -> list:
+    try:
+        lines = pins_file(slot).read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+    pins = {}
+    for ln in lines:
+        ln = ln.strip()
+        if PIN_RE.match(ln):
+            name, ver = ln.split("==", 1)
+            pins[_norm(name)] = ln
+    lock = SLOT[slot] / "requirements.lock"
+    held = {}
+    if lock.exists():
+        for ln in lock.read_text(encoding="utf-8", errors="replace").splitlines():
+            m = LOCK_RE.match(ln.strip())
+            if m:
+                held[_norm(m.group(1))] = m.group(2)
+    return [p for n, p in pins.items() if n not in held or not _not_older(held[n], p.split("==", 1)[1])]
+
+
+def prune_pins(slot: str):
+    f = pins_file(slot)
+    if f.exists():
+        keep = effective_pins(slot)
+        tmp = f.with_name(f.name + ".tmp")
+        tmp.write_text("".join(p + "\n" for p in keep))
+        os.replace(tmp, f)
+
+
+def req_stamp(slot: str) -> str:
+    root = SLOT[slot]
+    files = [root / "requirements.lock"] if (root / "requirements.lock").exists() else [root / "requirements.txt", root / "requirements-test.txt"]
+    h = hashlib.sha256()
+    for f in files:
+        h.update(f.read_bytes() if f.exists() else b"")
+        h.update(b"\0")
+    h.update("\n".join(effective_pins(slot)).encode())
+    return h.hexdigest()
+
+
+def _venv_commands(slot: str) -> list:
+    cmds = _base_commands(slot)
+    pins = effective_pins(slot)
+    if pins:
+        py = str(venv_python(slot))
+        uv = shutil.which("uv")
+        cmds.append([uv, "pip", "install", "--python", py, "--no-deps", *pins] if uv else [py, "-m", "pip", "install", "--no-deps", *pins])
+    return cmds
+
+
+def _base_commands(slot: str) -> list:
+    root = SLOT[slot]
+    venv, py = root / ".venv", venv_python(slot)
+    lock = root / "requirements.lock"
+    hashed = lock.exists() and "--hash=" in lock.read_text(encoding="utf-8", errors="replace")
+    uv = shutil.which("uv")
+    if uv:
+        sync = [uv, "pip", "sync", "--python", str(py)] + (["--require-hashes"] if hashed else [])
+        if lock.exists():
+            return [[uv, "venv", "--python", "3.12", str(venv)], sync + [str(lock)]]
+        return [[uv, "venv", "--python", "3.12", str(venv)], [uv, "pip", "install", "--python", str(py), "-r", str(root / "requirements.txt"), "-r", str(root / "requirements-test.txt")]]
+    if lock.exists():
+        install = [str(py), "-m", "pip", "install"] + (["--require-hashes"] if hashed else []) + ["-r", str(lock)]
+    else:
+        install = [str(py), "-m", "pip", "install", "-r", str(root / "requirements.txt"), "-r", str(root / "requirements-test.txt")]
+    return [[sys.executable, "-m", "venv", str(venv)], install]
+
+
+BUILD_BUDGET = 1200
+
+
+def _build_venv(slot: str):
+    prune_pins(slot)
+    end = time.monotonic() + BUILD_BUDGET
+    for cmd in _venv_commands(slot):
+        left = end - time.monotonic()
+        if left <= 0:
+            raise RuntimeError(f"the build ran longer than {BUILD_BUDGET} s")
+        run(cmd, cwd=SLOT[slot], timeout=left, check=True)
+
+
+def env_drift(slot: str) -> list:
+    lock = SLOT[slot] / "requirements.lock"
+    py = venv_python(slot)
+    if not lock.exists() or not py.exists():
+        return []
+    try:
+        r = run([str(py), "-m", "pip", "list", "--format=freeze", "--disable-pip-version-check"], timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return ["the installed packages could not be listed"]
+    if r.returncode != 0:
+        return ["the installed packages could not be listed"]
+    have = {}
+    for ln in r.stdout.splitlines():
+        if "==" in ln:
+            n, v = ln.strip().split("==", 1)
+            have[_norm(n)] = v
+    pinned = {_norm(p.split("==", 1)[0]): p.split("==", 1)[1] for p in effective_pins(slot)}
+    out = []
+    for ln in lock.read_text(encoding="utf-8", errors="replace").splitlines():
+        m = LOCK_RE.match(ln)
+        if not m:
+            continue
+        name, want = _norm(m.group(1)), pinned.get(_norm(m.group(1)), m.group(2))
+        if name in have and have[name] != want:
+            out.append(f"{m.group(1)} is {have[name]}, the lock wants {want}")
+        elif name not in have and ";" not in ln:
+            out.append(f"{m.group(1)} {want} is not installed")
+    return out
+
+
+def ensure_venv(slot: str) -> dict:
+    if slot == active():
+        return {"error": f"Slot {slot} is the live slot; its environment is not rebuilt while it runs."}
+    venv = SLOT[slot] / ".venv"
+    peer = SLOT[other(slot)] / ".venv"
+    if peer.is_symlink() and venv.exists() and not venv.is_symlink() and peer.resolve() == venv.resolve():
+        return {"venv": "shared", "drift": env_drift(slot), "note": f"Slot {other(slot)} still runs on this environment, so it was left as it is; slot {other(slot)} gets its own at the next prepare after the switch."}
+    if venv.is_symlink():
+        venv.unlink()
+    stamp = venv / ".rosie-req"
+    want = req_stamp(slot)
+    if (venv / "bin" / "python").exists() and stamp.exists() and stamp.read_text().strip() == want:
+        return {"venv": "ok"}
+    try:
+        if venv.exists():
+            shutil.rmtree(venv)
+        _build_venv(slot)
+        stamp.write_text(want + "\n")
+    except Exception as e:
+        shutil.rmtree(venv, ignore_errors=True)
+        release()
+        return {"error": f"Building slot {slot}'s Python environment failed: {str(e)[-300:]}"}
+    return {"venv": "built"}
+
+
 def ensure_b():
     a, b = SLOT["A"], SLOT["B"]
     if not (b / ".git").exists():
@@ -160,7 +332,7 @@ def ensure_b():
                 git("B", "remote", "add", name, git("A", "remote", "get-url", name).stdout.strip())
     exclude = b / ".git" / "info" / "exclude"
     keep = exclude.read_text() if exclude.exists() else ""
-    exclude.write_text(keep + "".join(f"/{p}\n" for p in SHARED if f"/{p}\n" not in keep))
+    exclude.write_text(keep + "".join(f"/{p}\n" for p in SHARED + [".venv"] if f"/{p}\n" not in keep))
     for rel in SHARED:
         src, dst = a / rel, b / rel
         if src.exists() and not (dst.exists() or dst.is_symlink()):
@@ -225,10 +397,13 @@ def prepare(topic="update", force=False):
     branch = "rosie/" + "".join(c if c.isalnum() or c in "-_" else "-" for c in topic)[:40] + time.strftime("-%m%d-%H%M")
     git(idle, "checkout", "-q", "-f", "-B", branch, "FETCH_HEAD", check=True)
     git(idle, "clean", "-fdq")
+    built = ensure_venv(idle)
+    if "error" in built:
+        return built
     save_state(prepared={"slot": idle, "base": base, "branch": branch, "at": time.time()}, last_stage=None)
     log_event("prepare", slot=idle, base=base, branch=branch)
     _board_call("post", f"prepared Rosie slot {idle} on {branch} (from live {base}) for: {topic}", "doing")
-    return {"slot": idle, "path": str(SLOT[idle]), "base": base, "branch": branch}
+    return {"slot": idle, "path": str(SLOT[idle]), "base": base, "branch": branch, "venv": built}
 
 
 def commit(message="Self-update"):
@@ -306,8 +481,7 @@ def smoke(idle: str) -> dict:
     tmp = _build_stage(idle)
     me = f"{idle}-stage-{_secrets.token_hex(4)}"
     env = {**os.environ, "ROSIE_SANDBOX": "1", "ROSIE_SLOT": me}
-    venv = SLOT["A"] / ".venv" / "bin" / "uvicorn"
-    proc = subprocess.Popen([str(venv), "server:app", "--host", "127.0.0.1", "--port", str(STAGE_PORT)], cwd=tmp / "app", env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    proc = subprocess.Popen([str(venv_tool(idle, "uvicorn")), "server:app", "--host", "127.0.0.1", "--port", str(STAGE_PORT)], cwd=tmp / "app", env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     out = {"ok": False, "checks": {}}
     try:
         up = None
@@ -387,7 +561,7 @@ def save_stage_log(text):
 
 
 def _stage(idle, with_eval):
-    py = str(SLOT["A"] / ".venv" / "bin" / "python")
+    py = str(venv_python(idle))
     res = {"slot": idle, "head": head(idle), "started": time.time()}
     t = run(gentle(pytest_command(py, stage_workers(py))), cwd=SLOT[idle], timeout=900)
     save_stage_log(t.stdout)
@@ -478,7 +652,7 @@ def switch(force=False):
     if claimed(idle) and not force:
         return {"error": claimed(idle), "claimed": True}
     try:
-        run([str(SLOT[live] / ".venv" / "bin" / "python"), str(SLOT[live] / "app" / "backup.py"), "backup"], timeout=300, check=True)
+        run([str(venv_python(live)), str(SLOT[live] / "app" / "backup.py"), "backup"], timeout=300, check=True)
     except Exception as e:
         log_event("backup-failed", error=str(e)[:200])
         if not force:

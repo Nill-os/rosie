@@ -10,4 +10,5 @@ if [ ! -f "$D/app/server.py" ]; then
   ACTIVE=$OTHER; D=$(dir_for "$ACTIVE")
 fi
 export ROSIE_SLOT="$ACTIVE"
-cd "$D/app" && exec "${ROSIE_VENV:-$(dir_for A)/.venv}/bin/uvicorn" server:app --host 127.0.0.1 --port "${ROSIE_PORT:-8765}" --timeout-graceful-shutdown 3
+V="${ROSIE_VENV:-$D/.venv}"; [ -x "$V/bin/uvicorn" ] || V="$(dir_for A)/.venv"
+cd "$D/app" && exec "$V/bin/uvicorn" server:app --host 127.0.0.1 --port "${ROSIE_PORT:-8765}" --timeout-graceful-shutdown 3
