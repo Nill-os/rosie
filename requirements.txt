@@ -26,6 +26,6 @@ pillow>=13.0.0
 # His Ogg Opus audio is decoded with the system libopus (apt install libopus0).
 grpcio>=1.85.1
 protobuf>=7.36.2
-fsrs>=6.3.2
+fsrs>=6.3.3
 psutil>=7.2.2; sys_platform == "win32"
 pip>=26.0
