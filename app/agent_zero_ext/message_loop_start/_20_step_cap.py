@@ -3,7 +3,7 @@ from agent import LoopData
 from helpers.errors import HandledException
 from helpers.extension import Extension
 
-WARN_AT, STOP_AT = 40, 50
+WARN_AT, STOP_AT = 25, 35
 
 
 class StepCap(Extension):
