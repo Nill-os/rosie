@@ -52,6 +52,10 @@ servers = json.loads(s.get("mcp_servers") or '{"mcpServers": {}}')
 servers.setdefault("mcpServers", {})["rosie"] = {
     "description": "Rosie's own tools: the owner's calendar, tasks, reminders, memory, mail, phone, projects, notes, PC and terminals",
     "type": "streamable-http", "url": "http://host.docker.internal:8766/mcp", "headers": {"Authorization": "Bearer " + want["token"]}}
+if want.get("craft_token"):
+    servers["mcpServers"]["craft-anything"] = {
+        "description": "Craft Anything RE/investigation suite on the host (all tools, deep read mode). Device and run tools ask the owner in the Craft Anything app.",
+        "type": "streamable-http", "url": "http://host.docker.internal:8774/mcp", "headers": {"Authorization": "Bearer " + want["craft_token"]}}
 s["mcp_servers"] = json.dumps(servers, indent=2)
 json.dump(s, open(p, "w"), indent=2)
 for f in ("rosie.promptinclude.md", "rosie-tools.promptinclude.md"):
@@ -78,6 +82,10 @@ def main():
     want = {"preset": PRESET, "model": model, "token": keys["mcp_token"], "uid": getattr(os, "getuid", lambda: None)(), "gid": getattr(os, "getgid", lambda: None)(),
             **ctxsize.options(model)}
     want.setdefault("num_gpu", None)
+    try:
+        want["craft_token"] = open(os.path.expanduser("~/tools/craft-anything-bridge/token")).read().strip()
+    except OSError:
+        want["craft_token"] = ""
     r = subprocess.run(["docker", "exec", "-i", "-w", "/a0", CONTAINER, "/opt/venv-a0/bin/python", "-", json.dumps(want)],
                        input=INSIDE, capture_output=True, text=True, timeout=120)
     if r.returncode:
